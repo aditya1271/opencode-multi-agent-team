@@ -4,19 +4,19 @@ import { runs, type Report, type ShellRun } from "./runtime.ts"
 import type { Mode, TaskState } from "./state.ts"
 
 const BASE: Record<Mode, string[]> = {
-  triage: ["TRIVIAL", "ESCALATE", "QUESTIONS"],
-  triage_fail: ["ESCALATE"],
+  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS"],
+  lead_fail: ["ESCALATE"],
   fix_trivial: ["DONE", "FAILED", "BLOCKED"],
   review_trivial: ["PASS", "ISSUES"],
-  senior: ["PLAN", "NEED_INFO", "QUESTIONS", "ESCALATE"],
-  explorer: ["FOUND", "NOT_FOUND"],
-  oracle_review: ["APPROVE", "CHANGES"],
+  architect: ["PLAN", "NEED_INFO", "QUESTIONS", "ESCALATE"],
+  intern: ["FOUND", "NOT_FOUND"],
+  principal_review: ["APPROVE", "CHANGES"],
   fix: ["DONE", "FAILED", "BLOCKED"],
   diagnose: ["LOCAL", "REPLAN", "ESCALATE"],
   review: ["PASS", "ISSUES"],
-  oracle_advice: ["ADVICE", "QUESTIONS"],
-  triage_reply: ["ANSWER"],
-  senior_reply: ["ANSWER"],
+  principal_advice: ["ADVICE", "QUESTIONS"],
+  lead_reply: ["ANSWER"],
+  architect_reply: ["ANSWER"],
 }
 
 /** Why a DONE doesn't hold: the check command wasn't run in this call, or its real exit code wasn't 0. */
@@ -41,10 +41,10 @@ export function checkProblem(checkCommand: string, shells: ShellRun[]): string |
 export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): string[] {
   let list = BASE[mode]
   if (task) {
-    if (task.trivialFailed && mode === "triage") list = ["ESCALATE"]
-    if (task.forcePlan && mode === "triage") list = list.filter((s) => s !== "TRIVIAL")
+    if (task.trivialFailed && mode === "lead") list = ["ESCALATE"]
+    if (task.forcePlan && mode === "lead") list = list.filter((s) => s !== "TRIVIAL")
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
-    if (mode === "senior" && task.needInfo >= config.limits.needInfoPerTask) list = list.filter((s) => s !== "NEED_INFO")
+    if (mode === "architect" && task.needInfo >= config.limits.needInfoPerTask) list = list.filter((s) => s !== "NEED_INFO")
   }
   return list
 }
@@ -57,7 +57,7 @@ export function reportSchema(mode: Mode, statuses: string[]) {
   }
   if (statuses.includes("QUESTIONS"))
     properties.questions = { type: "array", items: { type: "string" }, description: "Required for QUESTIONS." }
-  if (mode === "senior") {
+  if (mode === "architect") {
     properties.risk = { type: "string", enum: ["yes", "no"], description: "Required for PLAN: yes only for destructive or irreversible steps." }
     properties.steps = { type: "integer", minimum: 1, description: "Required for PLAN: number of plan steps." }
   }

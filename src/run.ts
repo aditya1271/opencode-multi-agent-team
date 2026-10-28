@@ -66,7 +66,7 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
   })
   run.base = tokenCounts(before.tokens as Tokens)
   const start = Date.now()
-  const callMs = (input.role === "fixer" ? config.limits.callMinutes.fixer : config.limits.callMinutes.default) * 60_000
+  const callMs = (input.role === "developer" ? config.limits.callMinutes.developer : config.limits.callMinutes.default) * 60_000
   const stallMs = config.limits.stallMinutes * 60_000
   let modelIndex = Math.max(0, models.findIndex((m) => m.providerID === before.model?.providerID && m.id === before.model?.id))
 

@@ -1,4 +1,4 @@
-// What the agents and the polisher are told: per-mode hand-off prompts and the team tool's results.
+// What the agents and the manager are told: per-mode hand-off prompts and the team tool's results.
 import path from "node:path"
 import type { Config } from "./config.ts"
 import { MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
@@ -14,14 +14,14 @@ export const join = (...parts: (string | undefined | false)[]) => parts.filter(B
 export const checksText = (commands: string) =>
   [
     "# Build and test commands",
-    "Only Fixer runs them; the other agents don't build or test, they put these commands into the instruction or plan as check commands. Use only these; don't look for other ways to build or test. If they don't cover what is needed, the planner asks the user (QUESTIONS) and Fixer reports BLOCKED.",
+    "Only Developer runs them; the other agents don't build or test, they put these commands into the instruction or plan as check commands. Use only these; don't look for other ways to build or test. If they don't cover what is needed, the planner asks the user (QUESTIONS) and Developer reports BLOCKED.",
     commands,
   ].join("\n\n")
 
 export const SKIP_CHECKS = [
   "# Build and test: skipped",
   "The user chose to skip build and test for this task. Don't build, don't run tests, and don't look for how to.",
-  "Plans and the trivial instruction give `none` as the check. Fixer reports DONE once the edits are made (checkCommand `none`).",
+  "Plans and the trivial instruction give `none` as the check. Developer reports DONE once the edits are made (checkCommand `none`).",
 ].join("\n\n")
 
 
@@ -36,13 +36,13 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     return notes.length ? notes.join(" ") : false
   }
   switch (p.mode) {
-    case "triage":
+    case "lead":
       if (!freshSession && p.note) return join(p.note, capNote())
       return join(
         `Task ${task.id}: sort this request and report.`,
         task.forcePlan && "The user asked for a plan: don't choose TRIVIAL. Write the brief and report ESCALATE (or QUESTIONS).",
         f("request.md"), f("checks.md"), f("answers.md"), p.note, capNote())
-    case "triage_fail":
+    case "lead_fail":
       return join(
         "MODE: failure. The trivial attempt did not finish. Write the full brief for the planner, with code findings only: findings with path:line, the relevant code excerpts with line ranges, the edits that were kept, and why it is not trivial. Don't restate the user's goal or constraints; the planner gets the request itself. Report ESCALATE.",
         edited,
@@ -64,16 +64,16 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       )
     case "review_trivial":
       return join(
-        `MODE: review. A trivial change touched more than one file. Check the changes against the request and the instruction. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Fixer.`,
+        `MODE: review. A trivial change touched more than one file. Check the changes against the request and the instruction. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Developer.`,
         f("request.md"),
         f("checks.md"),
         f("answers.md"),
         f("brief.md"),
         latest("report"),
       )
-    case "senior": {
-      const unseen = [...new Set(task.seniorUnseen)]
-      task.seniorUnseen = []
+    case "architect": {
+      const unseen = [...new Set(task.architectUnseen)]
+      task.architectUnseen = []
       if (freshSession) {
         const earlier = task.history.map((h) => h.file).filter((x): x is string => !!x && x !== "brief.md")
         return join(
@@ -89,12 +89,12 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       }
       return join("New information since your last call:", ...unseen.map(f), p.note, capNote(), "Report again.")
     }
-    case "explorer":
+    case "intern":
       return join(
-        "MODE: planner search. Answer these queries for the senior planner with path:line findings and short code excerpts. Report FOUND, or NOT_FOUND with what you searched.",
+        "MODE: planner search. Answer these queries for the Architect with path:line findings and short code excerpts. Report FOUND, or NOT_FOUND with what you searched.",
         `<queries>\n${p.note ?? ""}\n</queries>`,
       )
-    case "oracle_review":
+    case "principal_review":
       return join(
         "MODE: review of a destructive plan. Check that the destructive or irreversible steps are necessary and safe, and that nothing is lost. Report APPROVE (optional notes) or CHANGES (what must change and why).",
         f("request.md"),
@@ -103,10 +103,10 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         f("brief.md"),
         f(`plan-${task.plan}.md`),
       )
-    case "oracle_advice": {
+    case "principal_advice": {
       const plans = Array.from({ length: task.seq.plan ?? 0 }, (_, i) => f(`plan-${i + 1}.md`))
       return join(
-        `MODE: advice. The task is stuck: ${p.note ?? ""}. Say which approach the senior planner should take (ADVICE), or, if the decision belongs to the user, report QUESTIONS.`,
+        `MODE: advice. The task is stuck: ${p.note ?? ""}. Say which approach the Architect should take (ADVICE), or, if the decision belongs to the user, report QUESTIONS.`,
         f("request.md"),
         f("checks.md"),
         f("brief.md"),
@@ -123,8 +123,8 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       const rules = task.skipChecks
         ? "Do only this step. Build and test are skipped: don't run them. Report DONE when the step's edits are made, FAILED when stuck, or BLOCKED when the step can't work as written."
         : "Do only this step. Iterate freely until its check command passes. Report DONE with checkCommand, FAILED when stuck, or BLOCKED when the step can't work as written."
-      if (!task.fixerSeenPlan) {
-        task.fixerSeenPlan = true
+      if (!task.developerSeenPlan) {
+        task.developerSeenPlan = true
         return join(`Carry out this plan one step at a time. ${head}`, rules, f(`plan-${task.plan}.md`), f("checks.md"), p.note)
       }
       return join(head, p.note, rules)
@@ -132,9 +132,9 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "diagnose": {
       const stepFiles = task.history.filter((h) => h.plan === task.plan && h.step === task.step && h.file).map((h) => f(h.file!))
       return join(
-        `MODE: diagnosis. Fixer is stuck on step ${task.step} of plan ${task.plan}. Below is the step's whole attempt history.`,
+        `MODE: diagnosis. Developer is stuck on step ${task.step} of plan ${task.plan}. Below is the step's whole attempt history.`,
         task.latestLog ? `The latest full build/test log: ${task.latestLog} (read it as needed).` : "",
-        "Decide: LOCAL (Fixer can fix it; give exact instructions), REPLAN (the plan is wrong, or the step is going in circles), or ESCALATE (cause unclear). If the same error came back or a fix undid an earlier one, do not answer LOCAL.",
+        "Decide: LOCAL (Developer can fix it; give exact instructions), REPLAN (the plan is wrong, or the step is going in circles), or ESCALATE (cause unclear). If the same error came back or a fix undid an earlier one, do not answer LOCAL.",
         f(`plan-${task.plan}.md`),
         f("checks.md"),
         ...stepFiles,
@@ -143,7 +143,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "review": {
       const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.file).map((h) => f(h.file!))
       return join(
-        `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Fixer.`,
+        `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Developer.`,
         f("request.md"),
         f("checks.md"),
         f("answers.md"),
@@ -151,8 +151,8 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         ...reports.slice(-4),
       )
     }
-    case "triage_reply":
-    case "senior_reply": {
+    case "lead_reply":
+    case "architect_reply": {
       const rules =
         "MODE: user question. The task is waiting on the user, who asks you this before they answer or decide. Answer it in content: clear and specific, with pros, cons and impact when they ask about options. Don't revise the plan, ask questions or start new work. Report ANSWER."
       const question = p.note ?? ""
@@ -162,7 +162,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
   }
 }
 
-// ---- what the polisher gets back ----
+// ---- what the manager gets back ----
 
 export function render(task: TaskState): string {
   const last = task.history[task.history.length - 1]
@@ -173,7 +173,7 @@ export function render(task: TaskState): string {
   switch (task.phase) {
     case "running": {
       const progress =
-        task.pending?.mode === "fix" ? ` Next: fixer, step ${task.step} of ${task.planSteps}.` : task.pending ? ` Next: ${MODE_ROLE[task.pending.mode]} (${task.pending.mode}).` : ""
+        task.pending?.mode === "fix" ? ` Next: developer, step ${task.step} of ${task.planSteps}.` : task.pending ? ` Next: ${MODE_ROLE[task.pending.mode]} (${task.pending.mode}).` : ""
       return `PROGRESS: ${lastLine}.${progress} ${attempts}\nNEXT ACTION: show this progress line to the user in one line, then call team with action "continue".`
     }
     case "checks":
@@ -191,9 +191,9 @@ export function render(task: TaskState): string {
       return join(
         `PLAN ${task.plan} ready for approval. Risk: ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}. Steps: ${task.planSteps}.`,
         task.planSummary ?? "",
-        task.oracleNote ? `Oracle's notes:\n${readTaskFile(task, task.oracleNote)}` : "",
+        task.principalNote ? `Principal's notes:\n${readTaskFile(task, task.principalNote)}` : "",
         `Full plan: ${path.join(task.dir, `plan-${task.plan}.md`)}`,
-        `NEXT ACTION: show the summary, the risk, Oracle's notes (if any) and the full plan path to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change, or any feedback on the plan → polish the comments and confirm them [Send] [Edit] [Cancel], then team "change" with the confirmed comments. A question about the plan → polish and confirm it, then team "ask". Stop → team "stop".`,
+        `NEXT ACTION: show the summary, the risk, Principal's notes (if any) and the full plan path to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change, or any feedback on the plan → polish the comments and confirm them [Send] [Edit] [Cancel], then team "change" with the confirmed comments. A question about the plan → polish and confirm it, then team "ask". Stop → team "stop".`,
       )
     case "stuck":
       return join(

@@ -24,7 +24,7 @@ without a plan or review.
 6. **Don't cut good work short.** An agent keeps going until it's done or stuck. Limits
    catch runaways, not normal work.
 7. **Least tools.** Each agent can use only the tools its job needs. For example, only
-   Fixer edits files, and the Polisher can't read or run anything.
+   Developer edits files, and the Manager can't read or run anything.
 8. **"Done" is checked, not claimed.** A step counts as done only if its check command
    (build or test) really ran in that call and passed.
 
@@ -32,13 +32,13 @@ without a plan or review.
 
 | Agent | Job | Model tier |
 |---|---|---|
-| **Polisher** | Talks to the user. Rewrites the request into Goal / Scope / Constraints / Done when / Unclear points and asks for confirmation. | cheap |
-| **Triage** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | cheap |
-| **Senior** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | strong |
-| **Explorer** | Does larger code searches for Senior, and answers the user's code questions. | cheap |
-| **Fixer** | The only agent that edits files and runs builds and tests. Iterates on errors until done or stuck. | cheap |
-| **Analyser** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | mid |
-| **Oracle** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
+| **Manager** | Talks to the user. Rewrites the request into Goal / Scope / Constraints / Done when / Unclear points and asks for confirmation. | cheap |
+| **Lead** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | cheap |
+| **Architect** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | strong |
+| **Intern** | Does larger code searches for Architect, and answers the user's code questions. | cheap |
+| **Developer** | The only agent that edits files and runs builds and tests. Iterates on errors until done or stuck. | cheap |
+| **Reviewer** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | mid |
+| **Principal** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
 
 Each agent's code-search tools (a code graph, clangd, a docs RAG, …) and working
 instructions are set in the config. Its role, its report outcomes and the safety rules are
@@ -47,33 +47,33 @@ fixed.
 ## Flow
 
 ```
-user ─► Polisher ─► [Send] [Edit] [Cancel]
+user ─► Manager ─► [Send] [Edit] [Cancel]
                        │
                        ▼
-                    Triage ──── trivial ───► Fixer ─► done
+                    Lead ──── trivial ───► Developer ─► done
                        │                       (more than 1 file touched → quick review)
                        │ needs a plan
                        ▼
-                    Senior ⇄ Explorer (searches)
+                    Architect ⇄ Intern (searches)
                        │ plan
-                       ├── destructive? ─► Oracle review
+                       ├── destructive? ─► Principal review
                        ▼
                  user approves the plan  [Approve] [Change] [Stop]
                        │
                        ▼
-                 Fixer: step 1 … last step (full build/test)
+                 Developer: step 1 … last step (full build/test)
                        │ stuck on a step
                        ▼
-                    Analyser
-                       ├─ fixable here     ─► back to Fixer (max 2 rounds per step)
-                       ├─ plan is wrong    ─► Senior writes a new plan
-                       └─ unclear          ─► Oracle advice ─► Senior
+                    Reviewer
+                       ├─ fixable here     ─► back to Developer (max 2 rounds per step)
+                       ├─ plan is wrong    ─► Architect writes a new plan
+                       └─ unclear          ─► Principal advice ─► Architect
 ```
 
-**Code questions** go straight to Explorer, and the answer comes back to the user. A
+**Code questions** go straight to Intern, and the answer comes back to the user. A
 question asked **while a task waits on the user** goes to the agent the task waits on
-(Senior, or Triage before there's a plan), which knows the task. The task doesn't move.
-The user can ask for a plan, which takes the trivial path away from Triage. The Polisher
+(Architect, or Lead before there's a plan), which knows the task. The task doesn't move.
+The user can ask for a plan, which takes the trivial path away from Lead. The Manager
 never answers the user itself; it only rewrites and forwards.
 
 ## User touchpoints
@@ -84,8 +84,8 @@ never answers the user itself; it only rewrites and forwards.
 - **Build and test commands** are set per project. Agents never work out how to build. If
   none are set, the task first asks the user for them, or the user skips build and test
   (the result then says "not built or tested").
-- **Answer questions.** Only Triage, Senior and Oracle can ask them.
-- **Approve every plan,** together with Oracle's notes on destructive plans.
+- **Answer questions.** Only Lead, Architect and Principal can ask them.
+- **Approve every plan,** together with Principal's notes on destructive plans.
 - **Allow or deny dangerous commands** (reset, clean, delete, revert, submit) when they run.
 - **Decide when stuck:** retry, continue with more attempts, or stop.
 - **Stop at any time.** Edits are kept and listed, never reverted automatically.
@@ -98,7 +98,7 @@ over ssh or in docker.
 
 ## Review after the work
 
-The Analyser reviews the finished work only if:
+The Reviewer reviews the finished work only if:
 - the plan had a failure,
 - the plan was destructive, or
 - more than 3 files changed.
@@ -111,10 +111,10 @@ Every task ends as **done**, **stopped** or **stuck**:
 
 - **Attempt budget:** 40 agent calls per task. When it's used up, the user chooses
   [Continue +10] or [Stop]. Tokens and time are not limited, only shown.
-- **Fixer rounds:** at most 2 fix-ups per step from the Analyser. After that, the plan
+- **Developer rounds:** at most 2 fix-ups per step from the Reviewer. After that, the plan
   counts as failed.
-- **Failed plans:** 2, then Oracle advice once, then one more plan, then the user decides.
-- **Circling:** the Analyser sees every attempt on a step. If the same error comes back
+- **Failed plans:** 2, then Principal advice once, then one more plan, then the user decides.
+- **Circling:** the Reviewer sees every attempt on a step. If the same error comes back
   or a fix undoes an earlier one, it sends the step back for a new plan instead of
   another round.
 - **Searches and questions:** capped per task.
@@ -128,9 +128,9 @@ After every task, in every stuck report, and on request, the user sees one row p
 calls, prompts processed, tool calls, input / cache / output tokens, and the model used.
 A totals view over the last N tasks shows each agent's share. This makes it visible
 whether the work is divided as intended. For example:
-- the Polisher should do no searching or editing
-- Fixer should carry most of the tool calls
-- the Analyser and Oracle should be called rarely
+- the Manager should do no searching or editing
+- Developer should carry most of the tool calls
+- the Reviewer and Principal should be called rarely
 
 Agents far outside their expected share are pointed out. The report is for information
 only and never stops a task.
@@ -141,7 +141,7 @@ only and never stops a task.
 |---|---|---|
 | Trivial | 2–3 | 0 |
 | Planned, going well | about 5–7 | 1 (the plan) |
-| Destructive plan | +2 (Oracle review, final review) | +1 (Oracle review) |
+| Destructive plan | +2 (Principal review, final review) | +1 (Principal review) |
 
 Measured on the sandbox: a trivial change took 2 agent calls, and a 3-step plan took 5. A
 destructive 4-step plan with one round of user changes took 9.
@@ -150,7 +150,7 @@ destructive 4-step plan with one round of user changes took 9.
 
 - A **judge** agent that checks across plans whether the task is going in circles.
 - Automatic detection of identical errors or unchanged edits.
-- Parallel Fixers for independent steps.
+- Parallel Developers for independent steps.
 
 ## Questions for reviewers
 

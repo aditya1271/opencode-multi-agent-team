@@ -40,7 +40,7 @@ export default Plugin.define({
       let seq = 0
       let timer: ReturnType<typeof setTimeout> | undefined
 
-      // Child sessions (fixer, triage, ...) show their polisher's numbers.
+      // Child sessions (developer, lead, ...) show their manager's numbers.
       const root = () => rootOf(props.sessionID)
       const refresh = () => {
         clearTimeout(timer)

@@ -2,6 +2,11 @@
 
 A multi-agent coding workflow for OpenCode V2, packaged as one shareable plugin.
 
+> **Renamed agents.** This design uses the original names. The code now uses coding-team
+> names: polisher → manager, triage → lead, senior → architect, explorer → intern,
+> fixer → developer, analyser → reviewer, oracle → principal. Old names in configs and saved
+> tasks are still read.
+
 Status: revision 4, **version 1 built** (`src/`, `prompts/`) and tested headless on a
 sandbox project. Where the build differs from the text below, "Built differently" wins.
 - *(verify)*: depends on OpenCode behaviour that the prototype must confirm first.

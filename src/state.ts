@@ -4,34 +4,34 @@ import type { Role, WorkerRole } from "./config.ts"
 import type { AgentUsage } from "./usage.ts"
 
 export type Mode =
-  | "triage"
-  | "triage_fail"
+  | "lead"
+  | "lead_fail"
   | "fix_trivial"
   | "review_trivial"
-  | "senior"
-  | "explorer"
-  | "oracle_review"
+  | "architect"
+  | "intern"
+  | "principal_review"
   | "fix"
   | "diagnose"
   | "review"
-  | "oracle_advice"
-  | "triage_reply"
-  | "senior_reply"
+  | "principal_advice"
+  | "lead_reply"
+  | "architect_reply"
 
 export const MODE_ROLE: Record<Mode, WorkerRole> = {
-  triage: "triage",
-  triage_fail: "triage",
-  fix_trivial: "fixer",
-  review_trivial: "analyser",
-  senior: "senior",
-  explorer: "explorer",
-  oracle_review: "oracle",
-  fix: "fixer",
-  diagnose: "analyser",
-  review: "analyser",
-  oracle_advice: "oracle",
-  triage_reply: "triage",
-  senior_reply: "senior",
+  lead: "lead",
+  lead_fail: "lead",
+  fix_trivial: "developer",
+  review_trivial: "reviewer",
+  architect: "architect",
+  intern: "intern",
+  principal_review: "principal",
+  fix: "developer",
+  diagnose: "reviewer",
+  review: "reviewer",
+  principal_advice: "principal",
+  lead_reply: "lead",
+  architect_reply: "architect",
 }
 
 export type Phase = "running" | "checks" | "questions" | "approval" | "stuck" | "budget" | "done" | "stopped"
@@ -59,7 +59,7 @@ export interface HistoryEntry {
 export interface TaskState {
   id: string
   dir: string
-  polisherSession: string
+  managerSession: string
   workspace: string
   created: number
   updated: number
@@ -74,7 +74,7 @@ export interface TaskState {
   sessions: Partial<Record<WorkerRole, string>>
   seq: Record<string, number>
   trivialFailed?: boolean
-  /** The user asked for a plan: triage can't pick TRIVIAL. */
+  /** The user asked for a plan: lead can't pick TRIVIAL. */
   forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */
   skipChecks?: boolean
@@ -85,20 +85,20 @@ export interface TaskState {
   step: number
   rounds: number
   planFailures: number
-  oracleAdviceUsed: number
-  skipOracleReview: boolean
+  principalAdviceUsed: number
+  skipPrincipalReview: boolean
   needInfo: number
   questionRounds: number
-  fixerSeenPlan: boolean
-  /** Files the senior hasn't seen yet. */
-  seniorUnseen: string[]
+  developerSeenPlan: boolean
+  /** Files the architect hasn't seen yet. */
+  architectUnseen: string[]
   editedFiles: string[]
   latestLog?: string
   history: HistoryEntry[]
   usage: Partial<Record<Role, AgentUsage>>
-  polisherBaseline?: { input: number; output: number; reasoning: number; cacheRead: number; prompts: number; tools: Record<string, number> }
+  managerBaseline?: { input: number; output: number; reasoning: number; cacheRead: number; prompts: number; tools: Record<string, number> }
   planSummary?: string
-  oracleNote?: string
+  principalNote?: string
   doneSummary?: string
 }
 
@@ -119,7 +119,7 @@ export function taskId(request: string, now = new Date()): string {
   return `${stamp}-${slug(request.split("\n").find((l) => l.trim() && !/^\W*goal\W*$/i.test(l.trim())) ?? request)}`
 }
 
-export function newTask(root: string, polisherSession: string, workspace: string, request: string, attemptLimit: number): TaskState {
+export function newTask(root: string, managerSession: string, workspace: string, request: string, attemptLimit: number): TaskState {
   const id = taskId(request)
   const dir = path.join(root, id)
   mkdirSync(path.join(dir, "logs"), { recursive: true })
@@ -127,7 +127,7 @@ export function newTask(root: string, polisherSession: string, workspace: string
   return {
     id,
     dir,
-    polisherSession,
+    managerSession,
     workspace,
     created: now,
     updated: now,
@@ -143,12 +143,12 @@ export function newTask(root: string, polisherSession: string, workspace: string
     step: 0,
     rounds: 0,
     planFailures: 0,
-    oracleAdviceUsed: 0,
-    skipOracleReview: false,
+    principalAdviceUsed: 0,
+    skipPrincipalReview: false,
     needInfo: 0,
     questionRounds: 0,
-    fixerSeenPlan: false,
-    seniorUnseen: [],
+    developerSeenPlan: false,
+    architectUnseen: [],
     editedFiles: [],
     history: [],
     usage: {},
@@ -188,16 +188,36 @@ export function nextLogPath(task: TaskState): string {
   return path.join(task.dir, "logs", `log-${n}.txt`)
 }
 
+const OLD_NAMES: Record<string, string> = {
+  polisher: "manager",
+  triage: "lead",
+  senior: "architect",
+  explorer: "intern",
+  fixer: "developer",
+  analyser: "reviewer",
+  oracle: "principal",
+}
+const OLD_NAME = new RegExp(Object.keys(OLD_NAMES).join("|"), "gi")
+
+/** Saved data from before the agents were renamed: renames quoted identifiers ("senior", "seniorUnseen", "oracle_advice"), not free text. */
+export const migrateNames = (json: string) =>
+  json.replace(/"[A-Za-z_]+"/g, (token) =>
+    token.replace(OLD_NAME, (w) => {
+      const n = OLD_NAMES[w.toLowerCase()]
+      return w[0] === w[0].toUpperCase() ? n[0].toUpperCase() + n.slice(1) : n
+    }),
+  )
+
 export function loadTask(dir: string): TaskState | undefined {
   try {
-    return JSON.parse(readFileSync(path.join(dir, "state.json"), "utf8")) as TaskState
+    return JSON.parse(migrateNames(readFileSync(path.join(dir, "state.json"), "utf8"))) as TaskState
   } catch {
     return undefined
   }
 }
 
-/** Most recent task started from this polisher session. */
-export function findTask(root: string, polisherSession: string): TaskState | undefined {
+/** Most recent task started from this manager session. */
+export function findTask(root: string, managerSession: string): TaskState | undefined {
   if (!existsSync(root)) return undefined
   const dirs = readdirSync(root, { withFileTypes: true })
     .filter((d) => d.isDirectory())
@@ -206,7 +226,7 @@ export function findTask(root: string, polisherSession: string): TaskState | und
     .reverse()
   for (const name of dirs) {
     const task = loadTask(path.join(root, name))
-    if (task?.polisherSession === polisherSession) return task
+    if (task?.managerSession === managerSession) return task
   }
   return undefined
 }

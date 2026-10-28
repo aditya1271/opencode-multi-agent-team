@@ -32,15 +32,15 @@ export default Plugin.define({
         editor.update(id, (a) => {
           a.id = id as never
           a.name = id as never
-          a.mode = role === "polisher" ? "primary" : "subagent"
-          a.hidden = role !== "polisher"
+          a.mode = role === "manager" ? "primary" : "subagent"
+          a.hidden = role !== "manager"
           a.description = DESCRIPTIONS[role]
           a.system = systemPrompt(config, role)
           if (models[0]) a.model = models[0] as never
           a.permissions = permissionsFor(config, role) as never
         })
       }
-      if (config.defaultAgent) editor.default(agentId(config, "polisher"))
+      if (config.defaultAgent) editor.default(agentId(config, "manager"))
     })
 
     const team = new Team(ctx, config, log)

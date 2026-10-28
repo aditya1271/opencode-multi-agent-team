@@ -5,7 +5,7 @@ import { toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, runs } from "../src/runtime.ts"
-import { newTask, save, taskId } from "../src/state.ts"
+import { migrateNames, newTask, save, taskId } from "../src/state.ts"
 import { Team } from "../src/team.ts"
 import { compact, line } from "../src/rpc.ts"
 import { add, hints, table } from "../src/usage.ts"
@@ -27,7 +27,7 @@ describe("config", () => {
   test("merge is deep and keeps defaults", () => {
     const c = merge(DEFAULTS, { limits: { taskAttempts: 10 } })
     expect(c.limits.taskAttempts).toBe(10)
-    expect(c.limits.fixerRounds).toBe(2)
+    expect(c.limits.developerRounds).toBe(2)
   })
 })
 
@@ -58,14 +58,14 @@ describe("guards", () => {
 describe("report statuses", () => {
   const task = newTask("/tmp/opencode/omat-test", "ses_x", "/tmp", "Goal\nfix the thing", 40)
   test("caps remove statuses", () => {
-    expect(allowedStatuses(DEFAULTS, "senior", task)).toContain("NEED_INFO")
+    expect(allowedStatuses(DEFAULTS, "architect", task)).toContain("NEED_INFO")
     task.needInfo = 6
     task.questionRounds = 4
-    expect(allowedStatuses(DEFAULTS, "senior", task)).toEqual(["PLAN", "ESCALATE"])
+    expect(allowedStatuses(DEFAULTS, "architect", task)).toEqual(["PLAN", "ESCALATE"])
   })
-  test("triage after a failed trivial attempt may only escalate", () => {
+  test("lead after a failed trivial attempt may only escalate", () => {
     task.trivialFailed = true
-    expect(allowedStatuses(DEFAULTS, "triage", task)).toEqual(["ESCALATE"])
+    expect(allowedStatuses(DEFAULTS, "lead", task)).toEqual(["ESCALATE"])
   })
   test("checkProblem needs the check run in this call with exit 0", () => {
     expect(checkProblem("make test", [])).toContain("was not run")
@@ -80,7 +80,7 @@ describe("report statuses", () => {
   test("DONE needs a passing check, unless the user skipped build and test", () => {
     const t = newTask("/tmp/opencode/omat-test", "ses_y", "/tmp", "Goal\nedit", 40)
     const done = { status: "DONE", summary: "s", content: "c" }
-    beginRun("ses_fix", { role: "fixer", mode: "fix", task: t, toolLimit: 10 })
+    beginRun("ses_fix", { role: "developer", mode: "fix", task: t, toolLimit: 10 })
     expect(() => acceptReport(DEFAULTS, "ses_fix", done)).toThrow("checkCommand")
     expect(() => acceptReport(DEFAULTS, "ses_fix", { ...done, checkCommand: "make" })).toThrow("was not run")
     t.skipChecks = true
@@ -101,51 +101,51 @@ describe("report statuses", () => {
 })
 
 describe("permissions", () => {
-  test("polisher can only use team and question", () => {
-    const rules = permissionsFor(DEFAULTS, "polisher")
+  test("manager can only use team and question", () => {
+    const rules = permissionsFor(DEFAULTS, "manager")
     expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
     expect(rules.filter((r) => r.effect === "allow").map((r) => r.action)).toEqual(["team", "question"])
   })
-  test("senior has no grep or shell", () => {
-    const allowed = permissionsFor(DEFAULTS, "senior").filter((r) => r.effect === "allow").map((r) => r.action)
+  test("architect has no grep or shell", () => {
+    const allowed = permissionsFor(DEFAULTS, "architect").filter((r) => r.effect === "allow").map((r) => r.action)
     expect(allowed).not.toContain("grep")
     expect(allowed).not.toContain("shell")
   })
   test("evaluate: last match wins, team rules decide", () => {
-    const triage = permissionsFor(DEFAULTS, "triage")
-    expect(evaluate(triage, "read", ["src/a.ts"])).toBe("allow")
-    expect(evaluate(triage, "edit", ["src/a.ts"])).toBe("deny")
-    expect(evaluate(triage, "shell", ["git status"])).toBe("allow")
-    expect(evaluate(triage, "shell", ["make"])).toBe("deny")
-    const fixer = permissionsFor(DEFAULTS, "fixer")
-    expect(evaluate(fixer, "edit", ["a.ts", "b.ts"])).toBe("allow")
-    expect(evaluate(fixer, "shell", ["git reset --hard"])).toBe("ask")
-    expect(evaluate(permissionsFor(DEFAULTS, "polisher"), "read", ["a.ts"])).toBe("deny")
+    const lead = permissionsFor(DEFAULTS, "lead")
+    expect(evaluate(lead, "read", ["src/a.ts"])).toBe("allow")
+    expect(evaluate(lead, "edit", ["src/a.ts"])).toBe("deny")
+    expect(evaluate(lead, "shell", ["git status"])).toBe("allow")
+    expect(evaluate(lead, "shell", ["make"])).toBe("deny")
+    const developer = permissionsFor(DEFAULTS, "developer")
+    expect(evaluate(developer, "edit", ["a.ts", "b.ts"])).toBe("allow")
+    expect(evaluate(developer, "shell", ["git reset --hard"])).toBe("ask")
+    expect(evaluate(permissionsFor(DEFAULTS, "manager"), "read", ["a.ts"])).toBe("deny")
   })
   test("toolVisible", () => {
-    const polisher = permissionsFor(DEFAULTS, "polisher")
-    expect(["team", "question", "read", "shell", "edit"].filter((t) => toolVisible(polisher, t))).toEqual(["team", "question"])
-    expect(toolVisible(permissionsFor(DEFAULTS, "triage"), "shell")).toBe(true)
-    expect(toolVisible(permissionsFor(DEFAULTS, "triage"), "write")).toBe(false)
-    expect(toolVisible(permissionsFor(DEFAULTS, "fixer"), "write")).toBe(true)
+    const manager = permissionsFor(DEFAULTS, "manager")
+    expect(["team", "question", "read", "shell", "edit"].filter((t) => toolVisible(manager, t))).toEqual(["team", "question"])
+    expect(toolVisible(permissionsFor(DEFAULTS, "lead"), "shell")).toBe(true)
+    expect(toolVisible(permissionsFor(DEFAULTS, "lead"), "write")).toBe(false)
+    expect(toolVisible(permissionsFor(DEFAULTS, "developer"), "write")).toBe(true)
   })
-  test("fixer asks before destructive commands", () => {
-    const rules = permissionsFor(DEFAULTS, "fixer")
+  test("developer asks before destructive commands", () => {
+    const rules = permissionsFor(DEFAULTS, "developer")
     expect(rules.some((r) => r.action === "shell" && r.resource === "git reset *" && r.effect === "ask")).toBe(true)
   })
   test("per-agent search tools, commands and mcps", () => {
     const config = merge(DEFAULTS, {
       agents: {
-        senior: { mcps: ["codebase-memory"], tools: ["docs_search"], commands: ["graphify *"] },
-        fixer: { commands: ["rm -rf *"] },
+        architect: { mcps: ["codebase-memory"], tools: ["docs_search"], commands: ["graphify *"] },
+        developer: { commands: ["rm -rf *"] },
       },
     })
-    const senior = permissionsFor(config, "senior")
-    expect(evaluate(senior, "codebase-memory_search_graph", ["*"])).toBe("allow")
-    expect(evaluate(senior, "docs_search", ["*"])).toBe("allow")
-    expect(evaluate(senior, "shell", ["graphify query foo"])).toBe("allow")
-    expect(evaluate(senior, "shell", ["grep foo"])).toBe("deny")
-    expect(evaluate(permissionsFor(config, "fixer"), "shell", ["rm -rf /"])).toBe("ask")
+    const architect = permissionsFor(config, "architect")
+    expect(evaluate(architect, "codebase-memory_search_graph", ["*"])).toBe("allow")
+    expect(evaluate(architect, "docs_search", ["*"])).toBe("allow")
+    expect(evaluate(architect, "shell", ["graphify query foo"])).toBe("allow")
+    expect(evaluate(architect, "shell", ["grep foo"])).toBe("deny")
+    expect(evaluate(permissionsFor(config, "developer"), "shell", ["rm -rf /"])).toBe("ask")
     expect(toolKind("docs_search", {}, config)).toBe("index")
     expect(toolKind("shell", { command: "graphify query foo" }, config)).toBe("index")
   })
@@ -153,17 +153,17 @@ describe("permissions", () => {
 
 describe("prompts", () => {
   test("default instructions fill the core prompt", () => {
-    const p = systemPrompt(DEFAULTS, "explorer")
-    expect(p).toContain("You are the Explorer")
+    const p = systemPrompt(DEFAULTS, "intern")
+    expect(p).toContain("You are the Intern")
     expect(p).toContain("## How to search")
     expect(p).not.toContain("{{instructions}}")
     expect(p).not.toContain("## Your tools\n\n-")
   })
   test("instructions replace the default; append and tools are added", () => {
     const config = merge(DEFAULTS, {
-      agents: { explorer: { instructions: "Use the RAG docs first.", append: "Answer in English.", tools: ["docs_search"] } },
+      agents: { intern: { instructions: "Use the RAG docs first.", append: "Answer in English.", tools: ["docs_search"] } },
     })
-    const p = systemPrompt(config, "explorer")
+    const p = systemPrompt(config, "intern")
     expect(p).toContain("Use the RAG docs first.")
     expect(p).not.toContain("## How to search")
     expect(p).toContain("Report **FOUND**")
@@ -175,13 +175,13 @@ describe("prompts", () => {
 describe("usage", () => {
   test("table and hints", () => {
     const usage = {}
-    add(usage, "polisher", { calls: 1, prompts: 3, tools: { search: 2 }, input: 12000, cacheRead: 30000, output: 1000, model: "a/b" })
-    add(usage, "fixer", { calls: 2, prompts: 30, tools: { edit: 5, build: 20 }, input: 160000, cacheRead: 1200000, output: 12000, model: "c/d" })
+    add(usage, "manager", { calls: 1, prompts: 3, tools: { search: 2 }, input: 12000, cacheRead: 30000, output: 1000, model: "a/b" })
+    add(usage, "developer", { calls: 2, prompts: 30, tools: { edit: 5, build: 20 }, input: 160000, cacheRead: 1200000, output: 12000, model: "c/d" })
     const t = table(usage)
-    expect(t).toContain("polisher")
+    expect(t).toContain("manager")
     expect(t).toContain("1.2M")
     expect(t.split("\n").pop()).toMatch(/^total\s+3\s+33\s+27/)
-    expect(hints(usage)).toContain("polisher used 2 read/search/shell/edit calls (expected 0)")
+    expect(hints(usage)).toContain("manager used 2 read/search/shell/edit calls (expected 0)")
   })
 })
 
@@ -194,14 +194,14 @@ describe("sidebar", () => {
     try {
       const old = newTask(root, "ses_p", "/w", "a old task", 40)
       old.phase = "done"
-      add(old.usage, "fixer", { calls: 1, prompts: 2, tools: { edit: 3 }, input: 1000, cacheRead: 0, output: 0 })
+      add(old.usage, "developer", { calls: 1, prompts: 2, tools: { edit: 3 }, input: 1000, cacheRead: 0, output: 0 })
       save(old)
       const cur = newTask(root, "ses_p", "/w", "b current task", 40)
       cur.phase = "fixing" as never
       cur.attempts = 3
-      add(cur.usage, "triage", { calls: 1, prompts: 4, tools: { search: 5 }, input: 300, cacheRead: 0, output: 0 })
+      add(cur.usage, "lead", { calls: 1, prompts: 4, tools: { search: 5 }, input: 300, cacheRead: 0, output: 0 })
       save(cur)
-      const run = beginRun("ses_fix", { role: "fixer", mode: "fix", task: cur, toolLimit: 10 })
+      const run = beginRun("ses_fix", { role: "developer", mode: "fix", task: cur, toolLimit: 10 })
       run.base = { input: 50, cacheRead: 0, output: 0 }
       run.prompts = 2
       run.tools = { edit: 1 }
@@ -209,9 +209,9 @@ describe("sidebar", () => {
       const s = await team.sidebar("ses_p")
       expect(s.task?.id).toBe(cur.id)
       expect(s.task?.attempts).toBe(3)
-      expect(s.task?.rows.map((r) => [r.role, r.running])).toEqual([["triage", false], ["fixer", true]])
-      const fixer = s.task!.rows[1]!
-      expect([fixer.calls, fixer.prompts, fixer.tools, fixer.input, fixer.cacheRead, fixer.output]).toEqual([0, 2, 1, 100, 500, 30])
+      expect(s.task?.rows.map((r) => [r.role, r.running])).toEqual([["lead", false], ["developer", true]])
+      const developer = s.task!.rows[1]!
+      expect([developer.calls, developer.prompts, developer.tools, developer.input, developer.cacheRead, developer.output]).toEqual([0, 2, 1, 100, 500, 30])
       expect(s.session.tasks).toBe(2)
       expect(s.session.total).toEqual({ calls: 2, prompts: 8, tools: 9, tokens: 300 + 630 + 1000 })
       expect((await team.sidebar("ses_other")).task).toBeUndefined()
@@ -230,16 +230,16 @@ describe("sidebar", () => {
     try {
       const t = newTask(root, "ses_p", "/w", "x", 40)
       t.phase = "questions"
-      t.questionsFrom = "triage"
+      t.questionsFrom = "lead"
       expect(team.replier(t)).toBeUndefined()
-      t.sessions.triage = "ses_t"
-      expect(team.replier(t)).toBe("triage")
-      t.sessions.senior = "ses_s"
-      expect(team.replier(t)).toBe("triage")
-      t.questionsFrom = "senior"
-      expect(team.replier(t)).toBe("senior")
+      t.sessions.lead = "ses_t"
+      expect(team.replier(t)).toBe("lead")
+      t.sessions.architect = "ses_s"
+      expect(team.replier(t)).toBe("lead")
+      t.questionsFrom = "architect"
+      expect(team.replier(t)).toBe("architect")
       t.phase = "approval"
-      expect(team.replier(t)).toBe("senior")
+      expect(team.replier(t)).toBe("architect")
 
       t.askedAt = 10
       const r = await team.withOriginal(t, "Grammar: option A (LLM-only).", "answer")
@@ -253,14 +253,26 @@ describe("sidebar", () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  test("a forced plan takes TRIVIAL away from triage", () => {
+  test("saved data from before the rename: identifiers renamed, free text kept", () => {
+    const old = `{"sessions":{"triage":"s1","senior":"s2"},"seniorUnseen":[],"skipOracleReview":false,"questionsFrom":"oracle_advice","summary":"senior plan","usage":{"Fixer":1}}`
+    expect(JSON.parse(migrateNames(old))).toEqual({
+      sessions: { lead: "s1", architect: "s2" },
+      architectUnseen: [],
+      skipPrincipalReview: false,
+      questionsFrom: "principal_advice",
+      summary: "senior plan",
+      usage: { Developer: 1 },
+    })
+  })
+  test("a forced plan takes TRIVIAL away from lead", () => {
     const t = newTask("/tmp/x", "ses_p", "/w", "x", 40)
-    expect(allowedStatuses(DEFAULTS, "triage", t)).toContain("TRIVIAL")
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("TRIVIAL")
     t.forcePlan = true
-    expect(allowedStatuses(DEFAULTS, "triage", t)).toEqual(["ESCALATE", "QUESTIONS"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS"])
   })
   test("compact numbers and fixed-width lines", () => {
     expect([compact(950), compact(1234), compact(56_000), compact(2_500_000)]).toEqual(["950", "1.2k", "56k", "2.5M"])
-    expect(line("●", "analyser", 1, 22, 333, "4.4k", "50%")).toHaveLength(35)
+    expect(line("●", "developer", 1, 22, 333, "4.4k", "50%")).toHaveLength(35)
+    expect(line(" ", "principal", 12, 1, 1, "1k", "1%")).toContain("principal  12")
   })
 })

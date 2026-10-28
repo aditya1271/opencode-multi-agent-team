@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
+import { migrateNames } from "./state.ts"
 
-export const ROLES = ["polisher", "triage", "senior", "explorer", "fixer", "analyser", "oracle"] as const
+export const ROLES = ["manager", "lead", "architect", "intern", "developer", "reviewer", "principal"] as const
 export type Role = (typeof ROLES)[number]
-export type WorkerRole = Exclude<Role, "polisher">
+export type WorkerRole = Exclude<Role, "manager">
 
 export interface ModelRef {
   providerID: string
@@ -36,13 +37,13 @@ export interface Config {
   defaultAgent: boolean
   limits: {
     taskAttempts: number
-    fixerRounds: number
+    developerRounds: number
     planFailures: number
-    oracleAdvice: number
+    principalAdvice: number
     needInfoPerTask: number
     questionsPerTask: number
     toolCalls: Record<WorkerRole, number>
-    callMinutes: { default: number; fixer: number }
+    callMinutes: { default: number; developer: number }
     stallMinutes: number
     modelRetryWaits: number
   }
@@ -62,13 +63,13 @@ export const DEFAULTS: Config = {
   defaultAgent: false,
   limits: {
     taskAttempts: 40,
-    fixerRounds: 2,
+    developerRounds: 2,
     planFailures: 2,
-    oracleAdvice: 1,
+    principalAdvice: 1,
     needInfoPerTask: 6,
     questionsPerTask: 4,
-    toolCalls: { triage: 40, senior: 25, explorer: 30, fixer: 150, analyser: 30, oracle: 20 },
-    callMinutes: { default: 30, fixer: 240 },
+    toolCalls: { lead: 40, architect: 25, intern: 30, developer: 150, reviewer: 30, principal: 20 },
+    callMinutes: { default: 30, developer: 240 },
     stallMinutes: 15,
     modelRetryWaits: 2,
   },
@@ -134,7 +135,7 @@ export function merge<T>(base: T, over: unknown): T {
 function readConfigFile(file: string): unknown {
   if (!existsSync(file)) return undefined
   try {
-    return JSON.parse(stripJsonc(readFileSync(file, "utf8")))
+    return JSON.parse(migrateNames(stripJsonc(readFileSync(file, "utf8"))))
   } catch (e) {
     throw new Error(`opencode-multi-agent-team: cannot parse ${file}: ${(e as Error).message}`)
   }

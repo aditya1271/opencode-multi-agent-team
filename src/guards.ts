@@ -85,7 +85,7 @@ export function trimLog(text: string, exit: number | undefined, logFile: string)
 }
 
 export async function registerGuards(ctx: Context, config: Config) {
-  const polisherId = agentId(config, "polisher")
+  const managerId = agentId(config, "manager")
   const rules = Object.fromEntries(ROLES.map((r) => [r, permissionsFor(config, r)])) as Record<Role, Rule[]>
 
   // The team's rules decide for team agents, so global allow/ask rules don't loosen or block them.
@@ -98,12 +98,12 @@ export async function registerGuards(ctx: Context, config: Config) {
 
   await ctx.session.hook("context", (event) => {
     const role = roleOf(config, event.agent)
-    if (event.agent !== polisherId) delete event.tools.team
+    if (event.agent !== managerId) delete event.tools.team
     if (role) for (const id of Object.keys(event.tools)) if (!toolVisible(rules[role], id)) delete event.tools[id]
     const run = runs.get(event.sessionID)
     if (!run) {
       delete event.tools.report
-      if (role === "polisher") counter(event.sessionID).prompts++
+      if (role === "manager") counter(event.sessionID).prompts++
       return
     }
     run.prompts++
@@ -119,11 +119,11 @@ export async function registerGuards(ctx: Context, config: Config) {
     const run = runs.get(event.sessionID)
     const kind = toolKind(event.tool, event.input, config)
     if (!run) {
-      if (roleOf(config, event.agent) === "polisher" && event.tool !== "team") {
+      if (roleOf(config, event.agent) === "manager" && event.tool !== "team") {
         const c = counter(event.sessionID)
         c.tools[kind] = (c.tools[kind] ?? 0) + 1
-        if (!toolVisible(rules.polisher, event.tool))
-          throw new Error(`The polisher doesn't use ${event.tool}. Send code questions and changes through the team tool.`)
+        if (!toolVisible(rules.manager, event.tool))
+          throw new Error(`The manager doesn't use ${event.tool}. Send code questions and changes through the team tool.`)
       }
       return
     }
@@ -133,7 +133,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     if (run.toolCalls >= run.toolLimit)
       throw new Error(
         `Limit reached: ${run.toolLimit} tool calls in this agent call. Call report now with what you have.` +
-          (run.role === "fixer"
+          (run.role === "developer"
             ? " Running out of tool calls is not a reason for BLOCKED: report DONE only if the check passed, otherwise FAILED with the current error and what you tried."
             : ""),
       )
@@ -142,7 +142,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     run.toolCalls++
     run.tools[kind] = (run.tools[kind] ?? 0) + 1
     run.inFlight++
-    if (run.role === "fixer" && (event.tool === "edit" || event.tool === "write" || event.tool === "patch")) {
+    if (run.role === "developer" && (event.tool === "edit" || event.tool === "write" || event.tool === "patch")) {
       const cwd = run.task?.workspace ?? ctx.location.directory
       for (const file of editedPaths(event.input, cwd)) if (isReadOnly(file)) await p4Edit(file)
     }
@@ -162,7 +162,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     const shell = { command, exit, log: undefined as string | undefined }
     run.shells.push(shell)
     const task = run.task
-    if (!task || (run.role !== "fixer" && run.role !== "analyser")) return
+    if (!task || (run.role !== "developer" && run.role !== "reviewer")) return
     const text = resultText(event.result)
     const build = matchesAny(command, buildPatterns(config))
     if (!build && text.split("\n").length <= TRIM_LINES) return

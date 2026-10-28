@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { ROLES, type Role } from "./config.ts"
 import type { ToolKind } from "./runtime.ts"
+import { migrateNames } from "./state.ts"
 
 export interface AgentUsage {
   calls: number
@@ -48,8 +49,8 @@ export function table(usage: Partial<Record<Role, AgentUsage>>, share = false): 
   const rows: string[][] = [["agent", "calls", "prompts", "tools", "input", "cache", "output", "time", "model"]]
   const present = ROLES.filter((r) => usage[r])
   const sum: Partial<Record<Role, AgentUsage>> = {}
-  for (const role of present) add(sum, "polisher", { ...usage[role]!, model: undefined })
-  const total = sum.polisher ?? empty()
+  for (const role of present) add(sum, "manager", { ...usage[role]!, model: undefined })
+  const total = sum.manager ?? empty()
   for (const role of present) {
     const u = usage[role]!
     const pct = (a: number, b: number) => (b ? ` ${Math.round((100 * a) / b)}%` : "")
@@ -61,7 +62,7 @@ export function table(usage: Partial<Record<Role, AgentUsage>>, share = false): 
       num(u.input),
       num(u.cacheRead),
       num(u.output) + (share ? pct(u.input + u.cacheRead + u.output, total.input + total.cacheRead + total.output) : ""),
-      role === "polisher" && !u.ms ? "-" : dur(u.ms),
+      role === "manager" && !u.ms ? "-" : dur(u.ms),
       u.models.join(", "),
     ])
   }
@@ -73,28 +74,28 @@ export function table(usage: Partial<Record<Role, AgentUsage>>, share = false): 
 /** Points out agents far outside the expected split. Information only. */
 export function hints(usage: Partial<Record<Role, AgentUsage>>, steps = 1): string[] {
   const out: string[] = []
-  const p = usage.polisher
+  const p = usage.manager
   if (p) {
     const work = (p.tools.read ?? 0) + (p.tools.search ?? 0) + (p.tools.shell ?? 0) + (p.tools.edit ?? 0) + (p.tools.build ?? 0)
-    if (work) out.push(`polisher used ${work} read/search/shell/edit calls (expected 0)`)
+    if (work) out.push(`manager used ${work} read/search/shell/edit calls (expected 0)`)
   }
-  const s = usage.senior
+  const s = usage.architect
   if (s) {
     const other = (s.tools.search ?? 0) + (s.tools.shell ?? 0) + (s.tools.edit ?? 0)
-    if (other) out.push(`senior used ${other} grep/shell/edit calls (expected only code-search tools)`)
-    if (s.calls && s.prompts / s.calls > 15) out.push(`senior: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
+    if (other) out.push(`architect used ${other} grep/shell/edit calls (expected only code-search tools)`)
+    if (s.calls && s.prompts / s.calls > 15) out.push(`architect: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
   }
-  for (const role of ["triage", "senior", "explorer", "analyser", "oracle"] as const) {
+  for (const role of ["lead", "architect", "intern", "reviewer", "principal"] as const) {
     const edits = usage[role]?.tools.edit ?? 0
-    if (edits) out.push(`${role} made ${edits} edit calls (only fixer edits)`)
+    if (edits) out.push(`${role} made ${edits} edit calls (only developer edits)`)
   }
-  const a = usage.analyser
-  if (a && a.calls > Math.max(3, steps * 2)) out.push(`analyser: ${a.calls} calls for ${steps} step(s)`)
-  const o = usage.oracle
-  if (o && o.calls > 2) out.push(`oracle: ${o.calls} calls (expected rare)`)
-  const f = usage.fixer
+  const a = usage.reviewer
+  if (a && a.calls > Math.max(3, steps * 2)) out.push(`reviewer: ${a.calls} calls for ${steps} step(s)`)
+  const o = usage.principal
+  if (o && o.calls > 2) out.push(`principal: ${o.calls} calls (expected rare)`)
+  const f = usage.developer
   const all = ROLES.reduce((n, r) => n + (usage[r] ? toolTotal(usage[r]!) : 0), 0)
-  if (f && all >= 60 && toolTotal(f) < all * 0.3) out.push(`fixer did only ${Math.round((100 * toolTotal(f)) / all)}% of tool calls (expected most)`)
+  if (f && all >= 60 && toolTotal(f) < all * 0.3) out.push(`developer did only ${Math.round((100 * toolTotal(f)) / all)}% of tool calls (expected most)`)
   return out
 }
 
@@ -105,7 +106,7 @@ export function report(usage: Partial<Record<Role, AgentUsage>>, steps = 1): str
 
 export interface UsageLine {
   task: string
-  /** The polisher session (set for code questions, which have no task folder). */
+  /** The manager session (set for code questions, which have no task folder). */
   session?: string
   time: number
   outcome: string
@@ -125,7 +126,7 @@ export function lastUsage(root: string, n: number): { lines: UsageLine[]; total:
         .filter(Boolean)
         .flatMap((l) => {
           try {
-            return [JSON.parse(l) as UsageLine]
+            return [JSON.parse(migrateNames(l)) as UsageLine]
           } catch {
             return []
           }

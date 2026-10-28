@@ -6,17 +6,21 @@ Strong models write plans and give advice only when the team is stuck.
 
 See [overview.md](overview.md) for the workflow, and [plan.md](plan.md) for the full design.
 
+The agents are named after coding-team roles. Earlier versions used polisher, triage,
+senior, explorer, fixer, analyser and oracle; configs and saved tasks with those names still
+work.
+
 ## Agents
 
 | Agent | Job |
 |---|---|
-| `polisher` | Front agent. Rewrites your request, asks you to confirm it, and drives the team. It can't read, edit or run anything. |
-| `team-triage` | Searches the code, then decides between a trivial fix and a plan. Writes the brief. |
-| `team-senior` | Writes plans. You approve each one. |
-| `team-explorer` | Does code searches for the senior planner, and answers your code questions. |
-| `team-fixer` | Edits, builds and tests. The only agent that changes files. |
-| `team-analyser` | Diagnoses failures and reviews finished work. |
-| `team-oracle` | Reviews destructive plans, and advises once when the team is stuck. |
+| `manager` | Front agent. Rewrites your request, asks you to confirm it, and drives the team. It can't read, edit or run anything. |
+| `team-lead` | Searches the code, then decides between a trivial fix and a plan. Writes the brief. |
+| `team-architect` | Writes plans. You approve each one. |
+| `team-intern` | Does code searches for the Architect, and answers your code questions. |
+| `team-developer` | Edits, builds and tests. The only agent that changes files. |
+| `team-reviewer` | Diagnoses failures and reviews finished work. |
+| `team-principal` | Reviews destructive plans, and advises once when the team is stuck. |
 
 ## Install
 
@@ -68,29 +72,29 @@ runs the TypeScript source directly. Requires OpenCode 2.2 or later.
    [Build and test commands](#build-and-test-commands)). Without them, every task first asks
    you for them, or you can skip build and test.
 
-6. **Restart OpenCode** and select the `polisher` agent, or set `"defaultAgent": true` in the
+6. **Restart OpenCode** and select the `manager` agent, or set `"defaultAgent": true` in the
    team's config.
 
 To update later, run `git pull` in the clone and restart OpenCode.
 
 ## Use
 
-- **Change something:** describe it. The polisher shows the polished request and asks
+- **Change something:** describe it. The manager shows the polished request and asks
   [Send] [Edit] [Cancel]. Your replies during a task (answers, plan comments, questions) are
   polished and confirmed the same way; the agents get both the polished text and your
   original words. Build/test commands are sent as typed. Set `"polish": "off"` to send
   everything as written.
-- **The polisher never answers you itself.** Everything you write goes to the team: a
+- **The manager never answers you itself.** Everything you write goes to the team: a
   request, a question, a reply, or feedback (on a finished task, as a new request).
-- **Ask about the code:** the Explorer answers. No task starts.
-- **Want a plan, not a quick fix?** Say so ("plan it first"). Triage still writes the brief
-  but can't take the quick path, so Senior always plans.
+- **Ask about the code:** the Intern answers. No task starts.
+- **Want a plan, not a quick fix?** Say so ("plan it first"). The Lead still writes the
+  brief but can't take the quick path, so the Architect always plans.
 - **Ask during a task:** while the team waits on you, a question goes to the agent the task
-  waits on (Senior, or Triage before there's a plan), in its own session with the full
+  waits on (Architect, or Lead before there's a plan), in its own session with the full
   context. The task doesn't move; you then answer or decide.
 - **Plans:** you see each plan's summary and file path and choose [Approve] [Change] [Stop].
   Any feedback on the plan is sent as Change.
-- **Questions:** Triage, Senior and Oracle may ask you questions. Answer in your own words.
+- **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the
   changed files) and choose [Retry] / [Continue +10] / [Stop].
 - **Usage:** ask "how was the work divided?" to get a per-agent table (calls, prompts, tool
@@ -99,15 +103,15 @@ To update later, run `git pull` in the clone and restart OpenCode.
   attempts, then one row per agent: calls, prompts, tool calls, tokens, and that agent's
   share of the task's tokens. The running agent is marked `●` and its numbers update live.
   The last lines total the task and the whole session (all tasks and code questions). Click
-  the header to collapse it. Child sessions show their polisher's numbers.
+  the header to collapse it. Child sessions show their manager's numbers.
 
   ```
   ▼ Team fixing · 7/40 attempts
    agent    call prmt tool   tok    %
-   polisher    0    6    5   41k  12%
-   triage      1   14   22   88k  26%
-  ●fixer       2   31   58  190k  57%
-   analyser    1    4    6   17k   5%
+   manager     0    6    5   41k  12%
+   lead        1   14   22   88k  26%
+  ●developer   2   31   58  190k  57%
+   reviewer    1    4    6   17k   5%
    task        4   55   91  336k
    session     9  120  170  910k
     2 tasks · 3 questions
@@ -124,11 +128,11 @@ Edits are never reverted automatically. Every result lists the changed files.
 | Limit | Default |
 |---|---|
 | Agent calls per task | 40, then [Continue +10] |
-| Fixer rounds per plan step | 2 |
-| Failed plans before Oracle advice | 2 (Oracle advice: once per task) |
+| Developer rounds per plan step | 2 |
+| Failed plans before Principal advice | 2 (Principal advice: once per task) |
 | Searches / question rounds per task | 6 / 4 |
-| Tool calls per agent call | triage 40, senior 25, explorer 30, fixer 150, analyser 30, oracle 20 |
-| Time per agent call | 30 min (fixer 240), or 15 min without activity |
+| Tool calls per agent call | lead 40, architect 25, intern 30, developer 150, reviewer 30, principal 20 |
+| Time per agent call | 30 min (developer 240), or 15 min without activity |
 
 All limits are in the config file under `limits`.
 
@@ -150,7 +154,7 @@ Use the exact commands you would type. For a remote build, give the whole comman
 `"build": "ssh buildhost \"cd /work/view3 && make -j16\""`. Leave out what doesn't exist
 (e.g. only `build`).
 
-- The commands go to Triage, Senior, Fixer and the Analyser, with the rule to use only these.
+- The commands go to Lead, Architect, Developer and the Reviewer, with the rule to use only these.
   Plans use them as check commands. A step is done only when its check really ran and passed.
 - They count as builds: long timeout (`buildCommands.timeoutMin`), and the output goes to
   `logs/`.
@@ -164,7 +168,7 @@ Use the exact commands you would type. For a remote build, give the whole comman
 | `"skip"` | Tasks run without build and test. |
 
 **Build and test skipped:** agents don't build, test or look for how to, and build commands
-are blocked. Fixer reports a step done once its edits are made. The result says "Not built
+are blocked. Developer reports a step done once its edits are made. The result says "Not built
 or tested". There is no extra review, so check the changes yourself.
 
 To skip in one project only, set `"checks": { "whenMissing": "skip" }` in that project's
@@ -185,11 +189,11 @@ with whatever you use to explore code (a code graph, clangd, a docs RAG, ...):
 | `append` | Added at the end of the prompt (inline text or file path). |
 
 ```jsonc
-"explorer": {
+"intern": {
   "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
   "mcps": ["codebase-memory"], "skills": ["codebase-memory"],
   "tools": ["docs_search"], "commands": ["graphify *"],
-  "instructions": "~/team-prompts/explorer.md"
+  "instructions": "~/team-prompts/intern.md"
 }
 ```
 
@@ -206,7 +210,7 @@ error-detective, code-reviewer and architect-reviewer subagents.
 ## Task folder
 
 Each task writes to `~/.cache/opencode-multi-agent-team/<task-id>/` (`taskDir`):
-- `request.md`, `brief.md`, `plan-N.md`, `report-N.md`, `analysis-N.md`, `oracle-N.md`,
+- `request.md`, `brief.md`, `plan-N.md`, `report-N.md`, `analysis-N.md`, `principal-N.md`,
   `answers.md`
 - `logs/`: full build and long command output
 - `state.json`
@@ -218,7 +222,7 @@ plugin did.
 
 - Each team agent's own permission rules decide what it may do. A deny in your config still
   applies.
-- Fixer asks before destructive commands: git reset/clean/checkout/push/rebase, `rm -rf`,
+- Developer asks before destructive commands: git reset/clean/checkout/push/rebase, `rm -rf`,
   p4 revert/submit/delete, sudo. Add more patterns with `askCommands`.
 - A step counts as done only if its check command really ran in that call and exited 0.
 

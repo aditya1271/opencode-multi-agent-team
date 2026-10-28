@@ -38,7 +38,7 @@ export interface SessionRun {
   base?: { input: number; cacheRead: number; output: number }
 }
 
-/** Prompt and tool counts for sessions outside a worker call (the polisher). */
+/** Prompt and tool counts for sessions outside a worker call (the manager). */
 export interface Counter {
   prompts: number
   tools: Partial<Record<ToolKind, number>>

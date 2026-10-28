@@ -54,17 +54,17 @@ export const TEAM_SCHEMA = {
   additionalProperties: false,
 }
 
-const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = { triage: "triage", triage_fail: "triage", senior: "senior", fix: "fixer" }
+const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = { lead: "lead", lead_fail: "lead", architect: "architect", fix: "developer" }
 
 export class Team {
   readonly root: string
   private tasks = new Map<string, TaskState>()
-  /** Task folders per polisher session, built on first use. */
+  /** Task folders per manager session, built on first use. */
   private sessionDirs?: Map<string, string[]>
-  /** Code questions per polisher session (they have no task folder). */
+  /** Code questions per manager session (they have no task folder). */
   private questions = new Map<string, { count: number; usage: Partial<Record<Role, AgentUsage>> }>()
   /** Called when a session's numbers change (the sidebar refreshes). */
-  onChange: (polisherSession: string) => void = () => {}
+  onChange: (managerSession: string) => void = () => {}
 
   constructor(
     private ctx: Context,
@@ -93,7 +93,7 @@ export class Team {
     sum(asked.usage)
     let current: SidebarStats["task"]
     if (task) {
-      if (!TERMINAL.includes(task.phase)) await this.refreshPolisher(task)
+      if (!TERMINAL.includes(task.phase)) await this.refreshManager(task)
       const usage = structuredClone(task.usage)
       const live = await this.liveCall(task)
       if (live) add(usage, live.role, live.delta)
@@ -135,46 +135,46 @@ export class Team {
     }
   }
 
-  private dirsOf(polisherSession: string): string[] {
+  private dirsOf(managerSession: string): string[] {
     if (!this.sessionDirs) {
       this.sessionDirs = new Map()
       const names = existsSync(this.root) ? readdirSync(this.root, { withFileTypes: true }).filter((d) => d.isDirectory()) : []
       for (const d of names) {
         const t = loadTask(path.join(this.root, d.name))
         if (!t) continue
-        const list = this.sessionDirs.get(t.polisherSession) ?? []
+        const list = this.sessionDirs.get(t.managerSession) ?? []
         list.push(t.dir)
-        this.sessionDirs.set(t.polisherSession, list)
+        this.sessionDirs.set(t.managerSession, list)
       }
     }
-    return this.sessionDirs.get(polisherSession) ?? []
+    return this.sessionDirs.get(managerSession) ?? []
   }
 
-  private questionsIn(polisherSession: string) {
-    let q = this.questions.get(polisherSession)
+  private questionsIn(managerSession: string) {
+    let q = this.questions.get(managerSession)
     if (!q) {
       q = { count: 0, usage: {} }
       for (const line of lastUsage(this.root, Number.MAX_SAFE_INTEGER).lines)
-        if (line.task === "ask" && line.session === polisherSession) {
+        if (line.task === "ask" && line.session === managerSession) {
           q.count++
           for (const [role, u] of Object.entries(line.usage)) if (u) add(q.usage, role as Role, u)
         }
-      this.questions.set(polisherSession, q)
+      this.questions.set(managerSession, q)
     }
     return q
   }
 
-  async handle(input: TeamInput, polisherSession: string, signal: AbortSignal): Promise<string> {
-    const task = this.task(polisherSession)
-    if (task) task.usage.polisher = { ...(task.usage.polisher ?? this.emptyPolisher()), calls: (task.usage.polisher?.calls ?? 0) + 1 }
+  async handle(input: TeamInput, managerSession: string, signal: AbortSignal): Promise<string> {
+    const task = this.task(managerSession)
+    if (task) task.usage.manager = { ...(task.usage.manager ?? this.emptyManager()), calls: (task.usage.manager?.calls ?? 0) + 1 }
     switch (input.action) {
       case "start":
-        return this.start(polisherSession, input.text ?? "", signal, input.plan === true)
+        return this.start(managerSession, input.text ?? "", signal, input.plan === true)
       case "ask":
         if (task && !TERMINAL.includes(task.phase)) return this.reply(task, input.text ?? "", signal)
-        return this.ask(polisherSession, input.text ?? "", signal)
+        return this.ask(managerSession, input.text ?? "", signal)
       case "stats":
-        return this.stats(polisherSession, input.last)
+        return this.stats(managerSession, input.last)
     }
     if (!task) return "No task in this session. NEXT ACTION: polish the user's request and call team with action \"start\"."
     switch (input.action) {
@@ -196,7 +196,7 @@ export class Team {
         task.phase = "running"
         task.step = 1
         task.rounds = 0
-        task.fixerSeenPlan = false
+        task.developerSeenPlan = false
         task.pending = { mode: "fix", fresh: true }
         save(task)
         return this.step(task, signal)
@@ -221,38 +221,38 @@ export class Team {
     return render(task)
   }
 
-  // ---- task lookup and polisher usage ----
+  // ---- task lookup and manager usage ----
 
-  private task(polisherSession: string): TaskState | undefined {
-    let task = this.tasks.get(polisherSession)
+  private task(managerSession: string): TaskState | undefined {
+    let task = this.tasks.get(managerSession)
     if (!task) {
-      task = findTask(this.root, polisherSession)
-      if (task) this.tasks.set(polisherSession, task)
+      task = findTask(this.root, managerSession)
+      if (task) this.tasks.set(managerSession, task)
     }
     return task
   }
 
-  private emptyPolisher(): AgentUsage {
+  private emptyManager(): AgentUsage {
     return { calls: 0, prompts: 0, tools: {}, input: 0, cacheRead: 0, output: 0, models: [], ms: 0 }
   }
 
-  private async refreshPolisher(task: TaskState) {
-    const info = await this.ctx.session.get({ sessionID: task.polisherSession }).catch(() => undefined)
-    const base = task.polisherBaseline
+  private async refreshManager(task: TaskState) {
+    const info = await this.ctx.session.get({ sessionID: task.managerSession }).catch(() => undefined)
+    const base = task.managerBaseline
     if (!info || !base) return
-    const c = counter(task.polisherSession)
+    const c = counter(task.managerSession)
     const t = info.tokens
     const tools: Partial<Record<ToolKind, number>> = {}
     for (const [k, v] of Object.entries(c.tools)) tools[k as ToolKind] = Math.max(0, (v ?? 0) - (base.tools[k] ?? 0))
-    const prev = task.usage.polisher ?? this.emptyPolisher()
-    task.usage.polisher = {
+    const prev = task.usage.manager ?? this.emptyManager()
+    task.usage.manager = {
       calls: prev.calls,
       prompts: Math.max(0, c.prompts - base.prompts),
       tools,
       input: Math.max(0, t.input + t.cache.write - base.input),
       cacheRead: Math.max(0, t.cache.read - base.cacheRead),
       output: Math.max(0, t.output + t.reasoning - base.output - base.reasoning),
-      models: info.model ? [modelLabel(info.model)] : modelsFor(this.config, "polisher").slice(0, 1).map(modelLabel),
+      models: info.model ? [modelLabel(info.model)] : modelsFor(this.config, "manager").slice(0, 1).map(modelLabel),
       ms: 0,
     }
   }
@@ -270,15 +270,15 @@ export class Team {
     return undefined
   }
 
-  /** The user's own words: their latest message if it came after the plugin asked, else the polisher's text. */
+  /** The user's own words: their latest message if it came after the plugin asked, else the manager's text. */
   private async userWords(task: TaskState, text: string): Promise<string> {
-    const last = await this.lastUserMessage(task.polisherSession)
+    const last = await this.lastUserMessage(task.managerSession)
     return (last && last.time > (task.askedAt ?? 0) && last.text.trim() ? last.text : text).trim()
   }
 
   /** Everything the user typed since the plugin last asked them (their original words behind a polished reply). */
   private async userReplies(task: TaskState): Promise<string> {
-    const messages = (await this.ctx.session.context({ sessionID: task.polisherSession }).catch(() => [])) as unknown as Array<{
+    const messages = (await this.ctx.session.context({ sessionID: task.managerSession }).catch(() => [])) as unknown as Array<{
       type?: string
       text?: string
       time?: { created?: number }
@@ -299,32 +299,32 @@ export class Team {
     return { polished, note }
   }
 
-  /** The agent the task waits on: the one that asked, else the senior if it has a session, else triage. */
-  private replier(task: TaskState): "triage" | "senior" | undefined {
-    if (task.phase === "questions" && task.questionsFrom === "triage" && task.sessions.triage) return "triage"
-    if (task.sessions.senior) return "senior"
-    if (task.sessions.triage) return "triage"
+  /** The agent the task waits on: the one that asked, else the architect if it has a session, else lead. */
+  private replier(task: TaskState): "lead" | "architect" | undefined {
+    if (task.phase === "questions" && task.questionsFrom === "lead" && task.sessions.lead) return "lead"
+    if (task.sessions.architect) return "architect"
+    if (task.sessions.lead) return "lead"
     return undefined
   }
 
   // ---- actions ----
 
-  private async start(polisherSession: string, text: string, signal: AbortSignal, forcePlan = false): Promise<string> {
-    const active = this.task(polisherSession)
+  private async start(managerSession: string, text: string, signal: AbortSignal, forcePlan = false): Promise<string> {
+    const active = this.task(managerSession)
     if (active && !TERMINAL.includes(active.phase))
       return [
         `A task is already active in this session: ${active.id} (${active.phase}). Only one task runs per session.`,
         `NEXT ACTION: ask the user [Stop task] [Wait]. Stop task → call team with action "stop", then "start" again. Wait → tell the user to send the new request again when this task ends.`,
       ].join("\n")
     if (!text.trim()) return 'start needs text: the confirmed request. NEXT ACTION: call team with action "start" and the request.'
-    const task = newTask(this.root, polisherSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)
+    const task = newTask(this.root, managerSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)
     if (forcePlan) task.forcePlan = true
     writeFile(task, "request.md", text)
-    const original = await this.lastUserMessage(polisherSession)
+    const original = await this.lastUserMessage(managerSession)
     writeFile(task, "request-original.md", original?.text ?? text)
-    const info = await this.ctx.session.get({ sessionID: polisherSession }).catch(() => undefined)
-    const c = counter(polisherSession)
-    task.polisherBaseline = {
+    const info = await this.ctx.session.get({ sessionID: managerSession }).catch(() => undefined)
+    const c = counter(managerSession)
+    task.managerBaseline = {
       input: (info?.tokens.input ?? 0) + (info?.tokens.cache.write ?? 0),
       output: info?.tokens.output ?? 0,
       reasoning: info?.tokens.reasoning ?? 0,
@@ -332,10 +332,10 @@ export class Team {
       prompts: Math.max(0, c.prompts - 1),
       tools: { ...c.tools } as Record<string, number>,
     }
-    task.usage.polisher = { ...this.emptyPolisher(), calls: 1 }
-    task.pending = { mode: "triage" }
-    this.tasks.set(polisherSession, task)
-    this.sessionDirs?.set(polisherSession, [...this.dirsOf(polisherSession), task.dir])
+    task.usage.manager = { ...this.emptyManager(), calls: 1 }
+    task.pending = { mode: "lead" }
+    this.tasks.set(managerSession, task)
+    this.sessionDirs?.set(managerSession, [...this.dirsOf(managerSession), task.dir])
     const { build, test, whenMissing } = this.config.checks
     if (build.trim() || test.trim()) {
       const lines = [build.trim() && `- Build: \`${build.trim()}\``, test.trim() && `- Test: \`${test.trim()}\``].filter(Boolean)
@@ -369,10 +369,10 @@ export class Team {
   /** A user question while a task is open: the agent the task waits on answers in its own session. The task doesn't move. */
   private async reply(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
     const role = this.replier(task)
-    if (!role) return this.ask(task.polisherSession, text, signal)
+    if (!role) return this.ask(task.managerSession, text, signal)
     const { polished, note } = await this.withOriginal(task, text, "question")
     if (!polished) return 'ask needs text: the question. NEXT ACTION: call team with action "ask" and the question.'
-    const mode: Mode = role === "senior" ? "senior_reply" : "triage_reply"
+    const mode: Mode = role === "architect" ? "architect_reply" : "lead_reply"
     const sessionID = task.sessions[role]
     this.log(`task ${task.id}: user question → ${role}`)
     const res = await runAgent(
@@ -383,7 +383,7 @@ export class Team {
         mode,
         task,
         sessionID,
-        parentID: task.polisherSession,
+        parentID: task.managerSession,
         title: `team: ${role} (user question)`,
         prompt: buildPrompt(this.config, task, { mode, note }, !sessionID),
         signal,
@@ -396,7 +396,7 @@ export class Team {
     appendFile(task, "answers.md", `## User question\n\n${note}\n\n## ${role} answered\n\n${answer}\n`)
     task.askedAt = Date.now()
     save(task)
-    this.onChange(task.polisherSession)
+    this.onChange(task.managerSession)
     return join(
       `ANSWER from ${role}:`,
       answer,
@@ -406,16 +406,16 @@ export class Team {
     )
   }
 
-  private async ask(polisherSession: string, question: string, signal: AbortSignal): Promise<string> {
+  private async ask(managerSession: string, question: string, signal: AbortSignal): Promise<string> {
     if (!question.trim()) return 'ask needs text: the question. NEXT ACTION: call team with action "ask" and the question.'
-    const role = "explorer"
+    const role = "intern"
     const res = await runAgent(
       this.ctx,
       this.config,
       {
         role,
-        mode: "explorer",
-        parentID: polisherSession,
+        mode: "intern",
+        parentID: managerSession,
         title: `team: ${role} (question)`,
         prompt: join("MODE: user question. Answer the user's question about the code. Report FOUND with the answer in content (path:line references, short excerpts), or NOT_FOUND with what you searched.", `<question>\n${question}\n</question>`),
         signal,
@@ -424,8 +424,8 @@ export class Team {
     )
     const usage: Partial<Record<string, AgentUsage>> = {}
     add(usage as never, role, res.usage)
-    const asked = this.questionsIn(polisherSession)
-    appendUsage(this.root, { task: "ask", session: polisherSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
+    const asked = this.questionsIn(managerSession)
+    appendUsage(this.root, { task: "ask", session: managerSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
     asked.count++
     if (usage[role]) add(asked.usage, role, usage[role]!)
     if (!res.report) return `The ${role} couldn't answer: ${res.failure}.\nNEXT ACTION: tell the user.`
@@ -437,15 +437,15 @@ export class Team {
     )
   }
 
-  private async stats(polisherSession: string, last?: number): Promise<string> {
+  private async stats(managerSession: string, last?: number): Promise<string> {
     if (last) {
       const { lines, total } = lastUsage(this.root, last)
       if (!lines.length) return "No finished tasks recorded yet."
       return join(`Usage over the last ${lines.length} task(s), with each agent's share of calls, prompts and tokens:`, "```\n" + table(total, true) + "\n```", "NEXT ACTION: show this to the user.")
     }
-    const task = this.task(polisherSession)
+    const task = this.task(managerSession)
     if (!task) return 'No task in this session. Use last: N for earlier tasks. NEXT ACTION: tell the user.'
-    await this.refreshPolisher(task)
+    await this.refreshManager(task)
     save(task)
     return join(`Usage for task ${task.id} (${task.phase}), attempts ${task.attempts}/${task.attemptLimit}:`, usageReport(task.usage, Math.max(1, task.planSteps)), "NEXT ACTION: show this to the user.")
   }
@@ -459,7 +459,7 @@ export class Team {
     const note = `The user answered your questions:\n${answer}`
     const from = task.questionsFrom
     task.pending =
-      from === "triage" ? { mode: "triage", note } : from === "senior" ? { mode: "senior", note } : { mode: "senior", note: `Oracle asked the user questions. ${note}` }
+      from === "lead" ? { mode: "lead", note } : from === "architect" ? { mode: "architect", note } : { mode: "architect", note: `Principal asked the user questions. ${note}` }
     task.phase = "running"
     task.questions = undefined
     save(task)
@@ -471,8 +471,8 @@ export class Team {
     const { polished, note: comments } = await this.withOriginal(task, text, "comments")
     if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
     appendFile(task, "answers.md", `## Comments on plan ${task.plan}\n\n${comments}\n`)
-    task.skipOracleReview = true
-    task.pending = { mode: "senior", note: `The user asked for changes to plan ${task.plan}. Revise it:\n${comments}` }
+    task.skipPrincipalReview = true
+    task.pending = { mode: "architect", note: `The user asked for changes to plan ${task.plan}. Revise it:\n${comments}` }
     task.phase = "running"
     save(task)
     return this.step(task, signal)
@@ -495,7 +495,7 @@ export class Team {
     if (task.phase !== "running" || !task.pending) return render(task)
     if (task.attempts >= task.attemptLimit) {
       task.phase = "budget"
-      await this.refreshPolisher(task)
+      await this.refreshManager(task)
       save(task)
       return render(task)
     }
@@ -503,11 +503,11 @@ export class Team {
     const role = MODE_ROLE[pending.mode]
     const keep = SESSION_MODES[pending.mode]
     const sessionID = keep && !pending.fresh ? task.sessions[keep] : undefined
-    if (pending.mode === "fix" && !sessionID) task.fixerSeenPlan = false
+    if (pending.mode === "fix" && !sessionID) task.developerSeenPlan = false
     const prompt = buildPrompt(this.config, task, pending, !sessionID)
     task.attempts++
     save(task)
-    this.onChange(task.polisherSession)
+    this.onChange(task.managerSession)
     this.log(`task ${task.id}: attempt ${task.attempts} → ${role} (${pending.mode})`)
     const res = await runAgent(
       this.ctx,
@@ -517,7 +517,7 @@ export class Team {
         mode: pending.mode,
         task,
         sessionID,
-        parentID: task.polisherSession,
+        parentID: task.managerSession,
         title: `team: ${role} (${pending.mode}${pending.mode === "fix" ? ` plan ${task.plan} step ${task.step}` : ""})`,
         prompt,
         signal,
@@ -540,15 +540,15 @@ export class Team {
       this.apply(task, pending, res.report, res)
     }
     const phase = task.phase as Phase
-    if (phase === "stuck") await this.refreshPolisher(task)
+    if (phase === "stuck") await this.refreshManager(task)
     if (phase === "done") await this.finish(task, "done")
     save(task)
-    this.onChange(task.polisherSession)
+    this.onChange(task.managerSession)
     return render(task)
   }
 
   private async finish(task: TaskState, outcome: string) {
-    await this.refreshPolisher(task)
+    await this.refreshManager(task)
     save(task)
     appendUsage(this.root, { task: task.id, time: Date.now(), outcome, usage: task.usage })
   }
@@ -579,12 +579,12 @@ export class Team {
 
   private apply(task: TaskState, p: Pending, r: Report, res: RunResult) {
     switch (p.mode) {
-      case "triage":
-      case "triage_fail": {
+      case "lead":
+      case "lead_fail": {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
         writeFile(task, "brief.md", r.content)
         this.record(task, p.mode, r, "brief.md")
-        task.pending = r.status === "TRIVIAL" ? { mode: "fix_trivial", fresh: true } : { mode: "senior" }
+        task.pending = r.status === "TRIVIAL" ? { mode: "fix_trivial", fresh: true } : { mode: "architect" }
         return
       }
       case "fix_trivial": {
@@ -596,7 +596,7 @@ export class Team {
           return
         }
         task.trivialFailed = true
-        task.pending = { mode: "triage_fail" }
+        task.pending = { mode: "lead_fail" }
         return
       }
       case "review_trivial": {
@@ -604,21 +604,21 @@ export class Team {
         this.record(task, p.mode, r, file)
         if (r.status === "PASS") return this.done(task, r.summary)
         task.trivialFailed = true
-        task.pending = { mode: "triage_fail" }
+        task.pending = { mode: "lead_fail" }
         return
       }
-      case "senior": {
+      case "architect": {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
         if (r.status === "NEED_INFO") {
           task.needInfo++
           this.record(task, p.mode, r)
-          task.pending = { mode: "explorer", note: r.content }
+          task.pending = { mode: "intern", note: r.content }
           return
         }
         if (r.status === "ESCALATE") {
           const file = writeNumbered(task, "escalation", r.content)
           this.record(task, p.mode, r, file)
-          return this.toAdvice(task, `senior escalated (${file})`, { mode: "senior", note: "Retry: write a plan, or escalate again." })
+          return this.toAdvice(task, `architect escalated (${file})`, { mode: "architect", note: "Retry: write a plan, or escalate again." })
         }
         const file = writeNumbered(task, "plan", r.content)
         this.record(task, p.mode, r, file)
@@ -629,36 +629,36 @@ export class Team {
         task.step = 1
         task.rounds = 0
         task.planSummary = r.summary
-        const review = task.planRisk && !task.skipOracleReview
-        task.skipOracleReview = false
-        task.oracleNote = undefined
+        const review = task.planRisk && !task.skipPrincipalReview
+        task.skipPrincipalReview = false
+        task.principalNote = undefined
         if (review) {
-          task.pending = { mode: "oracle_review" }
+          task.pending = { mode: "principal_review" }
         } else this.toApproval(task)
         return
       }
-      case "explorer": {
+      case "intern": {
         const file = writeNumbered(task, "findings", `# Findings (${r.status})\n\n${r.content}`)
         this.record(task, p.mode, r, file)
-        task.seniorUnseen.push(file)
-        task.pending = { mode: "senior", note: `Explorer answered your queries (${r.status}).` }
+        task.architectUnseen.push(file)
+        task.pending = { mode: "architect", note: `Intern answered your queries (${r.status}).` }
         return
       }
-      case "oracle_review": {
-        const file = this.reportFile(task, "oracle", p.mode, r)
+      case "principal_review": {
+        const file = this.reportFile(task, "principal", p.mode, r)
         this.record(task, p.mode, r, file)
-        task.oracleNote = file
+        task.principalNote = file
         if (r.status === "APPROVE") return this.toApproval(task)
-        task.seniorUnseen.push(file)
-        task.skipOracleReview = true
-        task.pending = { mode: "senior", note: `Oracle requested changes to plan ${task.plan} (${file}). Revise the plan once.` }
+        task.architectUnseen.push(file)
+        task.skipPrincipalReview = true
+        task.pending = { mode: "architect", note: `Principal requested changes to plan ${task.plan} (${file}). Revise the plan once.` }
         return
       }
       case "fix": {
         const file = this.reportFile(task, "report", p.mode, r)
         this.record(task, p.mode, r, file)
-        task.seniorUnseen.push(file)
-        if (r.status === "BLOCKED") return this.planFailure(task, `Fixer is blocked on step ${task.step}: ${r.summary}`)
+        task.architectUnseen.push(file)
+        if (r.status === "BLOCKED") return this.planFailure(task, `Developer is blocked on step ${task.step}: ${r.summary}`)
         if (r.status === "DONE") {
           if (task.step < task.planSteps) {
             task.step++
@@ -677,26 +677,26 @@ export class Team {
       case "diagnose": {
         const file = this.reportFile(task, "analysis", p.mode, r)
         this.record(task, p.mode, r, file)
-        task.seniorUnseen.push(file)
+        task.architectUnseen.push(file)
         if (r.status === "LOCAL") return this.round(task, file, r)
-        if (r.status === "REPLAN") return this.planFailure(task, `the analyser asked for a new plan (${file}): ${r.summary}`)
-        return this.toAdvice(task, `the analyser escalated (${file})`, { mode: "diagnose" })
+        if (r.status === "REPLAN") return this.planFailure(task, `the reviewer asked for a new plan (${file}): ${r.summary}`)
+        return this.toAdvice(task, `the reviewer escalated (${file})`, { mode: "diagnose" })
       }
       case "review": {
         const file = this.reportFile(task, "analysis", p.mode, r)
         this.record(task, p.mode, r, file)
-        task.seniorUnseen.push(file)
+        task.architectUnseen.push(file)
         if (r.status === "PASS") return this.done(task, r.summary)
         task.step = task.planSteps
         return this.round(task, file, r)
       }
-      case "oracle_advice": {
-        task.oracleAdviceUsed++
-        const file = this.reportFile(task, "oracle", p.mode, r)
+      case "principal_advice": {
+        task.principalAdviceUsed++
+        const file = this.reportFile(task, "principal", p.mode, r)
         this.record(task, p.mode, r, file)
-        task.seniorUnseen.push(file)
+        task.architectUnseen.push(file)
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
-        task.pending = { mode: "senior", note: `Oracle's advice is in ${file}. Write the next plan following it.` }
+        task.pending = { mode: "architect", note: `Principal's advice is in ${file}. Write the next plan following it.` }
         return
       }
     }
@@ -708,22 +708,22 @@ export class Team {
 
   private round(task: TaskState, file: string, r: Report) {
     task.rounds++
-    if (task.rounds > this.config.limits.fixerRounds)
-      return this.planFailure(task, `${this.config.limits.fixerRounds} fixer rounds used on step ${task.step} without success`)
-    task.pending = { mode: "fix", note: `Round ${task.rounds} on step ${task.step}. Instructions from the analyser (${file}):\n<analysis>\n${r.content}\n</analysis>` }
+    if (task.rounds > this.config.limits.developerRounds)
+      return this.planFailure(task, `${this.config.limits.developerRounds} developer rounds used on step ${task.step} without success`)
+    task.pending = { mode: "fix", note: `Round ${task.rounds} on step ${task.step}. Instructions from the reviewer (${file}):\n<analysis>\n${r.content}\n</analysis>` }
   }
 
   private planFailure(task: TaskState, reason: string) {
     task.planFailures++
-    const retry: Pending = { mode: "senior", note: `Plan ${task.plan} failed: ${reason}. Write the next plan.` }
-    if (task.oracleAdviceUsed >= this.config.limits.oracleAdvice) return this.stuck(task, `plan ${task.plan} failed after Oracle's advice: ${reason}`, retry)
+    const retry: Pending = { mode: "architect", note: `Plan ${task.plan} failed: ${reason}. Write the next plan.` }
+    if (task.principalAdviceUsed >= this.config.limits.principalAdvice) return this.stuck(task, `plan ${task.plan} failed after Principal's advice: ${reason}`, retry)
     if (task.planFailures >= this.config.limits.planFailures) return this.toAdvice(task, `${task.planFailures} plans failed; last: ${reason}`, retry)
     task.pending = retry
   }
 
   private toAdvice(task: TaskState, reason: string, retry: Pending) {
-    if (task.oracleAdviceUsed >= this.config.limits.oracleAdvice) return this.stuck(task, `${reason}, and Oracle's advice was already used`, retry)
-    task.pending = { mode: "oracle_advice", note: reason }
+    if (task.principalAdviceUsed >= this.config.limits.principalAdvice) return this.stuck(task, `${reason}, and Principal's advice was already used`, retry)
+    task.pending = { mode: "principal_advice", note: reason }
   }
 
   private toApproval(task: TaskState) {

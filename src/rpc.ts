@@ -90,7 +90,7 @@ export const compact = (n: number) =>
 
 /** One fixed-width sidebar line (35 columns): marker, name, calls, prompts, tools, tokens, percent. */
 export const line = (mark: string, name: string, calls: number | string, prompts: number | string, tools: number | string, tokens: string, pct: string) =>
-  mark + name.padEnd(8).slice(0, 8) + String(calls).padStart(5) + String(prompts).padStart(5) + String(tools).padStart(5) + tokens.padStart(6) + pct.padStart(5)
+  mark + name.padEnd(9).slice(0, 9) + String(calls).padStart(4) + String(prompts).padStart(5) + String(tools).padStart(5) + tokens.padStart(6) + pct.padStart(5)
 
 export interface SidebarStats {
   task?: { id: string; phase: string; attempts: number; attemptLimit: number; rows: StatsRow[] }

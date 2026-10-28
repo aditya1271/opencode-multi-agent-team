@@ -13,16 +13,16 @@ export interface Rule {
 const PROMPT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "prompts")
 
 export const DESCRIPTIONS: Record<Role, string> = {
-  polisher: "Team front agent: polishes your request and runs the multi-agent team",
-  triage: "Team: sorts a request, searches the code, writes the brief",
-  senior: "Team: writes plans",
-  explorer: "Team: searches the code and answers code questions",
-  fixer: "Team: edits, builds and tests",
-  analyser: "Team: diagnoses failures and reviews finished work",
-  oracle: "Team: reviews destructive plans and advises when stuck",
+  manager: "Team front agent: polishes your request and runs the multi-agent team",
+  lead: "Team: sorts a request, searches the code, writes the brief",
+  architect: "Team: writes plans",
+  intern: "Team: searches the code and answers code questions",
+  developer: "Team: edits, builds and tests",
+  reviewer: "Team: diagnoses failures and reviews finished work",
+  principal: "Team: reviews destructive plans and advises when stuck",
 }
 
-export const agentId = (config: Config, role: Role) => (role === "polisher" ? "polisher" : config.agentPrefix + role)
+export const agentId = (config: Config, role: Role) => (role === "manager" ? "manager" : config.agentPrefix + role)
 
 export function roleOf(config: Config, agent: string | undefined): Role | undefined {
   if (!agent) return undefined
@@ -53,19 +53,19 @@ export function permissionsFor(config: Config, role: Role): Rule[] {
   const readSearch = [allow("read"), allow("grep"), allow("glob")]
   const askList = [...ASK_COMMANDS, ...config.askCommands].map((c) => ask("shell", c))
   switch (role) {
-    case "polisher":
+    case "manager":
       return [deny("*"), allow("team"), allow("question")]
-    case "triage":
+    case "lead":
       return [...base, ...readSearch, ...readOnly, ...addonRules(config, role), allow("report")]
-    case "senior":
+    case "architect":
       return [...base, allow("read"), ...addonRules(config, role), allow("report")]
-    case "explorer":
+    case "intern":
       return [...base, ...readSearch, ...readOnly, ...addonRules(config, role), allow("report")]
-    case "oracle":
+    case "principal":
       return [...base, ...readSearch, ...addonRules(config, role), allow("report")]
-    case "analyser":
+    case "reviewer":
       return [...base, ...readSearch, ask("shell"), ...readOnly, ...addonRules(config, role), ...askList, allow("report")]
-    case "fixer":
+    case "developer":
       return [
         ...base,
         ...readSearch,
@@ -112,7 +112,7 @@ function textOrFile(value: string): string {
 function toolsNote(config: Config, role: Role): string {
   const a = config.agents[role] ?? {}
   const lines: string[] = []
-  if (role === "polisher") return ""
+  if (role === "manager") return ""
   if (a.skills?.length) lines.push(`- Load these skills before you start working: ${a.skills.join(", ")}.`)
   if (a.mcps?.length) lines.push(`- MCP servers, through the execute tool: ${a.mcps.join(", ")}.`)
   if (a.tools?.length) lines.push(`- Tools: ${a.tools.join(", ")}.`)
@@ -131,7 +131,7 @@ export function systemPrompt(config: Config, role: Role): string {
     ? core.replace("{{instructions}}", instructions)
     : [core, instructions].join("\n\n")
   const polishOff =
-    role === "polisher" && config.polish === "off"
+    role === "manager" && config.polish === "off"
       ? "Polishing is OFF: send the user's requests and replies to the team as written, without rewriting them and without the [Send] [Edit] [Cancel] step. This overrides the polishing steps above."
       : ""
   const parts = [body, polishOff, toolsNote(config, role), a.append ? textOrFile(a.append) : ""]
