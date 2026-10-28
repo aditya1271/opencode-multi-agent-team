@@ -1,4 +1,5 @@
 import type { Config } from "./config.ts"
+import { commandParts } from "./match.ts"
 import { runs, type Report, type ShellRun } from "./runtime.ts"
 import type { Mode, TaskState } from "./state.ts"
 
@@ -20,11 +21,16 @@ const BASE: Record<Mode, string[]> = {
 export function checkProblem(checkCommand: string, shells: ShellRun[]): string | undefined {
   const norm = (s: string) => s.replace(/\s+/g, " ").trim()
   const check = norm(checkCommand)
+  const last = (s: string) => commandParts(s).at(-1)
   const match = [...shells].reverse().find((s) => {
     const cmd = norm(s.command)
-    return cmd.includes(check) || (cmd.length > 3 && check.includes(cmd))
+    return cmd.includes(check) || last(cmd) === last(check)
   })
   if (!match) return `the check command \`${check}\` was not run in this call`
+  const cmd = norm(match.command)
+  const after = cmd.includes(check) ? cmd.slice(cmd.lastIndexOf(check) + check.length) : ""
+  if (/[|;&]/.test(after.replace(/\d?>&\d/g, "").replace(/^\s*&&[\s\S]*$/, "")))
+    return `the check command \`${check}\` was piped or followed by another command, so its exit code is unknown; run it exactly as written`
   if (match.exit !== 0) return `the check command \`${check}\` exited with ${match.exit ?? "unknown"}`
   return undefined
 }

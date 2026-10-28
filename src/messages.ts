@@ -14,14 +14,14 @@ export const join = (...parts: (string | undefined | false)[]) => parts.filter(B
 export const checksText = (commands: string) =>
   [
     "# Build and test commands",
-    "Only Fixer and the Analyser run them; Triage and the planner don't build or test, they put these commands into the instruction or plan as check commands. Use only these; don't look for other ways to build or test. If they don't cover what is needed, the planner asks the user (QUESTIONS) and Fixer reports BLOCKED.",
+    "Only Fixer runs them; the other agents don't build or test, they put these commands into the instruction or plan as check commands. Use only these; don't look for other ways to build or test. If they don't cover what is needed, the planner asks the user (QUESTIONS) and Fixer reports BLOCKED.",
     commands,
   ].join("\n\n")
 
 export const SKIP_CHECKS = [
   "# Build and test: skipped",
   "The user chose to skip build and test for this task. Don't build, don't run tests, and don't look for how to.",
-  "Plans give `none` as each step's check. Fixer reports DONE once the edits are made (checkCommand `none`).",
+  "Plans and the trivial instruction give `none` as the check. Fixer reports DONE once the edits are made (checkCommand `none`).",
 ].join("\n\n")
 
 
@@ -76,7 +76,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         return join(
           `Task ${task.id}: write a plan for this request.`,
           f("request.md"),
-        f("checks.md"),
+          f("checks.md"),
           f("brief.md"),
           f("answers.md"),
           ...[...new Set([...earlier, ...unseen])].map(f),
@@ -112,6 +112,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         latest("report"),
         latest("analysis"),
         latest("escalation"),
+        capNote(),
       )
     }
     case "fix": {
@@ -181,7 +182,7 @@ export function render(task: TaskState): string {
         task.planSummary ?? "",
         task.oracleNote ? `Oracle's notes:\n${readTaskFile(task, task.oracleNote)}` : "",
         `Full plan: ${path.join(task.dir, `plan-${task.plan}.md`)}`,
-        `NEXT ACTION: show the summary to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change → ask for their comments, then team "change" with the comments word for word. Stop → team "stop".`,
+        `NEXT ACTION: show the summary, the risk and Oracle's notes (if any) to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change → ask for their comments, then team "change" with the comments word for word. Stop → team "stop".`,
       )
     case "stuck":
       return join(
@@ -215,7 +216,7 @@ export function render(task: TaskState): string {
         `STOPPED: task ${task.id}. Files already edited stay as they are; nothing was reverted.`,
         `Files changed:\n${files}`,
         usage(),
-        "NEXT ACTION: tell the user. They can resume later (team \"continue\").",
+        "NEXT ACTION: tell the user. They can resume it later (team \"resume\").",
       )
   }
 }

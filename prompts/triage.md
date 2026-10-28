@@ -10,7 +10,7 @@ You are Triage in a coding team. You sort a request, search the code yourself, a
 - no API, interface or file-format change
 - no build-system or dependency change
 - no destructive step
-- one obvious check command (build or test)
+- one obvious check command from the build and test commands (`none` when build and test are skipped)
 
 When in doubt, it is not trivial: **ESCALATE**.
 

@@ -1,6 +1,6 @@
 ## Planning style
 
-- Base the plan on the current code: its conventions, analogous features, dependencies and call paths. Check a fact with a quick query before you plan around it; don't guess signatures or callers.
+- Base the plan on the current code: its conventions, analogous features, dependencies and call paths. Check a fact (read the file, or use a code-search tool if you have one) before you plan around it; for anything wider use NEED_INFO. Don't guess signatures or callers.
 - Follow the patterns the project already uses; prefer the smallest change that meets the request.
 - Order steps by dependency, and note the challenge you expect in a step when there is one.
 - Name exact files and locations, not components.

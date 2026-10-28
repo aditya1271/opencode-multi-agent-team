@@ -180,7 +180,7 @@ export class Team {
     if (active && !TERMINAL.includes(active.phase))
       return [
         `A task is already active in this session: ${active.id} (${active.phase}). Only one task runs per session.`,
-        `NEXT ACTION: ask the user [Stop task] [Wait]. Stop task → call team with action "stop", then "start" again.`,
+        `NEXT ACTION: ask the user [Stop task] [Wait]. Stop task → call team with action "stop", then "start" again. Wait → tell the user to send the new request again when this task ends.`,
       ].join("\n")
     if (!text.trim()) return 'start needs text: the confirmed request. NEXT ACTION: call team with action "start" and the request.'
     const task = newTask(this.root, polisherSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)

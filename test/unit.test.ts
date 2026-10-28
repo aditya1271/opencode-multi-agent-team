@@ -66,6 +66,11 @@ describe("report statuses", () => {
     expect(checkProblem("make test", [])).toContain("was not run")
     expect(checkProblem("make test", [{ command: "make test", exit: 2 }])).toContain("exited with 2")
     expect(checkProblem("make test", [{ command: "cd x && make  test", exit: 0 }])).toBeUndefined()
+    expect(checkProblem("make test", [{ command: "make test 2>&1 | tail -50", exit: 0 }])).toContain("piped")
+    expect(checkProblem("make test", [{ command: "make test || true", exit: 0 }])).toContain("piped")
+    expect(checkProblem("make test", [{ command: "make test > log 2>&1", exit: 0 }])).toBeUndefined()
+    expect(checkProblem("make test", [{ command: "make", exit: 0 }])).toContain("was not run")
+    expect(checkProblem("cd build && make test", [{ command: "make test", exit: 0 }])).toBeUndefined()
   })
   test("DONE needs a passing check, unless the user skipped build and test", () => {
     const t = newTask("/tmp/opencode/omat-test", "ses_y", "/tmp", "Goal\nedit", 40)
