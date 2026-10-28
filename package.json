@@ -1,0 +1,43 @@
+{
+  "name": "opencode-multi-agent-team",
+  "version": "0.1.0",
+  "description": "OpenCode V2 plugin: a deterministic multi-agent coding workflow (polish, triage, plan, fix, diagnose) with code-enforced routing and limits",
+  "type": "module",
+  "license": "MIT",
+  "author": "Aditya Aggarwal",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "plugin",
+    "agents",
+    "multi-agent",
+    "workflow"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "prompts",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.2.0 <3"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.2.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

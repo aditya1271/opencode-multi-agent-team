@@ -1,0 +1,93 @@
+# opencode-multi-agent-team
+
+An OpenCode V2 plugin that runs a fixed multi-agent coding workflow. Code decides which agent
+runs next and enforces the limits; no model routes work. Cheap models do most of the work.
+Strong models write plans and give advice only when the team is stuck.
+
+See [overview.md](overview.md) for the workflow, and [plan.md](plan.md) for the full design.
+
+## Agents
+
+| Agent | Job |
+|---|---|
+| `polisher` | Front agent. Rewrites your request, asks you to confirm it, and drives the team. It can't read, edit or run anything. |
+| `team-triage` | Searches the code, then decides between a trivial fix and a plan. Writes the brief. |
+| `team-senior` | Writes plans. You approve each one. |
+| `team-explorer` | Does code searches for the senior planner, and answers your code questions. |
+| `team-fixer` | Edits, builds and tests. The only agent that changes files. |
+| `team-analyser` | Diagnoses failures and reviews finished work. |
+| `team-oracle` | Reviews destructive plans, and advises once when the team is stuck. |
+
+## Install
+
+1. Add the plugin to `opencode.jsonc` (global or project):
+
+   ```jsonc
+   { "plugins": ["/path/to/opencode-multi-agent-team"] }
+   ```
+
+2. Copy [examples/opencode-multi-agent-team.jsonc](examples/opencode-multi-agent-team.jsonc) to
+   `~/.config/opencode/opencode-multi-agent-team.json` or `<project>/.opencode/`. Then set a
+   model for every role. The plugin ships no default models. List a backup model from a
+   different provider after the main one; the plugin switches to it when the main model fails.
+3. Optionally add a project `AGENTS.md` with the exact build and test commands (template:
+   [examples/AGENTS.md](examples/AGENTS.md)). That saves every agent from working them out
+   on each task.
+4. Restart OpenCode and select the `polisher` agent, or set `"defaultAgent": true`.
+
+## Use
+
+- **Change something:** describe it. The polisher shows the polished request and asks
+  [Send] [Edit] [Cancel]. Set `"polish": "off"` to send messages as written.
+- **Ask about the code:** the Explorer answers. No task starts.
+- **Plans:** you see each plan's summary and choose [Approve] [Change] [Stop].
+- **Questions:** Triage, Senior and Oracle may ask you questions. Answer in your own words.
+- **Stuck or out of attempts:** you get a report (what was tried, the last errors, the
+  changed files) and choose [Retry] / [Continue +10] / [Stop].
+- **Usage:** ask "how was the work divided?" to get a per-agent table (calls, prompts, tool
+  calls, tokens, model) for the task, or for the last N tasks.
+
+Edits are never reverted automatically. Every result lists the changed files.
+
+## Limits (defaults)
+
+| Limit | Default |
+|---|---|
+| Agent calls per task | 40, then [Continue +10] |
+| Fixer rounds per plan step | 2 |
+| Failed plans before Oracle advice | 2 (Oracle advice: once per task) |
+| Searches / question rounds per task | 6 / 4 |
+| Tool calls per agent call | triage 40, senior 25, explorer 30, fixer 150, analyser 30, oracle 20 |
+| Time per agent call | 30 min (fixer 240), or 15 min without activity |
+
+All limits are in the config file under `limits`.
+
+## Task folder
+
+Each task writes to `~/.cache/opencode-multi-agent-team/<task-id>/` (`taskDir`):
+- `request.md`, `brief.md`, `plan-N.md`, `report-N.md`, `analysis-N.md`, `oracle-N.md`,
+  `answers.md`
+- `logs/`: full build and long command output
+- `state.json`
+
+`usage.jsonl` in the task root keeps one usage line per task. `plugin.log` records what the
+plugin did.
+
+## Safety
+
+- Each team agent's own permission rules decide what it may do. A deny in your config still
+  applies.
+- Fixer asks before destructive commands: git reset/clean/checkout/push/rebase, `rm -rf`,
+  p4 revert/submit/delete, sudo. Add more patterns with `askCommands`.
+- A step counts as done only if its check command really ran in that call and exited 0.
+
+## Development
+
+```sh
+bun test          # unit tests
+npx tsc -p .      # typecheck
+```
+
+## License
+
+MIT

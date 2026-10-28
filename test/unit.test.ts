@@ -1,0 +1,119 @@
+import { describe, expect, test } from "bun:test"
+import { evaluate, permissionsFor, toolVisible } from "../src/agents.ts"
+import { DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
+import { commandParts, matchesAny, toolKind, trimLog } from "../src/guards.ts"
+import { allowedStatuses, checkProblem } from "../src/report.ts"
+import { newTask, taskId } from "../src/state.ts"
+import { add, hints, table } from "../src/usage.ts"
+
+describe("config", () => {
+  test("stripJsonc keeps strings and drops comments and trailing commas", () => {
+    const text = `{ // c\n "a": "x // y", /* b */ "b": [1, 2,], }`
+    expect(JSON.parse(stripJsonc(text))).toEqual({ a: "x // y", b: [1, 2] })
+  })
+  test("parseModel", () => {
+    expect(parseModel("fuse/kimi-k2.6")).toEqual({ providerID: "fuse", id: "kimi-k2.6" })
+    expect(parseModel("a/b#high")).toEqual({ providerID: "a", id: "b", variant: "high" })
+    expect(parseModel("a/b/c", "low")).toEqual({ providerID: "a", id: "b/c", variant: "low" })
+    expect(() => parseModel("nope")).toThrow()
+  })
+  test("merge is deep and keeps defaults", () => {
+    const c = merge(DEFAULTS, { limits: { taskAttempts: 10 } })
+    expect(c.limits.taskAttempts).toBe(10)
+    expect(c.limits.fixerRounds).toBe(2)
+  })
+})
+
+describe("guards", () => {
+  test("commandParts unwraps bash -c", () => {
+    expect(commandParts(`bash -c 'cd build && make -j8 all'`)).toContain("make -j8 all")
+  })
+  test("matchesAny", () => {
+    expect(matchesAny("make", ["make *"])).toBe(true)
+    expect(matchesAny("cd x && ninja -C out", ["ninja *"])).toBe(true)
+    expect(matchesAny("cmaker", ["make *"])).toBe(false)
+  })
+  test("toolKind", () => {
+    expect(toolKind("grep", {}, DEFAULTS)).toBe("search")
+    expect(toolKind("shell", { command: "make all" }, DEFAULTS)).toBe("build")
+    expect(toolKind("shell", { command: "ls" }, DEFAULTS)).toBe("shell")
+    expect(toolKind("codebase-memory_search_graph", {}, DEFAULTS)).toBe("graph")
+  })
+  test("trimLog keeps error lines and the tail", () => {
+    const lines = Array.from({ length: 200 }, (_, i) => (i === 50 ? "foo.cpp:3: error: bad" : `line ${i}`))
+    const out = trimLog(lines.join("\n"), 2, "/tmp/log")
+    expect(out).toContain("foo.cpp:3: error: bad")
+    expect(out).toContain("line 199")
+    expect(out).not.toContain("line 100\n")
+  })
+})
+
+describe("report statuses", () => {
+  const task = newTask("/tmp/opencode/omat-test", "ses_x", "/tmp", "Goal\nfix the thing", 40)
+  test("caps remove statuses", () => {
+    expect(allowedStatuses(DEFAULTS, "senior", task)).toContain("NEED_INFO")
+    task.needInfo = 6
+    task.questionRounds = 4
+    expect(allowedStatuses(DEFAULTS, "senior", task)).toEqual(["PLAN", "ESCALATE"])
+  })
+  test("triage after a failed trivial attempt may only escalate", () => {
+    task.trivialFailed = true
+    expect(allowedStatuses(DEFAULTS, "triage", task)).toEqual(["ESCALATE"])
+  })
+  test("checkProblem needs the check run in this call with exit 0", () => {
+    expect(checkProblem("make test", [])).toContain("was not run")
+    expect(checkProblem("make test", [{ command: "make test", exit: 2 }])).toContain("exited with 2")
+    expect(checkProblem("make test", [{ command: "cd x && make  test", exit: 0 }])).toBeUndefined()
+  })
+  test("taskId skips a Goal heading", () => {
+    expect(taskId("**Goal**\nFix the parser", new Date(2026, 0, 2, 3, 4, 5))).toBe("20260102-030405-fix-the-parser")
+  })
+})
+
+describe("permissions", () => {
+  test("polisher can only use team and question", () => {
+    const rules = permissionsFor(DEFAULTS, "polisher")
+    expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
+    expect(rules.filter((r) => r.effect === "allow").map((r) => r.action)).toEqual(["team", "question"])
+  })
+  test("senior has no grep or shell", () => {
+    const allowed = permissionsFor(DEFAULTS, "senior").filter((r) => r.effect === "allow").map((r) => r.action)
+    expect(allowed).not.toContain("grep")
+    expect(allowed).not.toContain("shell")
+  })
+  test("evaluate: last match wins, team rules decide", () => {
+    const triage = permissionsFor(DEFAULTS, "triage")
+    expect(evaluate(triage, "read", ["src/a.ts"])).toBe("allow")
+    expect(evaluate(triage, "edit", ["src/a.ts"])).toBe("deny")
+    expect(evaluate(triage, "shell", ["git status"])).toBe("allow")
+    expect(evaluate(triage, "shell", ["make"])).toBe("deny")
+    const fixer = permissionsFor(DEFAULTS, "fixer")
+    expect(evaluate(fixer, "edit", ["a.ts", "b.ts"])).toBe("allow")
+    expect(evaluate(fixer, "shell", ["git reset --hard"])).toBe("ask")
+    expect(evaluate(permissionsFor(DEFAULTS, "polisher"), "read", ["a.ts"])).toBe("deny")
+  })
+  test("toolVisible", () => {
+    const polisher = permissionsFor(DEFAULTS, "polisher")
+    expect(["team", "question", "read", "shell", "edit"].filter((t) => toolVisible(polisher, t))).toEqual(["team", "question"])
+    expect(toolVisible(permissionsFor(DEFAULTS, "triage"), "shell")).toBe(true)
+    expect(toolVisible(permissionsFor(DEFAULTS, "triage"), "write")).toBe(false)
+    expect(toolVisible(permissionsFor(DEFAULTS, "fixer"), "write")).toBe(true)
+  })
+  test("fixer asks before destructive commands", () => {
+    const rules = permissionsFor(DEFAULTS, "fixer")
+    expect(rules.some((r) => r.action === "shell" && r.resource === "git reset *" && r.effect === "ask")).toBe(true)
+  })
+})
+
+describe("usage", () => {
+  test("table and hints", () => {
+    const usage = {}
+    add(usage, "polisher", { calls: 1, prompts: 3, tools: { search: 2 }, input: 12000, cacheRead: 30000, output: 1000, model: "a/b" })
+    add(usage, "fixer", { calls: 2, prompts: 30, tools: { edit: 5, build: 20 }, input: 160000, cacheRead: 1200000, output: 12000, model: "c/d" })
+    const t = table(usage)
+    expect(t).toContain("polisher")
+    expect(t).toContain("1.2M")
+    expect(t.split("\n").pop()).toMatch(/^total\s+3\s+33\s+27/)
+    expect(hints(usage)).toContain("polisher used 2 read/search/shell/edit calls (expected 0)")
+  })
+})

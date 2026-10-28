@@ -1,0 +1,148 @@
+# opencode-multi-agent-team: workflow overview
+
+A multi-agent coding workflow for OpenCode. Version 1 is built and tested on a sandbox
+project; feedback on the workflow itself is welcome.
+
+## The problem
+
+With a single "orchestrator" agent, the main agent ends up doing most of the work itself:
+searching, building, reading long logs. Every log stays in its context and is re-sent on
+every turn, so cost grows fast. It also takes destructive actions (reset, clean, delete)
+without a plan or review.
+
+## Core ideas
+
+1. **Fixed routing.** A fixed workflow decides which agent runs next. No model decides
+   where work goes.
+2. **One owner per job.** Each kind of decision belongs to exactly one agent.
+3. **One agent talks to the user.** The others return results and questions in a fixed
+   format.
+4. **The user is the check** where they look anyway (the request, the plan). Automatic
+   checks are used only where nobody looks.
+5. **Cheap models do most of the work.** Strong models are used only for planning and for
+   expert advice.
+6. **Don't cut good work short.** An agent keeps going until it's done or stuck. Limits
+   catch runaways, not normal work.
+7. **Least tools.** Each agent can use only the tools its job needs. For example, only
+   Fixer edits files, and the Polisher can't read or run anything.
+8. **"Done" is checked, not claimed.** A step counts as done only if its check command
+   (build or test) really ran in that call and passed.
+
+## Agents
+
+| Agent | Job | Model tier |
+|---|---|---|
+| **Polisher** | Talks to the user. Rewrites the request into Goal / Scope / Constraints / Done when / Unclear points and asks for confirmation. | cheap |
+| **Triage** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | cheap |
+| **Senior** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | strong |
+| **Explorer** | Does larger code searches for Senior, and answers the user's code questions. | cheap |
+| **Fixer** | The only agent that edits files and runs builds and tests. Iterates on errors until done or stuck. | cheap |
+| **Analyser** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | mid |
+| **Oracle** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
+
+## Flow
+
+```
+user ─► Polisher ─► [Send] [Edit] [Cancel]
+                       │
+                       ▼
+                    Triage ──── trivial ───► Fixer ─► done
+                       │                       (more than 1 file touched → quick review)
+                       │ needs a plan
+                       ▼
+                    Senior ⇄ Explorer (searches)
+                       │ plan
+                       ├── destructive? ─► Oracle review
+                       ▼
+                 user approves the plan  [Approve] [Change] [Stop]
+                       │
+                       ▼
+                 Fixer: step 1 … last step (full build/test)
+                       │ stuck on a step
+                       ▼
+                    Analyser
+                       ├─ fixable here     ─► back to Fixer (max 2 rounds per step)
+                       ├─ plan is wrong    ─► Senior writes a new plan
+                       └─ unclear          ─► Oracle advice ─► Senior
+```
+
+**Code questions** go straight to Explorer, and the answer comes back to the user.
+
+## User touchpoints
+
+- **Confirm the request** after it's rewritten.
+- **Answer questions.** Only Triage, Senior and Oracle can ask them.
+- **Approve every plan,** together with Oracle's notes on destructive plans.
+- **Allow or deny dangerous commands** (reset, clean, delete, revert, submit) when they run.
+- **Decide when stuck:** retry, continue with more attempts, or stop.
+- **Stop at any time.** Edits are kept and listed, never reverted automatically.
+
+## What counts as "destructive"
+
+Deleting files outside build folders, git reset/clean/push, Perforce revert/submit/delete,
+and changing shared caches or machines. Routine builds are **not** destructive, even
+over ssh or in docker.
+
+## Review after the work
+
+The Analyser reviews the finished work only if:
+- the plan had a failure,
+- the plan was destructive, or
+- more than 3 files changed.
+
+Otherwise the passing full build/test means done.
+
+## Stopping: no endless loops
+
+Every task ends as **done**, **stopped** or **stuck**:
+
+- **Attempt budget:** 40 agent calls per task. When it's used up, the user chooses
+  [Continue +10] or [Stop]. Tokens and time are not limited, only shown.
+- **Fixer rounds:** at most 2 fix-ups per step from the Analyser. After that, the plan
+  counts as failed.
+- **Failed plans:** 2, then Oracle advice once, then one more plan, then the user decides.
+- **Circling:** the Analyser sees every attempt on a step. If the same error comes back
+  or a fix undoes an earlier one, it sends the step back for a new plan instead of
+  another round.
+- **Searches and questions:** capped per task.
+- **Per agent call:** a tool-call limit, and protection against hung agents or commands.
+- **One exit:** every limit ends in the same report to the user: what was tried, the
+  last errors, and the files changed. Nothing retries silently.
+
+## Usage report per agent
+
+After every task, in every stuck report, and on request, the user sees one row per agent:
+calls, prompts processed, tool calls, input / cache / output tokens, and the model used.
+A totals view over the last N tasks shows each agent's share. This makes it visible
+whether the work is divided as intended. For example:
+- the Polisher should do no searching or editing
+- Fixer should carry most of the tool calls
+- the Analyser and Oracle should be called rarely
+
+Agents far outside their expected share are pointed out. The report is for information
+only and never stops a task.
+
+## Typical cost
+
+| Task | Agent calls | Strong-model calls |
+|---|---|---|
+| Trivial | 2–3 | 0 |
+| Planned, going well | about 5–7 | 1 (the plan) |
+| Destructive plan | +2 (Oracle review, final review) | +1 (Oracle review) |
+
+Measured on the sandbox: a trivial change took 2 agent calls, and a 3-step plan took 5. A
+destructive 4-step plan with one round of user changes took 9.
+
+## Later, only if real use shows the need
+
+- A **judge** agent that checks across plans whether the task is going in circles.
+- Automatic detection of identical errors or unchanged edits.
+- Parallel Fixers for independent steps.
+
+## Questions for reviewers
+
+- Is any role unnecessary, or is a role missing?
+- Are the user touchpoints right: too many, or too few?
+- Are the limits sensible (40 attempts, 2 rounds per step, 2 failed plans)?
+- Is "destructive only" the right trigger for the expert review?
+- Any failure case where this workflow would loop, stall or waste effort?
