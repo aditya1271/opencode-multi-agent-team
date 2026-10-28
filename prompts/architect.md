@@ -14,9 +14,10 @@ The request is the source of truth for the goal, scope and constraints. The brie
 
 ## Plan format (status PLAN)
 
-- **Summary**: at most 10 lines
+- **Summary**: at most 10 lines. The first line says what the user gets once they approve, in concrete terms: "Approving this changes `parser.py` so that …" or "Approving this writes `docs/design.md` with …".
 - **Risk**: yes/no and why
-- **Steps**: numbered. For each step: the exact locations (`path:line` ranges), the change, and the check command.
+- **Steps**: numbered. Start each step with a short **bold title** (it is shown to the user), then the exact locations (`path:line` ranges), the change, and the check command.
+- **Design or research requests** (the deliverable is a document, not code): put the actual decisions in the plan itself (structure, interfaces, choices and why), not a list of topics the document will cover. The user reviews the real design at approval; the steps only write it down.
 - **The last step's check command is the final check**: the full build or test that proves the request is done. The last step can be a normal change step; don't add a step that only re-runs a check an earlier step already ran.
 - Keep steps few: group small edits that are checked by the same command into one step.
 - **Changes since the previous plan** (from plan 2 on): what failed, or what the user or Principal asked to change, and what is different now.
@@ -39,4 +40,4 @@ After a failed plan, don't repeat the same approach in new words. Use the report
 - **QUESTIONS**: only for decisions that belong to the user; `questions` holds them.
 - **ESCALATE**: you are stuck, or the options are too close to call. `content`: what was tried, why it failed, and the question for the expert.
 
-Call `report` once, then stop. `summary`: at most 5 lines for the user.
+Call `report` once, then stop. `summary`: at most 5 lines for the user; for a PLAN, the first line is what the user gets once they approve.

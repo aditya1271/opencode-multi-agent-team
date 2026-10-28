@@ -11,6 +11,18 @@ export const fileBlock = (task: TaskState, name: string) => {
 
 export const join = (...parts: (string | undefined | false)[]) => parts.filter(Boolean).join("\n\n")
 
+/** Titles of a plan's numbered steps: the bold lead of each top-level "N." line, else its first words. */
+export const stepTitles = (plan: string): string[] =>
+  plan
+    .split("\n")
+    .map((l) => /^(\d+)\.\s+(.*)$/.exec(l))
+    .filter((m): m is RegExpExecArray => !!m)
+    .map(([, n, rest]) => {
+      const bold = /^\*\*(.+?)\*\*/.exec(rest!)
+      const title = bold ? bold[1]! : rest!.length > 90 ? `${rest!.slice(0, 87)}...` : rest!
+      return `${n}. ${title}`
+    })
+
 export const checksText = (commands: string) =>
   [
     "# Build and test commands",
@@ -189,14 +201,23 @@ export function render(task: TaskState): string {
         (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"),
         `NEXT ACTION: ask the user these questions as free text (no fixed options). Polish their answer and confirm it [Send] [Edit] [Cancel], then call team with action "answer" and the confirmed answer. If they ask something back instead, polish and confirm it, then call team with action "ask".`,
       )
-    case "approval":
-      return join(
-        `PLAN ${task.plan} ready for approval. Risk: ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}. Steps: ${task.planSteps}.`,
-        task.planSummary ?? "",
-        task.principalNote ? `Principal's notes:\n${readTaskFile(task, task.principalNote)}` : "",
-        `Full plan: ${path.join(task.dir, `plan-${task.plan}.md`)}`,
-        `NEXT ACTION: show the summary, the risk, Principal's notes (if any) and the full plan path to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change, or any feedback on the plan → polish the comments and confirm them [Send] [Edit] [Cancel], then team "change" with the confirmed comments. A question about the plan → polish and confirm it, then team "ask". Stop → team "stop".`,
+    case "approval": {
+      const planFile = path.join(task.dir, `plan-${task.plan}.md`)
+      const titles = stepTitles(readTaskFile(task, `plan-${task.plan}.md`))
+      const block = join(
+        `**Plan ${task.plan}**`,
+        `**What you get**\n${task.planSummary ?? "(no summary)"}`,
+        `**Steps**\n${titles.length ? titles.join("\n") : `${task.planSteps} step(s); see the plan file.`}`,
+        `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}`,
+        task.principalNote ? `**Principal's notes**\n${readTaskFile(task, task.principalNote)}` : "",
+        `**Plan file:** ${planFile}`,
       )
+      return join(
+        `PLAN ${task.plan} ready for approval. Show this block to the user exactly as written, without rewording or shortening it:`,
+        `<show>\n${block}\n</show>`,
+        `NEXT ACTION: show the block above, then ask [Approve] [Change] [Stop]. Approve → team "approve". Change, or any feedback on the plan → polish the comments and confirm them [Send] [Edit] [Cancel], then team "change" with the confirmed comments. A question about the plan → polish and confirm it, then team "ask". Stop → team "stop".`,
+      )
+    }
     case "stuck":
       return join(
         `STUCK: ${task.stuckReason}`,

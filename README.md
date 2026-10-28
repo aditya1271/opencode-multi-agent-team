@@ -92,7 +92,8 @@ To update later, run `git pull` in the clone and restart OpenCode.
 - **Ask during a task:** while the team waits on you, a question goes to the agent the task
   waits on (Architect, or Lead before there's a plan), in its own session with the full
   context. The task doesn't move; you then answer or decide.
-- **Plans:** you see each plan's summary and file path and choose [Approve] [Change] [Stop].
+- **Plans:** you see what you get once you approve, the step titles, the risk and the plan file,
+  and choose [Approve] [Change] [Stop]. For design/research requests the plan holds the design itself.
   Any feedback on the plan is sent as Change.
 - **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
   Your answer goes back to the agent that asked, in its own session, so it keeps its context.

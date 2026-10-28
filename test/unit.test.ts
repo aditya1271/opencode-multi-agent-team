@@ -8,8 +8,9 @@ import { beginRun, runs } from "../src/runtime.ts"
 import { migrateNames, newTask, save, taskId } from "../src/state.ts"
 import { Team } from "../src/team.ts"
 import { compact, line } from "../src/rpc.ts"
+import { render, stepTitles } from "../src/messages.ts"
 import { add, hints, table } from "../src/usage.ts"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -182,6 +183,32 @@ describe("usage", () => {
     expect(t).toContain("1.2M")
     expect(t.split("\n").pop()).toMatch(/^total\s+3\s+33\s+27/)
     expect(hints(usage)).toContain("manager used 2 read/search/shell/edit calls (expected 0)")
+  })
+})
+
+describe("plan approval", () => {
+  test("step titles come from the bold lead of numbered lines", () => {
+    const plan = "## Steps\n1. **Write the parser** — `a.py:1-20`\n   1. nested detail\n2. plain step text\n- not a step"
+    expect(stepTitles(plan)).toEqual(["1. Write the parser", "2. plain step text"])
+  })
+  test("the approval block shows what you get, steps, risk and the plan file", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-approval-"))
+    try {
+      const t = newTask(root, "ses_a", "/w", "x", 40)
+      t.phase = "approval"
+      t.plan = 1
+      t.planSteps = 1
+      t.planSummary = "Approving this writes `r4.md` with the design."
+      writeFileSync(path.join(t.dir, "plan-1.md"), "## Steps\n1. **Write r4.md** — details")
+      const text = render(t)
+      expect(text).toContain("<show>")
+      expect(text).toContain("Approving this writes `r4.md`")
+      expect(text).toContain("1. Write r4.md")
+      expect(text).toContain("**Risk:** no")
+      expect(text).toContain(path.join(t.dir, "plan-1.md"))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
