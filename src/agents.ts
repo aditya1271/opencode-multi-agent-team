@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { ASK_COMMANDS, expandHome, type Config, type Role, ROLES } from "./config.ts"
+import { ASK_COMMANDS, expandHome, type Config, type FrontAgent, type Role, ROLES } from "./config.ts"
 import { matches } from "./match.ts"
+import { WORKFLOWS, type Workflow } from "./state.ts"
 
 export interface Rule {
   action: string
@@ -13,19 +14,34 @@ export interface Rule {
 const PROMPT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "prompts")
 
 export const DESCRIPTIONS: Record<Role, string> = {
-  manager: "Team front agent: polishes your request and runs the multi-agent team",
+  manager: "Team: changes code (plans, edits, builds and tests through the team)",
   lead: "Team: sorts a request, searches the code, writes the brief",
-  architect: "Team: writes plans",
+  architect: "Team: writes plans and documents",
   intern: "Team: searches the code and answers code questions",
   developer: "Team: edits, builds and tests",
   reviewer: "Team: diagnoses failures and reviews finished work",
   principal: "Team: reviews destructive plans and advises when stuck",
 }
 
-export const agentId = (config: Config, role: Role) => (role === "manager" ? "manager" : config.agentPrefix + role)
+/** The front agents, one per workflow; they share the manager role (model, permissions, engine). */
+export const FRONT_AGENTS: Record<Workflow, FrontAgent> = { code: "build-manager", plan: "plan-manager", research: "research-manager" }
+
+export const FRONT_DESCRIPTIONS: Record<Workflow, string> = {
+  code: "Team: changes code (plans, edits, builds and tests through the team)",
+  plan: "Team: writes a plan document for you to review; changes no code",
+  research: "Team: researches the code and writes a findings report",
+}
+
+export const agentId = (config: Config, role: Role) => (role === "manager" ? FRONT_AGENTS.code : config.agentPrefix + role)
+
+/** The workflow a front agent starts; "code" for anything else. */
+export const workflowOf = (agent: string | undefined): Workflow =>
+  WORKFLOWS.find((w) => FRONT_AGENTS[w] === agent) ?? "code"
 
 export function roleOf(config: Config, agent: string | undefined): Role | undefined {
   if (!agent) return undefined
+  // "manager" is the Build agent's name before the three front agents.
+  if (agent === "manager" || WORKFLOWS.some((w) => FRONT_AGENTS[w] === agent)) return "manager"
   return ROLES.find((r) => agentId(config, r) === agent)
 }
 
@@ -108,6 +124,12 @@ function textOrFile(value: string): string {
   return value.trim()
 }
 
+/** A workflow's document standard: the configured text or file, else the built-in prompts/<workflow>.instructions.md. */
+export function workflowInstructions(config: Config, workflow: "plan" | "research"): string {
+  const configured = config.workflows[workflow].instructions
+  return configured.trim() ? textOrFile(configured) : readPrompt(path.join(PROMPT_DIR, `${workflow}.instructions.md`))
+}
+
 /** The code-search tools configured for a role, listed for the prompt. */
 function toolsNote(config: Config, role: Role): string {
   const a = config.agents[role] ?? {}
@@ -122,6 +144,7 @@ function toolsNote(config: Config, role: Role): string {
 
 /** Core prompt (fixed) with the role's instructions (editable) at {{instructions}}. */
 export function systemPrompt(config: Config, role: Role): string {
+  if (role === "manager") return managerPrompt(config, "code")
   const a = config.agents[role] ?? {}
   const instructions = a.instructions
     ? textOrFile(a.instructions)
@@ -130,10 +153,29 @@ export function systemPrompt(config: Config, role: Role): string {
   const body = core.includes("{{instructions}}")
     ? core.replace("{{instructions}}", instructions)
     : [core, instructions].join("\n\n")
+  const parts = [body, toolsNote(config, role), a.append ? textOrFile(a.append) : ""]
+  return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")
+}
+
+/**
+ * A front agent's prompt: the shared manager core (fixed), its workflow's part (fixed) and its
+ * polishing instructions (editable: agents.<front agent>.instructions, else the built-in file).
+ * agents.manager.instructions/append still apply to build-manager, and append to all three.
+ */
+export function managerPrompt(config: Config, workflow: Workflow): string {
+  const id = FRONT_AGENTS[workflow]
+  const own = config.agents[id] ?? {}
+  const shared = config.agents.manager ?? {}
+  const configured = own.instructions ?? (workflow === "code" ? shared.instructions : undefined)
+  const instructions = configured ? textOrFile(configured) : readPrompt(path.join(PROMPT_DIR, `${id}.instructions.md`))
+  const body = readPrompt(path.join(PROMPT_DIR, "manager.md"))
+    .replace("{{name}}", id)
+    .replace("{{workflow}}", readPrompt(path.join(PROMPT_DIR, `manager.${workflow}.md`)))
+    .replace("{{instructions}}", instructions)
   const polishOff =
-    role === "manager" && config.polish === "off"
+    config.polish === "off"
       ? "Polishing is OFF: send the user's requests and replies to the team as written, without rewriting them and without the [Send] [Edit] [Cancel] step. This overrides the polishing steps above."
       : ""
-  const parts = [body, polishOff, toolsNote(config, role), a.append ? textOrFile(a.append) : ""]
+  const parts = [body, polishOff, shared.append ? textOrFile(shared.append) : "", own.append ? textOrFile(own.append) : ""]
   return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")
 }

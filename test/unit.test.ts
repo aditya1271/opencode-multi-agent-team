@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { evaluate, permissionsFor, systemPrompt, toolVisible } from "../src/agents.ts"
+import { evaluate, FRONT_AGENTS, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
 import { buildPatterns, DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
 import { toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, runs } from "../src/runtime.ts"
-import { migrateNames, newTask, save, taskId } from "../src/state.ts"
+import { migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { Team } from "../src/team.ts"
-import { compact, line } from "../src/rpc.ts"
+import { compact, line, modelsText } from "../src/rpc.ts"
 import { render, stepTitles } from "../src/messages.ts"
 import { add, hints, table } from "../src/usage.ts"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -170,6 +170,133 @@ describe("prompts", () => {
     expect(p).toContain("Report **FOUND**")
     expect(p).toContain("- Tools: docs_search.")
     expect(p.trimEnd().endsWith("Answer in English.")).toBe(true)
+  })
+})
+
+describe("front agents", () => {
+  test("three managers share the core; each has its workflow part and its own instructions", () => {
+    const [build, plan, research] = WORKFLOWS.map((w) => managerPrompt(DEFAULTS, w))
+    expect(build).toContain("You are build-manager")
+    expect(build).toContain("`start` with `plan: true`")
+    expect(plan).toContain("You are plan-manager")
+    expect(plan).toContain("`implement`")
+    expect(research).toContain("A follow-up question on a finished report")
+    for (const p of [build, plan, research]) {
+      expect(p).toContain("## You only polish and forward")
+      expect(p).not.toMatch(/\{\{\w+\}\}/)
+    }
+    expect(plan).toContain("think critically")
+    expect(systemPrompt(DEFAULTS, "manager")).toBe(build!)
+    const config = merge(DEFAULTS, { agents: { manager: { append: "Be brief." }, "plan-manager": { instructions: "Plans are verbose." } } })
+    expect(managerPrompt(config, "plan")).toContain("Plans are verbose.")
+    expect(managerPrompt(config, "plan")).not.toContain("think critically")
+    expect(managerPrompt(config, "research").trimEnd().endsWith("Be brief.")).toBe(true)
+  })
+  test("the calling agent decides the workflow and the role", () => {
+    expect(WORKFLOWS.map((w) => workflowOf(FRONT_AGENTS[w]))).toEqual(["code", "plan", "research"])
+    expect(workflowOf("team-lead")).toBe("code")
+    expect(roleOf(DEFAULTS, "plan-manager")).toBe("manager")
+    expect(roleOf(DEFAULTS, "manager")).toBe("manager")
+    expect(roleOf(DEFAULTS, "team-lead")).toBe("lead")
+  })
+})
+
+describe("plan and research workflows", () => {
+  const signal = new AbortController().signal
+  const setup = (switched: string[] = []) => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-wf-"))
+    const workspace = mkdtempSync(path.join(tmpdir(), "omat-ws-"))
+    const ctx = {
+      location: { directory: workspace },
+      session: { context: async () => [], get: async () => undefined, switchAgent: async (i: { agent: string }) => void switched.push(i.agent) },
+    }
+    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    team.step = async (t: any) => t.pending
+    const cleanup = () => {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+    return { team, workspace, cleanup }
+  }
+  const report = (status: string, extra: object = {}) => ({ status, summary: "Approving this gives you a design.", content: "# Design\n\n## Options\n\nA or B", ...extra })
+
+  test("a plan task skips checks, writes the document without overwriting, and never reaches the developer", async () => {
+    const switched: string[] = []
+    const { team, workspace, cleanup } = setup(switched)
+    try {
+      mkdirSync(path.join(workspace, "docs"))
+      await team.handle({ action: "start", text: "design the cache", workflow: "plan" }, "ses_w", signal)
+      const t = team.task("ses_w")
+      expect([t.workflow, t.phase, t.skipChecks]).toEqual(["plan", "running", undefined])
+      expect(allowedStatuses(DEFAULTS, "lead", t)).not.toContain("TRIVIAL")
+      writeFileSync(path.join(workspace, "docs", path.basename(t.output)), "someone else's file")
+      // outputPath was fixed at start; a second task with the same name gets -2
+      expect(team.outputPath(t)).toMatch(/-2\.md$/)
+      team.apply(t, { mode: "lead" }, report("ESCALATE"), {})
+      expect(t.pending.mode).toBe("architect")
+      t.pending = undefined
+      team.apply(t, { mode: "architect" }, report("DOC"), {})
+      expect(t.phase).toBe("approval")
+      expect(readFileSync(t.output, "utf8")).toContain("## Options")
+      expect(render(t)).toContain("**Sections**\n- Options")
+      save(t)
+      await team.handle({ action: "approve" }, "ses_w", signal)
+      expect(t.phase).toBe("done")
+      expect(render(t)).toContain("[Implement it]")
+      expect(t.history.some((h: any) => h.role === "developer")).toBe(false)
+
+      const p = await team.handle({ action: "implement", workflow: "plan" }, "ses_w", signal)
+      expect(switched).toEqual(["build-manager"])
+      const code = team.task("ses_w")
+      expect(code.id).not.toBe(t.id)
+      expect([code.workflow, code.forcePlan]).toEqual([undefined, true])
+      expect(readFileSync(path.join(code.dir, "request.md"), "utf8")).toContain(`Implement the plan in ${t.output}`)
+      expect(p).toContain("Switched to build-manager")
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("the user's review request: Principal reviews, Architect revises once, the user sees the marked review", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_v", signal)
+      const t = team.task("ses_v")
+      team.apply(t, { mode: "architect" }, report("DOC"), {})
+      save(t)
+      const p = await team.handle({ action: "review", text: "check the error handling" }, "ses_v", signal)
+      expect(p.mode).toBe("principal_doc_review")
+      t.pending = undefined
+      team.apply(t, p, report("CHANGES", { content: "1. no error handling" }), {})
+      expect(t.pending.mode).toBe("architect")
+      const revise = t.pending
+      t.pending = undefined
+      team.apply(t, revise, report("DOC"), {})
+      expect(t.phase).toBe("approval")
+      expect(render(t)).toContain("(this version was revised to address it)")
+      t.reviews = DEFAULTS.limits.principalReviews
+      expect(await team.handle({ action: "review" }, "ses_v", signal)).toContain("the limit")
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("research: Lead's brief waits for the user unless the research is quick", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "how does auth work", workflow: "research" }, "ses_x", signal)
+      const t = team.task("ses_x")
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { depth: "depth", content: "## Research brief\n\nQ\n\n## Findings so far\n\nF" }), {})
+      expect([t.phase, t.depth]).toEqual(["brief", "depth"])
+      expect(render(t)).toContain("**Research brief** (depth research)\n\nQ")
+      save(t)
+      expect((await team.handle({ action: "approve" }, "ses_x", signal)).mode).toBe("architect")
+      t.phase = "running"
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { depth: "quick" }), {})
+      expect(t.pending.mode).toBe("architect")
+    } finally {
+      cleanup()
+    }
   })
 })
 
@@ -345,6 +472,25 @@ describe("sidebar", () => {
     expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("TRIVIAL")
     t.forcePlan = true
     expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS"])
+  })
+  test("sidebar lists each row's models and the configured models", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-models-"))
+    const config = merge(DEFAULTS, { taskDir: root, agents: { lead: { model: ["fuse/glm", "siemens/claude"] } } })
+    const team = new Team({ session: { get: async () => undefined } } as never, config, () => {})
+    try {
+      const t = newTask(root, "ses_m", "/w", "x", 40)
+      add(t.usage, "lead", { calls: 1, prompts: 1, tools: {}, input: 1, cacheRead: 0, output: 0, model: "fuse/glm" })
+      add(t.usage, "lead", { calls: 1, prompts: 1, tools: {}, input: 1, cacheRead: 0, output: 0, model: "siemens/claude" })
+      save(t)
+      const s = await team.sidebar("ses_m")
+      expect(s.task?.rows[0]?.models).toEqual(["fuse/glm", "siemens/claude"])
+      expect(modelsText(s.task!.rows[0]!.models)).toBe("fuse/glm → siemens/claude (backup)")
+      expect(s.task?.workflow).toBe("code")
+      expect(s.models.find((m) => m.role === "lead")?.models).toEqual(["fuse/glm", "siemens/claude"])
+      expect(s.models).toHaveLength(7)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
   test("compact numbers and fixed-width lines", () => {
     expect([compact(950), compact(1234), compact(56_000), compact(2_500_000)]).toEqual(["950", "1.2k", "56k", "2.5M"])

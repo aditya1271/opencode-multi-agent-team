@@ -1,7 +1,8 @@
 import { Plugin } from "@opencode/plugin"
 import { appendFileSync, mkdirSync } from "node:fs"
 import path from "node:path"
-import { agentId, DESCRIPTIONS, permissionsFor, systemPrompt } from "./agents.ts"
+import { agentId, DESCRIPTIONS, FRONT_AGENTS, FRONT_DESCRIPTIONS, managerPrompt, permissionsFor, systemPrompt, workflowOf } from "./agents.ts"
+import { WORKFLOWS } from "./state.ts"
 import { expandHome, loadConfig, modelsFor, ROLES } from "./config.ts"
 import { registerFallback } from "./fallback.ts"
 import { registerGuards } from "./guards.ts"
@@ -27,20 +28,23 @@ export default Plugin.define({
 
     await ctx.agent.transform((editor) => {
       for (const role of ROLES) {
-        const id = agentId(config, role)
         const models = modelsFor(config, role)
-        editor.update(id, (a) => {
-          a.id = id as never
-          a.name = id as never
-          a.mode = role === "manager" ? "primary" : "subagent"
-          a.hidden = role !== "manager"
-          a.description = DESCRIPTIONS[role]
-          a.system = systemPrompt(config, role)
-          if (models[0]) a.model = models[0] as never
-          a.permissions = permissionsFor(config, role) as never
-        })
+        const ids = role === "manager" ? WORKFLOWS.map((w) => FRONT_AGENTS[w]) : [agentId(config, role)]
+        for (const id of ids) {
+          const workflow = workflowOf(id)
+          editor.update(id, (a) => {
+            a.id = id as never
+            a.name = id as never
+            a.mode = role === "manager" ? "primary" : "subagent"
+            a.hidden = role !== "manager"
+            a.description = role === "manager" ? FRONT_DESCRIPTIONS[workflow] : DESCRIPTIONS[role]
+            a.system = role === "manager" ? managerPrompt(config, workflow) : systemPrompt(config, role)
+            if (models[0]) a.model = models[0] as never
+            a.permissions = permissionsFor(config, role) as never
+          })
+        }
       }
-      if (config.defaultAgent) editor.default(agentId(config, "manager"))
+      if (config.defaultAgent) editor.default(FRONT_AGENTS.code)
     })
 
     const team = new Team(ctx, config, log)
@@ -53,7 +57,8 @@ export default Plugin.define({
         options: { codemode: false },
         execute: async (input, context) => {
           try {
-            return { content: await team.handle(input as TeamInput, context.sessionID, context.signal) }
+            const workflow = workflowOf(context.agent)
+            return { content: await team.handle({ ...(input as TeamInput), workflow }, context.sessionID, context.signal) }
           } catch (e) {
             log(`team error: ${(e as Error).stack ?? String(e)}`)
             return { content: `The team plugin hit an error: ${(e as Error).message}\nNEXT ACTION: tell the user.` }

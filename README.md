@@ -14,13 +14,19 @@ work.
 
 | Agent | Job |
 |---|---|
-| `manager` | Front agent. Rewrites your request, asks you to confirm it, and drives the team. It can't read, edit or run anything. |
+| `build-manager` | Front agent for code changes: the team plans, edits, builds and tests. |
+| `plan-manager` | Front agent for plan documents: the team writes a plan for you to review. No code changes. |
+| `research-manager` | Front agent for research: the team investigates and writes a findings report. No code changes. |
 | `team-lead` | Searches the code, then decides between a trivial fix and a plan. Writes the brief. |
-| `team-architect` | Writes plans. You approve each one. |
+| `team-architect` | Writes plans and documents. You approve each one. |
 | `team-intern` | Does code searches for the Architect, and answers your code questions. |
 | `team-developer` | Edits, builds and tests. The only agent that changes files. |
 | `team-reviewer` | Diagnoses failures and reviews finished work. |
-| `team-principal` | Reviews destructive plans, and advises once when the team is stuck. |
+| `team-principal` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises once when the team is stuck. |
+
+The three front agents (switch with Tab) rewrite your request, ask you to confirm it, and drive
+the team. They can't read, edit or run anything, and they share the `manager` entry of the
+config (model, backup). The agent you pick decides the workflow; nothing guesses it.
 
 ## Install
 
@@ -72,8 +78,8 @@ runs the TypeScript source directly. Requires OpenCode 2.2 or later.
    [Build and test commands](#build-and-test-commands)). Without them, every task first asks
    you for them, or you can skip build and test.
 
-6. **Restart OpenCode** and select the `manager` agent, or set `"defaultAgent": true` in the
-   team's config.
+6. **Restart OpenCode** (`opencode service restart`) and select one of the front agents, or set
+   `"defaultAgent": true` in the team's config to start in `build-manager`.
 
 To update later, run `git pull` in the clone and restart OpenCode.
 
@@ -93,8 +99,38 @@ To update later, run `git pull` in the clone and restart OpenCode.
   waits on (Architect, or Lead before there's a plan), in its own session with the full
   context. The task doesn't move; you then answer or decide.
 - **Plans:** you see what you get once you approve, the step titles, the risk and the plan file,
-  and reply in your own words (approve, ask for changes, ask a question, or stop). For design/research requests the plan holds the design itself.
-  Any feedback on the plan is sent as Change.
+  and reply in your own words (approve, ask for changes, ask a question, ask for Principal's
+  review, or stop). Any feedback on the plan is sent as Change.
+- **Principal's review:** say "have Principal review it" while a plan or document waits for
+  you, or ask for it in the request. Principal checks whether it can be built as written and
+  whether it is the right design. On CHANGES the Architect revises once, and you see the review
+  next to the revised version. At most `limits.principalReviews` (2) per task.
+
+### Plan documents (`plan-manager`)
+
+The Lead reads the code and writes a brief, and the Architect writes the plan document to a
+standard (`prompts/plan.instructions.md`): context, goals and non-goals, decisions marked as
+yours or assumed, alternatives weighed, design, file map, risks, verification and an outline.
+Nobody edits code, and there is no build or test. The document is saved to `docs/<task>.md` in
+the project (`workflows.plan.output`), or to the path you name. A default path never
+overwrites an existing file; a path you name is edited in place.
+
+You reply in your own words. Once you approve, an **[Implement it]** button switches the
+session to `build-manager` and starts a code task that carries out the document. The
+Architect still writes an implementation plan for you to approve first.
+
+### Research reports (`research-manager`)
+
+The Lead sizes the research (quick, breadth or depth) and writes a research brief. Unless the
+research is quick, you see the brief first and can adjust it (`workflows.research.confirmBrief`).
+The Intern collects evidence (claim, source, verbatim excerpt) in a capped number of rounds
+(`workflows.research.internRounds`). The Architect writes the report from that evidence, to
+`prompts/research.instructions.md`. A follow-up question on a finished report is appended to
+it as a new section.
+
+To change what a good plan or report looks like ("make plans verbose", "always list
+alternatives"), set `workflows.plan.instructions` or `workflows.research.instructions` (inline
+text or a file). The Architect writes to it and Principal reviews against it.
 - **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
   Your answer goes back to the agent that asked, in its own session, so it keeps its context.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the
@@ -104,19 +140,24 @@ To update later, run `git pull` in the clone and restart OpenCode.
 - **Sidebar:** a **Team** section in the session sidebar shows the current task's phase and
   attempts, then one row per agent: calls, prompts, tool calls, tokens, and that agent's
   share of the task's tokens. The running agent is marked `●` and its numbers update live.
-  The last lines total the task and the whole session (all tasks and code questions). Click
-  the header to collapse it. Child sessions show their manager's numbers.
+  Under each row, a dim line shows the model the agent used (`main → backup (backup)` in
+  yellow when it switched). The last lines total the task and the whole session (all tasks and
+  code questions). Click **▶ Models** to list every role's configured main and backup models.
+  Click the header to collapse the section. Child sessions show their manager's numbers.
 
   ```
-  ▼ Team fixing · 7/40 attempts
+  ▼ Team running · 7/40 attempts
    agent    call prmt tool   tok    %
    manager     0    6    5   41k  12%
+     fuse/kimi-k2.6
    lead        1   14   22   88k  26%
+     fuse/kimi-k2.6
   ●developer   2   31   58  190k  57%
-   reviewer    1    4    6   17k   5%
-   task        4   55   91  336k
+     fuse/kimi-k2.6 → github-copil…
+   task        3   51   85  319k
    session     9  120  170  910k
     2 tasks · 3 questions
+  ▶ Models
   ```
 
   The section sits at the top of the sidebar in every session; without a task it shows
@@ -201,7 +242,11 @@ with whatever you use to explore code (a code graph, clangd, a docs RAG, ...):
 ```
 
 Each agent's prompt has a fixed core: its role, the report statuses, and the safety rules. The
-editable defaults are in `prompts/<role>.instructions.md`; copy one as a starting point. The
+editable defaults are in `prompts/<role>.instructions.md`; copy one as a starting point.
+The front agents each have their own polishing instructions (the shape of the polished
+request), set with `"build-manager"`, `"plan-manager"` or `"research-manager"` under `agents`
+(`instructions` and `append` only; the model comes from `manager`). Defaults:
+`prompts/<agent>.instructions.md`. The
 configured tools are listed in the prompt. `commands` never override the ask-first list for
 destructive commands.
 
@@ -213,8 +258,9 @@ error-detective, code-reviewer and architect-reviewer subagents.
 ## Task folder
 
 Each task writes to `~/.cache/opencode-multi-agent-team/<task-id>/` (`taskDir`):
-- `request.md`, `brief.md`, `plan-N.md`, `report-N.md`, `analysis-N.md`, `principal-N.md`,
-  `answers.md`
+- `request.md`, `brief.md`, `plan-N.md`, `doc-N.md`, `findings-N.md`, `report-N.md`,
+  `analysis-N.md`, `principal-N.md`, `answers.md`, `existing.md` (the document as it was
+  before a task edited it)
 - `logs/`: full build and long command output
 - `state.json`
 

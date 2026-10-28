@@ -30,8 +30,11 @@ export interface AgentConfig {
   append?: string
 }
 
+/** The three front agents share agents.manager (model, permissions); each can have its own polishing instructions. */
+export type FrontAgent = "build-manager" | "plan-manager" | "research-manager"
+
 export interface Config {
-  agents: Partial<Record<Role, AgentConfig>>
+  agents: Partial<Record<Role, AgentConfig>> & Partial<Record<FrontAgent, Pick<AgentConfig, "instructions" | "append">>>
   polish: "on" | "off"
   agentPrefix: string
   defaultAgent: boolean
@@ -40,6 +43,8 @@ export interface Config {
     developerRounds: number
     planFailures: number
     principalAdvice: number
+    /** Principal reviews of a plan or document the user can ask for per task. */
+    principalReviews: number
     needInfoPerTask: number
     questionsPerTask: number
     toolCalls: Record<WorkerRole, number>
@@ -48,6 +53,11 @@ export interface Config {
     modelRetryWaits: number
   }
   review: { minFiles: number }
+  /** Workflows whose deliverable is a document. `output` is relative to the project ({task} = the task name); `instructions` replaces the built-in document standard (inline text or a file). */
+  workflows: {
+    plan: { output: string; instructions: string }
+    research: { output: string; instructions: string; confirmBrief: boolean; internRounds: { quick: number; breadth: number; depth: number } }
+  }
   /** The project's build and test commands. When both are empty, whenMissing decides. */
   checks: { build: string; test: string; whenMissing: "ask" | "skip" }
   buildCommands: { patterns: string[]; timeoutMin: number }
@@ -66,6 +76,7 @@ export const DEFAULTS: Config = {
     developerRounds: 2,
     planFailures: 2,
     principalAdvice: 1,
+    principalReviews: 2,
     needInfoPerTask: 6,
     questionsPerTask: 4,
     toolCalls: { lead: 40, architect: 25, intern: 30, developer: 150, reviewer: 30, principal: 20 },
@@ -74,6 +85,10 @@ export const DEFAULTS: Config = {
     modelRetryWaits: 2,
   },
   review: { minFiles: 4 },
+  workflows: {
+    plan: { output: "docs/{task}.md", instructions: "" },
+    research: { output: "docs/{task}.md", instructions: "", confirmBrief: true, internRounds: { quick: 1, breadth: 2, depth: 3 } },
+  },
   checks: { build: "", test: "", whenMissing: "ask" },
   buildCommands: { patterns: ["make *", "ninja *", "cmake *"], timeoutMin: 120 },
   askCommands: [],

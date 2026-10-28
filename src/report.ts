@@ -1,7 +1,7 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { runs, type Report, type ShellRun } from "./runtime.ts"
-import type { Mode, TaskState } from "./state.ts"
+import { isDocWorkflow, type Mode, type TaskState } from "./state.ts"
 
 const BASE: Record<Mode, string[]> = {
   lead: ["TRIVIAL", "ESCALATE", "QUESTIONS"],
@@ -18,6 +18,13 @@ const BASE: Record<Mode, string[]> = {
   lead_reply: ["ANSWER"],
   architect_reply: ["ANSWER"],
   principal_reply: ["ANSWER"],
+  principal_doc_review: ["APPROVE", "CHANGES"],
+}
+
+/** Intern rounds the Architect may ask for: per research depth, else the task-wide search limit. */
+export function needInfoLimit(config: Config, task: TaskState): number {
+  if (task.workflow === "research" && task.depth) return config.workflows.research.internRounds[task.depth]
+  return config.limits.needInfoPerTask
 }
 
 /** Why a DONE doesn't hold: the check command wasn't run in this call, or its real exit code wasn't 0. */
@@ -43,14 +50,15 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
   let list = BASE[mode]
   if (task) {
     if (task.trivialFailed && mode === "lead") list = ["ESCALATE"]
-    if (task.forcePlan && mode === "lead") list = list.filter((s) => s !== "TRIVIAL")
+    if ((task.forcePlan || isDocWorkflow(task)) && mode === "lead") list = list.filter((s) => s !== "TRIVIAL")
+    if (isDocWorkflow(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
-    if (mode === "architect" && task.needInfo >= config.limits.needInfoPerTask) list = list.filter((s) => s !== "NEED_INFO")
+    if (mode === "architect" && task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO")
   }
   return list
 }
 
-export function reportSchema(mode: Mode, statuses: string[]) {
+export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
   const properties: Record<string, unknown> = {
     status: { type: "string", enum: statuses },
     summary: { type: "string", description: "At most 5 lines, shown to the user." },
@@ -58,7 +66,9 @@ export function reportSchema(mode: Mode, statuses: string[]) {
   }
   if (statuses.includes("QUESTIONS"))
     properties.questions = { type: "array", items: { type: "string" }, description: "Required for QUESTIONS." }
-  if (mode === "architect") {
+  if (mode === "lead" && task?.workflow === "research")
+    properties.depth = { type: "string", enum: ["quick", "breadth", "depth"], description: "Required for ESCALATE: how big the research is." }
+  if (mode === "architect" && statuses.includes("PLAN")) {
     properties.risk = { type: "string", enum: ["yes", "no"], description: "Required for PLAN: yes only for destructive or irreversible steps." }
     properties.steps = { type: "integer", minimum: 1, description: "Required for PLAN: number of plan steps." }
   }
@@ -78,6 +88,7 @@ export const REPORT_INPUT = {
     risk: { type: "string" },
     steps: { type: "integer" },
     checkCommand: { type: "string" },
+    depth: { type: "string" },
   },
   required: ["status", "summary", "content"],
 }
@@ -97,6 +108,8 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (input.risk !== "yes" && input.risk !== "no") throw new Error('PLAN needs risk: "yes" or "no".')
     if (!Number.isInteger(input.steps) || (input.steps ?? 0) < 1) throw new Error("PLAN needs steps: the number of plan steps.")
   }
+  if (input.status === "ESCALATE" && run.mode === "lead" && run.task?.workflow === "research" && !["quick", "breadth", "depth"].includes(input.depth ?? ""))
+    throw new Error('ESCALATE needs depth: "quick", "breadth" or "depth".')
   const skip = run.task?.skipChecks
   if (input.status === "DONE" && !skip && !input.checkCommand?.trim()) throw new Error("DONE needs checkCommand: the check command you ran.")
   if (run.report) return "Already reported. Stop now."

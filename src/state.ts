@@ -18,6 +18,7 @@ export type Mode =
   | "lead_reply"
   | "architect_reply"
   | "principal_reply"
+  | "principal_doc_review"
 
 export const MODE_ROLE: Record<Mode, WorkerRole> = {
   lead: "lead",
@@ -34,9 +35,16 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   lead_reply: "lead",
   architect_reply: "architect",
   principal_reply: "principal",
+  principal_doc_review: "principal",
 }
 
-export type Phase = "running" | "checks" | "questions" | "approval" | "stuck" | "budget" | "done" | "stopped"
+/** code: change files (the default). plan: write a plan document. research: write a findings report. */
+export type Workflow = "code" | "plan" | "research"
+export const WORKFLOWS: Workflow[] = ["code", "plan", "research"]
+export type ResearchDepth = "quick" | "breadth" | "depth"
+export const isDocWorkflow = (task: { workflow?: Workflow }) => task.workflow === "plan" || task.workflow === "research"
+
+export type Phase = "running" | "checks" | "questions" | "brief" | "approval" | "stuck" | "budget" | "done" | "stopped"
 export const TERMINAL: Phase[] = ["done", "stopped"]
 
 export interface Pending {
@@ -45,6 +53,8 @@ export interface Pending {
   note?: string
   /** Start a fresh session for the role. */
   fresh?: boolean
+  /** A revision Principal asked for: its review file is shown with the revised plan or document. */
+  afterReview?: string
 }
 
 export interface HistoryEntry {
@@ -76,6 +86,19 @@ export interface TaskState {
   sessions: Partial<Record<WorkerRole, string>>
   seq: Record<string, number>
   trivialFailed?: boolean
+  /** Missing on tasks from before workflows: code. */
+  workflow?: Workflow
+  /** plan/research: the document file in the project (absolute path). */
+  output?: string
+  /** research: Lead's sizing; sets the Intern rounds. */
+  depth?: ResearchDepth
+  /** plan/research: the latest document (doc-N.md) and its summary. */
+  doc?: number
+  docSummary?: string
+  /** The user asked for Principal's review in the request: it runs before the first approval. */
+  reviewFirst?: boolean
+  /** Principal reviews the user asked for. */
+  reviews?: number
   /** The user asked for a plan: lead can't pick TRIVIAL. */
   forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */

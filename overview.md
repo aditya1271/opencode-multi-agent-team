@@ -32,7 +32,7 @@ without a plan or review.
 
 | Agent | Job | Model tier |
 |---|---|---|
-| **Manager** | Talks to the user. Rewrites the request into Goal / Scope / Constraints / Done when / Unclear points and asks for confirmation. | cheap |
+| **Managers** (build / plan / research) | Talk to the user. The front agent the user picks fixes the workflow: code change, plan document or research report. Rewrites the request and asks for confirmation. | cheap |
 | **Lead** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | cheap |
 | **Architect** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | strong |
 | **Intern** | Does larger code searches for Architect, and answers the user's code questions. | cheap |
@@ -75,6 +75,13 @@ question asked **while a task waits on the user** goes to the agent the task wai
 (Architect, or Lead before there's a plan), which knows the task. The task doesn't move.
 The user can ask for a plan, which takes the trivial path away from Lead. The Manager
 never answers the user itself; it only rewrites and forwards.
+
+**Plan and research workflows** (plan-manager, research-manager) use the same agents without
+Developer, build or test: Lead writes the brief (for research: a research brief the user may
+adjust, and the depth), Architect writes the document from the evidence (Intern searches in
+capped rounds), and the user approves it. Principal reviews it critically when the user asks.
+The document is saved in the project. After an approved plan, **[Implement it]** switches to
+build-manager and starts a code task from it.
 
 ## User touchpoints
 

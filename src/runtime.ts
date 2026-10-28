@@ -9,6 +9,7 @@ export interface Report {
   risk?: "yes" | "no"
   steps?: number
   checkCommand?: string
+  depth?: "quick" | "breadth" | "depth"
 }
 
 export interface ShellRun {

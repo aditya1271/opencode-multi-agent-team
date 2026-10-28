@@ -11,8 +11,9 @@ const row = {
     cacheRead: { type: "number" },
     output: { type: "number" },
     running: { type: "boolean" },
+    models: { type: "array", items: { type: "string" } },
   },
-  required: ["role", "calls", "prompts", "tools", "input", "cacheRead", "output", "running"],
+  required: ["role", "calls", "prompts", "tools", "input", "cacheRead", "output", "running", "models"],
   additionalProperties: false,
 } as const
 
@@ -41,13 +42,23 @@ export const TeamStats = Rpc.define({
             type: "object",
             properties: {
               id: { type: "string" },
+              workflow: { type: "string" },
               phase: { type: "string" },
               attempts: { type: "number" },
               attemptLimit: { type: "number" },
               rows: { type: "array", items: row },
             },
-            required: ["id", "phase", "attempts", "attemptLimit", "rows"],
+            required: ["id", "workflow", "phase", "attempts", "attemptLimit", "rows"],
             additionalProperties: false,
+          },
+          models: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { role: { type: "string" }, models: { type: "array", items: { type: "string" } } },
+              required: ["role", "models"],
+              additionalProperties: false,
+            },
           },
           session: {
             type: "object",
@@ -56,7 +67,7 @@ export const TeamStats = Rpc.define({
             additionalProperties: false,
           },
         },
-        required: ["session"],
+        required: ["session", "models"],
         additionalProperties: false,
       },
     },
@@ -83,7 +94,13 @@ export interface StatsRow {
   output: number
   /** This agent is running a call right now; its numbers include the call so far. */
   running: boolean
+  /** Models this agent used in the task, in order (more than one: it switched to a backup). */
+  models: string[]
 }
+
+/** "main → backup (backup)" when the agent switched models, else the one model. */
+export const modelsText = (models: readonly string[]) =>
+  models.length > 1 ? `${models.join(" → ")} (backup)` : (models[0] ?? "")
 
 export const compact = (n: number) =>
   n < 1000 ? String(n) : n < 10_000 ? `${(n / 1000).toFixed(1)}k` : n < 1_000_000 ? `${Math.round(n / 1000)}k` : `${(n / 1_000_000).toFixed(1)}M`
@@ -93,6 +110,8 @@ export const line = (mark: string, name: string, calls: number | string, prompts
   mark + name.padEnd(9).slice(0, 9) + String(calls).padStart(4) + String(prompts).padStart(5) + String(tools).padStart(5) + tokens.padStart(6) + pct.padStart(5)
 
 export interface SidebarStats {
-  task?: { id: string; phase: string; attempts: number; attemptLimit: number; rows: StatsRow[] }
+  task?: { id: string; workflow: string; phase: string; attempts: number; attemptLimit: number; rows: StatsRow[] }
+  /** Each role's configured models, main first. */
+  models: { role: string; models: string[] }[]
   session: { tasks: number; questions: number; total: { calls: number; prompts: number; tools: number; tokens: number } }
 }

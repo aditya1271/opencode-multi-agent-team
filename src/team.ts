@@ -1,15 +1,17 @@
-import { existsSync, readdirSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
+import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, join, render, SKIP_CHECKS } from "./messages.ts"
+import { buildPrompt, checksText, docName, join, render, SKIP_CHECKS } from "./messages.ts"
 import type { SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
 import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
 import {
   appendFile,
   findTask,
+  isDocWorkflow,
   loadTask,
   MODE_ROLE,
   newTask,
@@ -17,14 +19,16 @@ import {
   TERMINAL,
   writeFile,
   writeNumbered,
+  WORKFLOWS,
   type Mode,
+  type Workflow,
   type Pending,
   type Phase,
   type TaskState,
 } from "./state.ts"
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
-export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "stop", "resume", "retry", "extend", "stats", "status"] as const
+export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "review", "implement", "stop", "resume", "retry", "extend", "stats", "status"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
 
 export interface TeamInput {
@@ -32,12 +36,18 @@ export interface TeamInput {
   text?: string
   last?: number
   plan?: boolean
+  /** Set by the plugin from the calling front agent, not by the model. */
+  workflow?: Workflow
+  output?: string
+  review?: boolean
 }
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
-  "Actions: start (text = the confirmed request; plan = true when the user wants a plan, not a quick fix), ask (text = a question; while a task is open, the agent it waits on answers),",
-  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments), stop, resume,",
+  "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document),",
+  "ask (text = a question; while a task is open, the agent it waits on answers),",
+  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments), review (Principal critically reviews the waiting plan or document; text = what to look at),",
+  "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
 ].join(" ")
@@ -49,6 +59,8 @@ export const TEAM_SCHEMA = {
     text: { type: "string", description: "The confirmed request, question, answer or comments. Build/test commands word for word." },
     last: { type: "integer", minimum: 1, description: "stats only: totals over the last N tasks." },
     plan: { type: "boolean", description: "start only: the user wants a plan, not a quick fix." },
+    output: { type: "string", description: "start only, plan/research: the document path the user named." },
+    review: { type: "boolean", description: "start only: the user asked for Principal's review of the plan or document." },
   },
   required: ["action"],
   additionalProperties: false,
@@ -105,9 +117,10 @@ export class Team {
       if (live) add(usage, live.role, live.delta)
       const rows = ROLES.filter((r) => usage[r]).map((role) => {
         const u = usage[role]!
-        return { role, calls: u.calls, prompts: u.prompts, tools: toolTotal(u), input: u.input, cacheRead: u.cacheRead, output: u.output, running: live?.role === role }
+        const models = u.models?.length ? u.models : modelsFor(this.config, role).slice(0, 1).map(modelLabel)
+        return { role, calls: u.calls, prompts: u.prompts, tools: toolTotal(u), input: u.input, cacheRead: u.cacheRead, output: u.output, running: live?.role === role, models }
       })
-      current = { id: task.id, phase: task.phase, attempts: task.attempts, attemptLimit: task.attemptLimit, rows }
+      current = { id: task.id, workflow: task.workflow ?? "code", phase: task.phase, attempts: task.attempts, attemptLimit: task.attemptLimit, rows }
       sum(usage)
       session.tasks++
     }
@@ -118,8 +131,9 @@ export class Team {
       sum(other.usage)
       session.tasks++
     }
+    const models = ROLES.map((role) => ({ role, models: modelsFor(this.config, role).map(modelLabel) }))
     // The RPC output check rejects `task: undefined`; leave the key out instead.
-    return current ? { task: current, session } : { session }
+    return current ? { task: current, models, session } : { models, session }
   }
 
   /** The call running for this task right now, with its usage so far. */
@@ -176,7 +190,7 @@ export class Team {
     if (task) task.usage.manager = { ...(task.usage.manager ?? this.emptyManager()), calls: (task.usage.manager?.calls ?? 0) + 1 }
     switch (input.action) {
       case "start":
-        return this.start(managerSession, input.text ?? "", signal, input.plan === true)
+        return this.start(managerSession, input.text ?? "", signal, input)
       case "ask":
         if (task && !TERMINAL.includes(task.phase)) return this.reply(task, input.text ?? "", signal)
         return this.ask(managerSession, input.text ?? "", signal)
@@ -199,7 +213,18 @@ export class Team {
       case "answer":
         return this.answer(task, input.text ?? "", signal)
       case "approve":
+        if (task.phase === "brief") {
+          task.phase = "running"
+          task.pending = { mode: "architect" }
+          save(task)
+          return this.step(task, signal)
+        }
         if (task.phase !== "approval") return this.wrongPhase(task, "approve")
+        if (isDocWorkflow(task)) {
+          this.done(task, task.docSummary ?? "")
+          await this.finish(task, "done")
+          return render(task)
+        }
         task.phase = "running"
         task.step = 1
         task.rounds = 0
@@ -209,6 +234,10 @@ export class Team {
         return this.step(task, signal)
       case "change":
         return this.change(task, input.text ?? "", signal)
+      case "review":
+        return this.review(task, input.text ?? "", signal)
+      case "implement":
+        return this.implement(task, signal)
       case "stop":
         return this.stop(task)
       case "retry":
@@ -317,11 +346,11 @@ export class Team {
 
   // ---- actions ----
 
-  private async start(managerSession: string, text: string, signal: AbortSignal, forcePlan = false): Promise<string> {
+  private async start(managerSession: string, text: string, signal: AbortSignal, opts: Partial<TeamInput> = {}): Promise<string> {
     const active = this.task(managerSession)
     // A confirmed message sent as "start" while the task waits on the user is the user's reply to it.
     if (active?.phase === "questions") return this.answer(active, text, signal)
-    if (active?.phase === "approval") return this.change(active, text, signal)
+    if (active?.phase === "approval" || active?.phase === "brief") return this.change(active, text, signal)
     if (active && active.phase !== "running" && !TERMINAL.includes(active.phase))
       return join("The task waits on the user's choice below; the message was not sent.", render(active))
     if (active && !TERMINAL.includes(active.phase))
@@ -331,7 +360,14 @@ export class Team {
       ].join("\n")
     if (!text.trim()) return 'start needs text: the confirmed request. NEXT ACTION: call team with action "start" and the request.'
     const task = newTask(this.root, managerSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)
-    if (forcePlan) task.forcePlan = true
+    if (opts.plan === true) task.forcePlan = true
+    if (opts.review === true) task.reviewFirst = true
+    const workflow = WORKFLOWS.includes(opts.workflow as Workflow) ? opts.workflow : "code"
+    if (workflow !== "code") {
+      task.workflow = workflow
+      task.output = this.outputPath(task, opts.output)
+      if (existsSync(task.output)) writeFile(task, "existing.md", readFileSync(task.output, "utf8"))
+    }
     writeFile(task, "request.md", text)
     const original = await this.lastUserMessage(managerSession)
     writeFile(task, "request-original.md", original?.text ?? text)
@@ -350,7 +386,9 @@ export class Team {
     this.tasks.set(managerSession, task)
     this.sessionDirs?.set(managerSession, [...this.dirsOf(managerSession), task.dir])
     const { build, test, whenMissing } = this.config.checks
-    if (build.trim() || test.trim()) {
+    if (isDocWorkflow(task)) {
+      // No build or test: nobody changes code in a plan or research task.
+    } else if (build.trim() || test.trim()) {
       const lines = [build.trim() && `- Build: \`${build.trim()}\``, test.trim() && `- Test: \`${test.trim()}\``].filter(Boolean)
       writeFile(task, "checks.md", checksText(lines.join("\n")))
     } else if (whenMissing === "skip") this.skipChecks(task)
@@ -361,6 +399,30 @@ export class Team {
     save(task)
     this.log(`task ${task.id} started`)
     return this.step(task, signal)
+  }
+
+  /** The document's path: the one the user named (relative to the project), else the workflow's default; a default never overwrites an existing file. */
+  private outputPath(task: TaskState, given?: string): string {
+    const wf = this.config.workflows[task.workflow as "plan" | "research"]
+    if (given?.trim()) return path.resolve(task.workspace, expandHome(given.trim()))
+    const name = task.id.replace(/^\d{8}-\d{6}-/, "")
+    const file = path.resolve(task.workspace, expandHome(wf.output.replaceAll("{task}", name)))
+    const ext = path.extname(file)
+    let out = file
+    for (let n = 2; existsSync(out); n++) out = `${file.slice(0, file.length - ext.length)}-${n}${ext}`
+    return out
+  }
+
+  /** Saves the document to the project; on failure the copy in the task folder is still there. */
+  private writeOutput(task: TaskState, content: string, copy: string): string | undefined {
+    try {
+      mkdirSync(path.dirname(task.output!), { recursive: true })
+      writeFileSync(task.output!, content.endsWith("\n") ? content : content + "\n")
+      return undefined
+    } catch (e) {
+      this.log(`task ${task.id}: cannot write ${task.output}: ${(e as Error).message}`)
+      return `Could not write ${task.output} (${(e as Error).message}); the document is in ${path.join(task.dir, copy)}.`
+    }
   }
 
   private skipChecks(task: TaskState) {
@@ -486,12 +548,38 @@ export class Team {
   }
 
   private async change(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
-    if (task.phase !== "approval") return this.wrongPhase(task, "change")
+    if (task.phase !== "approval" && task.phase !== "brief") return this.wrongPhase(task, "change")
     const { polished, note: comments } = await this.withOriginal(task, text, "comments")
     if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
-    appendFile(task, "answers.md", `## Comments on plan ${task.plan}\n\n${comments}\n`)
-    task.skipPrincipalReview = true
-    task.pending = { mode: "architect", note: `The user asked for changes to plan ${task.plan}. Revise it:\n${comments}` }
+    if (task.phase === "brief") {
+      appendFile(task, "answers.md", `## Comments on the research brief\n\n${comments}\n`)
+      task.pending = { mode: "lead", note: `The user adjusted the research brief. Revise it and report ESCALATE again:\n${comments}` }
+    } else if (isDocWorkflow(task)) {
+      appendFile(task, "answers.md", `## Comments on ${docName(task)} ${task.doc}\n\n${comments}\n`)
+      task.pending = {
+        mode: "architect",
+        note: `The user asked for changes to the ${docName(task)} (doc-${task.doc}.md). Revise it and report DOC with the whole revised document${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}:\n${comments}`,
+      }
+    } else {
+      appendFile(task, "answers.md", `## Comments on plan ${task.plan}\n\n${comments}\n`)
+      task.skipPrincipalReview = true
+      task.pending = { mode: "architect", note: `The user asked for changes to plan ${task.plan}. Revise it:\n${comments}` }
+    }
+    task.phase = "running"
+    save(task)
+    return this.step(task, signal)
+  }
+
+  /** The user asks Principal to critically review the waiting plan or document. */
+  private async review(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
+    if (task.phase !== "approval") return this.wrongPhase(task, "review")
+    const limit = this.config.limits.principalReviews
+    if ((task.reviews ?? 0) >= limit)
+      return join(`Principal has already reviewed this task ${limit} time(s), the limit (limits.principalReviews).`, render(task))
+    const focus = text.trim() ? (await this.withOriginal(task, text, "focus")).note : undefined
+    if (focus) appendFile(task, "answers.md", `## Review requested\n\n${focus}\n`)
+    task.reviews = (task.reviews ?? 0) + 1
+    task.pending = { mode: "principal_doc_review", note: focus, fresh: true }
     task.phase = "running"
     save(task)
     return this.step(task, signal)
@@ -502,6 +590,28 @@ export class Team {
     task.phase = "stopped"
     await this.finish(task, "stopped")
     return render(task)
+  }
+
+  /** The "Implement it" button: switches the session to build-manager and starts a code task from the approved plan document. */
+  private async implement(task: TaskState, signal: AbortSignal): Promise<string> {
+    if (task.workflow !== "plan" || !task.output) return this.wrongPhase(task, "implement")
+    if (task.phase === "approval") {
+      this.done(task, task.docSummary ?? "")
+      await this.finish(task, "done")
+    }
+    if (task.phase !== "done") return this.wrongPhase(task, "implement")
+    let note = `Switched to ${FRONT_AGENTS.code}.`
+    try {
+      await this.ctx.session.switchAgent({ sessionID: task.managerSession, agent: FRONT_AGENTS.code })
+    } catch (e) {
+      this.log(`task ${task.id}: switch to ${FRONT_AGENTS.code} failed: ${(e as Error).message}`)
+      note = `Could not switch the agent (${(e as Error).message}); the user can press Tab to switch to ${FRONT_AGENTS.code}.`
+    }
+    const text = join(
+      `Implement the plan in ${task.output}. The user approved that plan document; read it first and follow it.`,
+      `The planning request was:\n${readFileSync(path.join(task.dir, "request.md"), "utf8").trim()}`,
+    )
+    return join(note, await this.start(task.managerSession, text, signal, { plan: true, workflow: "code" }))
   }
 
   private wrongPhase(task: TaskState, action: string) {
@@ -603,6 +713,14 @@ export class Team {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
         writeFile(task, "brief.md", r.content)
         this.record(task, p.mode, r, "brief.md")
+        if (task.workflow === "research") {
+          task.depth = r.depth ?? "breadth"
+          if (this.config.workflows.research.confirmBrief && task.depth !== "quick") {
+            task.phase = "brief"
+            task.askedAt = Date.now()
+            return
+          }
+        }
         task.pending = r.status === "TRIVIAL" ? { mode: "fix_trivial", fresh: true } : { mode: "architect" }
         return
       }
@@ -631,13 +749,22 @@ export class Team {
         if (r.status === "NEED_INFO") {
           task.needInfo++
           this.record(task, p.mode, r)
-          task.pending = { mode: "intern", note: r.content }
+          task.pending = { mode: "intern", note: r.content, afterReview: p.afterReview }
           return
         }
         if (r.status === "ESCALATE") {
           const file = writeNumbered(task, "escalation", r.content)
           this.record(task, p.mode, r, file)
-          return this.toAdvice(task, `architect escalated (${file})`, { mode: "architect", note: "Retry: write a plan, or escalate again." })
+          return this.toAdvice(task, `architect escalated (${file})`, { mode: "architect", note: `Retry: write the ${isDocWorkflow(task) ? docName(task) : "plan"}, or escalate again.` })
+        }
+        task.principalNote = p.afterReview
+        if (r.status === "DOC") {
+          const file = writeNumbered(task, "doc", r.content)
+          this.record(task, p.mode, r, file)
+          task.doc = task.seq.doc
+          const failed = this.writeOutput(task, r.content, file)
+          task.docSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
+          return this.afterDraft(task)
         }
         const file = writeNumbered(task, "plan", r.content)
         this.record(task, p.mode, r, file)
@@ -650,17 +777,30 @@ export class Team {
         task.planSummary = r.summary
         const review = task.planRisk && !task.skipPrincipalReview
         task.skipPrincipalReview = false
-        task.principalNote = undefined
         if (review) {
           task.pending = { mode: "principal_review" }
-        } else this.toApproval(task)
+        } else this.afterDraft(task)
+        return
+      }
+      case "principal_doc_review": {
+        const file = this.reportFile(task, "principal", p.mode, r)
+        this.record(task, p.mode, r, file)
+        task.principalNote = file
+        if (r.status === "APPROVE") return this.toApproval(task)
+        task.architectUnseen.push(file)
+        const doc = isDocWorkflow(task)
+        task.pending = {
+          mode: "architect",
+          afterReview: file,
+          note: `Principal critically reviewed the ${doc ? `${docName(task)} (doc-${task.doc}.md)` : `plan ${task.plan}`} at the user's request (${file}). Revise it: fix every must-fix item, or say in the ${doc ? "document" : "plan"} why not. Report ${doc ? "DOC" : "PLAN"} with the whole revised ${doc ? "document" : "plan"}.`,
+        }
         return
       }
       case "intern": {
         const file = writeNumbered(task, "findings", `# Findings (${r.status})\n\n${r.content}`)
         this.record(task, p.mode, r, file)
         task.architectUnseen.push(file)
-        task.pending = { mode: "architect", note: `Intern answered your queries (${r.status}).` }
+        task.pending = { mode: "architect", note: `Intern answered your queries (${r.status}).`, afterReview: p.afterReview }
         return
       }
       case "principal_review": {
@@ -670,7 +810,7 @@ export class Team {
         if (r.status === "APPROVE") return this.toApproval(task)
         task.architectUnseen.push(file)
         task.skipPrincipalReview = true
-        task.pending = { mode: "architect", note: `Principal requested changes to plan ${task.plan} (${file}). Revise the plan once.` }
+        task.pending = { mode: "architect", afterReview: file, note: `Principal requested changes to plan ${task.plan} (${file}). Revise the plan once.` }
         return
       }
       case "fix": {
@@ -744,6 +884,18 @@ export class Team {
   private toAdvice(task: TaskState, reason: string, retry: Pending) {
     if (task.principalAdviceUsed >= this.config.limits.principalAdvice) return this.stuck(task, `${reason}, and Principal's advice was already used`, retry)
     task.pending = { mode: "principal_advice", note: reason, fresh: true }
+  }
+
+  /** A new plan or document: Principal's review first if the user asked for it in the request, else the user. */
+  private afterDraft(task: TaskState) {
+    if (task.reviewFirst && (task.reviews ?? 0) < this.config.limits.principalReviews) {
+      task.reviewFirst = false
+      task.reviews = (task.reviews ?? 0) + 1
+      task.pending = { mode: "principal_doc_review", fresh: true }
+      return
+    }
+    task.reviewFirst = false
+    this.toApproval(task)
   }
 
   private toApproval(task: TaskState) {

@@ -1,10 +1,15 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js"
-import { compact, line, TeamStats, type SidebarStats, type StatsRow } from "./rpc.ts"
+import { compact, line, modelsText, TeamStats, type SidebarStats, type StatsRow } from "./rpc.ts"
 
 interface Prefs {
   expanded: boolean
+  models?: boolean
 }
+
+/** Sidebar text width (the usage lines are 35 columns). */
+const WIDTH = 35
+const fit = (s: string) => (s.length > WIDTH ? s.slice(0, WIDTH - 1) + "…" : s)
 
 /** While an agent is running, re-read its live token counts this often. */
 const LIVE_POLL_MS = 3000
@@ -119,7 +124,7 @@ export default Plugin.define({
             <Show when={stats()?.task} fallback={<text fg={error() ? color.warning() : color.muted()}>{status()}</text>}>
               {(task: () => NonNullable<SidebarStats["task"]>) => (
                 <>
-                  <text fg={color.muted()}>{`${task().phase} · `}</text>
+                  <text fg={color.muted()}>{`${task().workflow === "code" ? "" : task().workflow + " · "}${task().phase} · `}</text>
                   <text fg={task().attempts >= task().attemptLimit ? color.warning() : color.muted()}>
                     {`${task().attempts}/${task().attemptLimit} attempts`}
                   </text>
@@ -132,9 +137,14 @@ export default Plugin.define({
               <text fg={color.muted()}>{line(" ", "agent", "call", "prmt", "tool", "tok", "%")}</text>
               <For each={rows()}>
                 {(r) => (
-                  <text fg={r.running ? color.running() : color.header()}>
-                    {line(r.running ? "●" : " ", r.role, r.calls, r.prompts, r.tools, compact(tokensOf(r)), pct(r))}
-                  </text>
+                  <>
+                    <text fg={r.running ? color.running() : color.header()}>
+                      {line(r.running ? "●" : " ", r.role, r.calls, r.prompts, r.tools, compact(tokensOf(r)), pct(r))}
+                    </text>
+                    <Show when={r.models.length > 0}>
+                      <text fg={r.models.length > 1 ? color.warning() : color.muted()}>{fit(`   ${modelsText(r.models)}`)}</text>
+                    </Show>
+                  </>
                 )}
               </For>
               <text fg={color.muted()}>
@@ -150,6 +160,34 @@ export default Plugin.define({
                   <text fg={color.muted()}>
                     {`  ${plural(s().session.tasks, "task")} · ${plural(s().session.questions, "question")}`}
                   </text>
+                </>
+              )}
+            </Show>
+            <Show when={stats()?.models.length ? stats() : undefined}>
+              {(s: () => SidebarStats) => (
+                <>
+                  <box
+                    flexDirection="row"
+                    onMouseDown={(event: { stopPropagation(): void }) => {
+                      event.stopPropagation()
+                      void setPrefs((d) => void (d.models = !d.models)).catch(() => {})
+                    }}
+                  >
+                    <text fg={color.muted()}>{`${prefs.models ? "▼" : "▶"} Models`}</text>
+                  </box>
+                  <Show when={prefs.models}>
+                    <For each={s().models}>
+                      {(m) => (
+                        <>
+                          <text fg={color.header()}>{` ${m.role}`}</text>
+                          <text fg={color.muted()}>{fit(`   ${m.models[0] ?? "(not set)"}`)}</text>
+                          <Show when={m.models.length > 1}>
+                            <text fg={color.muted()}>{fit(`   backup: ${m.models.slice(1).join(", ")}`)}</text>
+                          </Show>
+                        </>
+                      )}
+                    </For>
+                  </Show>
                 </>
               )}
             </Show>

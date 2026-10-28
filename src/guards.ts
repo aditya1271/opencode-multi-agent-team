@@ -18,7 +18,7 @@ export function toolKind(tool: string, input: unknown, config: Config): ToolKind
   if (tool === "read") return "read"
   if (tool === "grep" || tool === "glob") return "search"
   if (EDIT_TOOLS.has(tool)) return "edit"
-  const agents = Object.values(config.agents)
+  const agents = ROLES.map((r) => config.agents[r])
   if (tool === "shell") {
     const cmd = String((input as { command?: unknown })?.command ?? "")
     if (matchesAny(cmd, buildPatterns(config))) return "build"
@@ -85,7 +85,6 @@ export function trimLog(text: string, exit: number | undefined, logFile: string)
 }
 
 export async function registerGuards(ctx: Context, config: Config) {
-  const managerId = agentId(config, "manager")
   const rules = Object.fromEntries(ROLES.map((r) => [r, permissionsFor(config, r)])) as Record<Role, Rule[]>
 
   // The team's rules decide for team agents, so global allow/ask rules don't loosen or block them.
@@ -98,7 +97,7 @@ export async function registerGuards(ctx: Context, config: Config) {
 
   await ctx.session.hook("context", (event) => {
     const role = roleOf(config, event.agent)
-    if (event.agent !== managerId) delete event.tools.team
+    if (role !== "manager") delete event.tools.team
     if (role) for (const id of Object.keys(event.tools)) if (!toolVisible(rules[role], id)) delete event.tools[id]
     const run = runs.get(event.sessionID)
     if (!run) {
@@ -111,7 +110,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     const report = event.tools.report
     if (report) {
       const statuses = allowedStatuses(config, run.mode, run.task)
-      event.tools.report = { ...report, input: reportSchema(run.mode, statuses) as never }
+      event.tools.report = { ...report, input: reportSchema(run.mode, statuses, run.task) as never }
     }
   })
 

@@ -24,17 +24,34 @@
     "principal":   { "model": ["anthropic/claude-opus-4-5", "openai/gpt-5"], "variant": "high" }
   },
 
-  // "off": the manager sends your message as written, without the confirm step.
+  // "manager" sets the model of the three front agents (build-manager, plan-manager,
+  // research-manager). Each can have its own polishing instructions, e.g.
+  //   "plan-manager": { "instructions": "~/team-prompts/plan-manager.md" }
+
+  // "off": the front agents send your message as written, without the confirm step.
   "polish": "on",
 
-  // Make the manager the default agent.
+  // Start new sessions in build-manager.
   "defaultAgent": false,
+
+  // Plan and research documents. output: relative to the project ({task} = task name).
+  // instructions: replaces the built-in document standard (text or file), e.g. "make plans
+  // verbose; always weigh alternatives". The Architect writes to it; Principal reviews against it.
+  "workflows": {
+    "plan": { "output": "docs/{task}.md", "instructions": "" },
+    "research": {
+      "output": "docs/{task}.md", "instructions": "",
+      "confirmBrief": true,                                  // show the research brief first (not for quick research)
+      "internRounds": { "quick": 1, "breadth": 2, "depth": 3 }
+    }
+  },
 
   "limits": {
     "taskAttempts": 40,
     "developerRounds": 2,
     "planFailures": 2,
     "principalAdvice": 1,
+    "principalReviews": 2,   // reviews of a plan or document you can ask Principal for, per task
     "needInfoPerTask": 6,
     "questionsPerTask": 4,
     "toolCalls": { "lead": 40, "architect": 25, "intern": 30, "developer": 150, "reviewer": 30, "principal": 20 },
