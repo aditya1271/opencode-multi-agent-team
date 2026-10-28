@@ -17,6 +17,7 @@ export type Mode =
   | "principal_advice"
   | "lead_reply"
   | "architect_reply"
+  | "principal_reply"
 
 export const MODE_ROLE: Record<Mode, WorkerRole> = {
   lead: "lead",
@@ -32,6 +33,7 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   principal_advice: "principal",
   lead_reply: "lead",
   architect_reply: "architect",
+  principal_reply: "principal",
 }
 
 export type Phase = "running" | "checks" | "questions" | "approval" | "stuck" | "budget" | "done" | "stopped"

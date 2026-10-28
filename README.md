@@ -95,6 +95,7 @@ To update later, run `git pull` in the clone and restart OpenCode.
 - **Plans:** you see each plan's summary and file path and choose [Approve] [Change] [Stop].
   Any feedback on the plan is sent as Change.
 - **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
+  Your answer goes back to the agent that asked, in its own session, so it keeps its context.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the
   changed files) and choose [Retry] / [Continue +10] / [Stop].
 - **Usage:** ask "how was the work divided?" to get a per-agent table (calls, prompts, tool
@@ -117,7 +118,8 @@ To update later, run `git pull` in the clone and restart OpenCode.
     2 tasks · 3 questions
   ```
 
-  The section appears once the session has a task or a question. If it never appears after
+  The section sits at the top of the sidebar in every session; without a task it shows
+  "no task yet", and if the numbers can't be loaded it shows the error. If it never appears after
   updating from a version without the sidebar, the background server still has the old
   plugin list: close OpenCode and run `opencode service restart` (`/reload` isn't enough).
 

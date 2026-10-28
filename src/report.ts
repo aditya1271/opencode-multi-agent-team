@@ -17,6 +17,7 @@ const BASE: Record<Mode, string[]> = {
   principal_advice: ["ADVICE", "QUESTIONS"],
   lead_reply: ["ANSWER"],
   architect_reply: ["ANSWER"],
+  principal_reply: ["ANSWER"],
 }
 
 /** Why a DONE doesn't hold: the check command wasn't run in this call, or its real exit code wasn't 0. */

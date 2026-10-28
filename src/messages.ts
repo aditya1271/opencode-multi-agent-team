@@ -104,6 +104,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         f(`plan-${task.plan}.md`),
       )
     case "principal_advice": {
+      if (!freshSession && p.note) return join(p.note, "Now give your advice (ADVICE), or report QUESTIONS if a decision still belongs to the user.", capNote())
       const plans = Array.from({ length: task.seq.plan ?? 0 }, (_, i) => f(`plan-${i + 1}.md`))
       return join(
         `MODE: advice. The task is stuck: ${p.note ?? ""}. Say which approach the Architect should take (ADVICE), or, if the decision belongs to the user, report QUESTIONS.`,
@@ -152,7 +153,8 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       )
     }
     case "lead_reply":
-    case "architect_reply": {
+    case "architect_reply":
+    case "principal_reply": {
       const rules =
         "MODE: user question. The task is waiting on the user, who asks you this before they answer or decide. Answer it in content: clear and specific, with pros, cons and impact when they ask about options. Don't revise the plan, ask questions or start new work. Report ANSWER."
       const question = p.note ?? ""

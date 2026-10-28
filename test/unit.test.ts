@@ -240,6 +240,12 @@ describe("sidebar", () => {
       expect(team.replier(t)).toBe("architect")
       t.phase = "approval"
       expect(team.replier(t)).toBe("architect")
+      t.phase = "questions"
+      t.questionsFrom = "principal_advice"
+      expect(team.replier(t)).toBe("architect")
+      t.sessions.principal = "ses_o"
+      expect(team.replier(t)).toBe("principal")
+      t.phase = "approval"
 
       t.askedAt = 10
       const r = await team.withOriginal(t, "Grammar: option A (LLM-only).", "answer")
@@ -263,6 +269,24 @@ describe("sidebar", () => {
       summary: "senior plan",
       usage: { Developer: 1 },
     })
+  })
+  test("an answer to Principal's questions goes back to its session", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-principal-"))
+    const team = new Team({ session: { context: async () => [] } } as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    team.step = async (t: any) => t.pending
+    try {
+      save(newTask(root, "ses_p", "/w", "x", 40))
+      const t = team.task("ses_p")
+      t.phase = "questions"
+      t.questionsFrom = "principal_advice"
+      t.sessions.principal = "ses_o"
+      const p = await team.handle({ action: "answer", text: "keep the API" }, "ses_p", new AbortController().signal)
+      expect(p.mode).toBe("principal_advice")
+      expect(p.fresh).toBeUndefined()
+      expect(p.note).toContain("keep the API")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
   test("a forced plan takes TRIVIAL away from lead", () => {
     const t = newTask("/tmp/x", "ses_p", "/w", "x", 40)

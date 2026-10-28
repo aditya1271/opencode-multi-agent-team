@@ -54,7 +54,13 @@ export const TEAM_SCHEMA = {
   additionalProperties: false,
 }
 
-const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = { lead: "lead", lead_fail: "lead", architect: "architect", fix: "developer" }
+const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = {
+  lead: "lead",
+  lead_fail: "lead",
+  architect: "architect",
+  fix: "developer",
+  principal_advice: "principal",
+}
 
 export class Team {
   readonly root: string
@@ -300,8 +306,9 @@ export class Team {
   }
 
   /** The agent the task waits on: the one that asked, else the architect if it has a session, else lead. */
-  private replier(task: TaskState): "lead" | "architect" | undefined {
+  private replier(task: TaskState): "lead" | "architect" | "principal" | undefined {
     if (task.phase === "questions" && task.questionsFrom === "lead" && task.sessions.lead) return "lead"
+    if (task.phase === "questions" && task.questionsFrom === "principal_advice" && task.sessions.principal) return "principal"
     if (task.sessions.architect) return "architect"
     if (task.sessions.lead) return "lead"
     return undefined
@@ -372,7 +379,7 @@ export class Team {
     if (!role) return this.ask(task.managerSession, text, signal)
     const { polished, note } = await this.withOriginal(task, text, "question")
     if (!polished) return 'ask needs text: the question. NEXT ACTION: call team with action "ask" and the question.'
-    const mode: Mode = role === "architect" ? "architect_reply" : "lead_reply"
+    const mode: Mode = `${role}_reply`
     const sessionID = task.sessions[role]
     this.log(`task ${task.id}: user question → ${role}`)
     const res = await runAgent(
@@ -459,7 +466,13 @@ export class Team {
     const note = `The user answered your questions:\n${answer}`
     const from = task.questionsFrom
     task.pending =
-      from === "lead" ? { mode: "lead", note } : from === "architect" ? { mode: "architect", note } : { mode: "architect", note: `Principal asked the user questions. ${note}` }
+      from === "lead"
+        ? { mode: "lead", note }
+        : from === "principal_advice" && task.sessions.principal
+          ? { mode: "principal_advice", note }
+          : from === "principal_advice"
+            ? { mode: "architect", note: `Principal asked the user questions. ${note}` }
+            : { mode: "architect", note }
     task.phase = "running"
     task.questions = undefined
     save(task)
@@ -691,7 +704,8 @@ export class Team {
         return this.round(task, file, r)
       }
       case "principal_advice": {
-        task.principalAdviceUsed++
+        // Counted once advice is given: a question round before it is part of the same advice.
+        if (r.status === "ADVICE") task.principalAdviceUsed++
         const file = this.reportFile(task, "principal", p.mode, r)
         this.record(task, p.mode, r, file)
         task.architectUnseen.push(file)
@@ -723,7 +737,7 @@ export class Team {
 
   private toAdvice(task: TaskState, reason: string, retry: Pending) {
     if (task.principalAdviceUsed >= this.config.limits.principalAdvice) return this.stuck(task, `${reason}, and Principal's advice was already used`, retry)
-    task.pending = { mode: "principal_advice", note: reason }
+    task.pending = { mode: "principal_advice", note: reason, fresh: true }
   }
 
   private toApproval(task: TaskState) {
