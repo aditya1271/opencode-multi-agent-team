@@ -5,7 +5,7 @@ type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
 import { buildPrompt, checksText, docName, join, render, SKIP_CHECKS } from "./messages.ts"
-import type { SidebarStats } from "./rpc.ts"
+import { EditedFilesTrack, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
 import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
 import {
@@ -416,12 +416,26 @@ export class Team {
   /** Saves the document to the project; on failure the copy in the task folder is still there. */
   private writeOutput(task: TaskState, content: string, copy: string): string | undefined {
     try {
+      const before = existsSync(task.output!) ? readFileSync(task.output!, "utf8") : undefined
       mkdirSync(path.dirname(task.output!), { recursive: true })
       writeFileSync(task.output!, content.endsWith("\n") ? content : content + "\n")
+      this.trackEdit(task.managerSession, task.output!, before)
       return undefined
     } catch (e) {
       this.log(`task ${task.id}: cannot write ${task.output}: ${(e as Error).message}`)
       return `Could not write ${task.output} (${(e as Error).message}); the document is in ${path.join(task.dir, copy)}.`
+    }
+  }
+
+  /** Shows a file the plugin wrote in the opencode-edited-files sidebar; does nothing when that plugin isn't installed. */
+  private trackEdit(sessionID: string, file: string, before: string | undefined) {
+    try {
+      void this.ctx
+        .rpc(EditedFilesTrack)
+        .track({ sessionID, files: [{ path: file, ...(before === undefined ? {} : { before }) }] })
+        .catch(() => undefined)
+    } catch {
+      // No RPC client (tests).
     }
   }
 

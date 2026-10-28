@@ -115,3 +115,36 @@ export interface SidebarStats {
   models: { role: string; models: string[] }[]
   session: { tasks: number; questions: number; total: { calls: number; prompts: number; tools: number; tokens: number } }
 }
+
+/** The `track` method of the opencode-edited-files plugin, so saved documents show in its sidebar. */
+export const EditedFilesTrack = Rpc.define({
+  id: "edited-files",
+  methods: {
+    track: {
+      input: {
+        type: "object",
+        properties: {
+          sessionID: { type: "string" },
+          files: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { path: { type: "string" }, before: { type: "string" } },
+              required: ["path"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["sessionID", "files"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+    },
+  },
+  events: {},
+})

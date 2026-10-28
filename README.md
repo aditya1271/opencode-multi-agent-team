@@ -113,7 +113,9 @@ standard (`prompts/plan.instructions.md`): context, goals and non-goals, decisio
 yours or assumed, alternatives weighed, design, file map, risks, verification and an outline.
 Nobody edits code, and there is no build or test. The document is saved to `docs/<task>.md` in
 the project (`workflows.plan.output`), or to the path you name. A default path never
-overwrites an existing file; a path you name is edited in place.
+overwrites an existing file; a path you name is edited in place. If
+[opencode-edited-files](https://github.com/aditya1271/opencode-edited-files) is installed, the
+saved document shows in its sidebar.
 
 You reply in your own words. Once you approve, an **[Implement it]** button switches the
 session to `build-manager` and starts a code task that carries out the document. The
