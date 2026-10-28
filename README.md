@@ -117,7 +117,9 @@ overwrites an existing file; a path you name is edited in place. If
 [opencode-edited-files](https://github.com/aditya1271/opencode-edited-files) is installed, the
 saved document shows in its sidebar.
 
-You reply in your own words. Once you approve, an **[Implement it]** button switches the
+You reply in your own words. Comments on a plan or research document go to the Lead first,
+who turns them into a revision brief (including places with the same problem that you didn't
+name); the Architect then revises the document. Once you approve, an **[Implement it]** button switches the
 session to `build-manager` and starts a code task that carries out the document. The
 Architect still writes an implementation plan for you to approve first.
 

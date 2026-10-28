@@ -55,6 +55,8 @@ export interface Pending {
   fresh?: boolean
   /** A revision Principal asked for: its review file is shown with the revised plan or document. */
   afterReview?: string
+  /** Lead hand-off of the user's comments on the document (`note`), for a revision brief. */
+  revision?: boolean
 }
 
 export interface HistoryEntry {
@@ -99,6 +101,8 @@ export interface TaskState {
   reviewFirst?: boolean
   /** Principal reviews the user asked for. */
   reviews?: number
+  /** The user commented on the document: Lead is writing a revision brief for the Architect. */
+  revising?: boolean
   /** The user asked for a plan: lead can't pick TRIVIAL. */
   forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */

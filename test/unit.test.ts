@@ -8,7 +8,7 @@ import { beginRun, runs } from "../src/runtime.ts"
 import { migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
-import { render, stepTitles } from "../src/messages.ts"
+import { buildPrompt, render, stepTitles } from "../src/messages.ts"
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -276,6 +276,31 @@ describe("plan and research workflows", () => {
       expect(render(t)).toContain("(this version was revised to address it)")
       t.reviews = DEFAULTS.limits.principalReviews
       expect(await team.handle({ action: "review" }, "ses_v", signal)).toContain("the limit")
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("comments on a document go to Lead for a revision brief, then to the Architect", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_r", signal)
+      const t = team.task("ses_r")
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: "first brief" }), {})
+      t.pending = undefined
+      team.apply(t, { mode: "architect" }, report("DOC"), {})
+      save(t)
+      const p = await team.handle({ action: "change", text: "pets are too specific, there may be more" }, "ses_r", signal)
+      expect([p.mode, p.revision, t.revising]).toEqual(["lead", true, true])
+      const prompt = buildPrompt(DEFAULTS, t, p, false)
+      expect(prompt).toContain("MODE: revision")
+      expect(prompt).toContain("## Options")
+      expect(prompt).toContain("pets are too specific")
+      t.pending = undefined
+      team.apply(t, p, report("ESCALATE", { content: "change section X" }), {})
+      expect([t.pending.mode, t.revising, t.architectUnseen]).toEqual(["architect", false, ["revision-1.md"]])
+      expect(readFileSync(path.join(t.dir, "brief.md"), "utf8").trim()).toBe("first brief")
+      expect(readFileSync(path.join(t.dir, "revision-1.md"), "utf8").trim()).toBe("change section X")
     } finally {
       cleanup()
     }

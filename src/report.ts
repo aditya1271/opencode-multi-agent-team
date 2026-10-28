@@ -108,7 +108,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (input.risk !== "yes" && input.risk !== "no") throw new Error('PLAN needs risk: "yes" or "no".')
     if (!Number.isInteger(input.steps) || (input.steps ?? 0) < 1) throw new Error("PLAN needs steps: the number of plan steps.")
   }
-  if (input.status === "ESCALATE" && run.mode === "lead" && run.task?.workflow === "research" && !["quick", "breadth", "depth"].includes(input.depth ?? ""))
+  if (input.status === "ESCALATE" && run.mode === "lead" && run.task?.workflow === "research" && !run.task.revising && !["quick", "breadth", "depth"].includes(input.depth ?? ""))
     throw new Error('ESCALATE needs depth: "quick", "breadth" or "depth".')
   const skip = run.task?.skipChecks
   if (input.status === "DONE" && !skip && !input.checkCommand?.trim()) throw new Error("DONE needs checkCommand: the check command you ran.")

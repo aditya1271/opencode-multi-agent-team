@@ -47,6 +47,13 @@ const LEAD_PLAN = [
   "Report QUESTIONS only for decisions that belong to the user and change what gets built: at most 4, most important first. Each question gives the options, your recommended option, and why the answer matters. Anything with a sensible default is not a question: write it in the brief as an assumption.",
 ].join("\n\n")
 
+const LEAD_REVISION = [
+  "MODE: revision. The user commented on the {doc} below. Don't rewrite it; brief the Architect, who revises it.",
+  "Where the comments give examples, treat them as examples: find every place in the document with the same problem, not only the ones named. Check the files the request names, and the code or material they connect to, where the comments need it.",
+  "Report ESCALATE with the revision brief: each change, with the section it applies to, what is wrong and what it should become; the places you found beyond the ones named; and what must stay as it is.",
+  "Report QUESTIONS only if a comment leaves open a decision that belongs to the user: at most 4, each with the options, your recommended option, and why the answer matters.",
+].join("\n\n")
+
 const LEAD_RESEARCH = [
   "Workflow: research. The deliverable is a findings report, not code: nobody edits files in this task, and there is no build or test.",
   "Read every file the request names in full first, then run a few searches to see where the answer lives.",
@@ -102,6 +109,14 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
   }
   switch (p.mode) {
     case "lead":
+      if (p.revision)
+        return join(
+          LEAD_REVISION.replaceAll("{doc}", `${docName(task)} (doc-${task.doc}.md)`),
+          freshSession && join(f("request.md"), f("brief.md"), f("answers.md")),
+          f(`doc-${task.doc}.md`),
+          `The user's comments:\n${p.note ?? ""}`,
+          capNote(),
+        )
       if (!freshSession && p.note) return join(p.note, capNote())
       return join(
         `Task ${task.id}: sort this request and report.`,

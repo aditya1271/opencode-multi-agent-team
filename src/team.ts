@@ -570,10 +570,8 @@ export class Team {
       task.pending = { mode: "lead", note: `The user adjusted the research brief. Revise it and report ESCALATE again:\n${comments}` }
     } else if (isDocWorkflow(task)) {
       appendFile(task, "answers.md", `## Comments on ${docName(task)} ${task.doc}\n\n${comments}\n`)
-      task.pending = {
-        mode: "architect",
-        note: `The user asked for changes to the ${docName(task)} (doc-${task.doc}.md). Revise it and report DOC with the whole revised document${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}:\n${comments}`,
-      }
+      task.revising = true
+      task.pending = { mode: "lead", note: comments, revision: true }
     } else {
       appendFile(task, "answers.md", `## Comments on plan ${task.plan}\n\n${comments}\n`)
       task.skipPrincipalReview = true
@@ -725,6 +723,17 @@ export class Team {
       case "lead":
       case "lead_fail": {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
+        if (task.revising) {
+          task.revising = false
+          const file = writeNumbered(task, "revision", r.content)
+          this.record(task, p.mode, r, file)
+          task.architectUnseen.push(file)
+          task.pending = {
+            mode: "architect",
+            note: `The user asked for changes to the ${docName(task)} (doc-${task.doc}.md); Lead's revision brief is ${file}. Revise the document accordingly and report DOC with the whole revised document${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
+          }
+          return
+        }
         writeFile(task, "brief.md", r.content)
         this.record(task, p.mode, r, "brief.md")
         if (task.workflow === "research") {
