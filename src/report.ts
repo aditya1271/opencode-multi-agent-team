@@ -42,6 +42,7 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
   let list = BASE[mode]
   if (task) {
     if (task.trivialFailed && mode === "triage") list = ["ESCALATE"]
+    if (task.forcePlan && mode === "triage") list = list.filter((s) => s !== "TRIVIAL")
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
     if (mode === "senior" && task.needInfo >= config.limits.needInfoPerTask) list = list.filter((s) => s !== "NEED_INFO")
   }

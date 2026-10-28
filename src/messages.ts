@@ -38,7 +38,10 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
   switch (p.mode) {
     case "triage":
       if (!freshSession && p.note) return join(p.note, capNote())
-      return join(`Task ${task.id}: sort this request and report.`, f("request.md"), f("checks.md"), f("answers.md"), p.note, capNote())
+      return join(
+        `Task ${task.id}: sort this request and report.`,
+        task.forcePlan && "The user asked for a plan: don't choose TRIVIAL. Write the brief and report ESCALATE (or QUESTIONS).",
+        f("request.md"), f("checks.md"), f("answers.md"), p.note, capNote())
     case "triage_fail":
       return join(
         "MODE: failure. The trivial attempt did not finish. Write the full brief for the planner, with code findings only: findings with path:line, the relevant code excerpts with line ranges, the edits that were kept, and why it is not trivial. Don't restate the user's goal or constraints; the planner gets the request itself. Report ESCALATE.",
@@ -152,7 +155,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "senior_reply": {
       const rules =
         "MODE: user question. The task is waiting on the user, who asks you this before they answer or decide. Answer it in content: clear and specific, with pros, cons and impact when they ask about options. Don't revise the plan, ask questions or start new work. Report ANSWER."
-      const question = `<question>\n${p.note ?? ""}\n</question>`
+      const question = p.note ?? ""
       if (!freshSession) return join(rules, question)
       return join(rules, f("request.md"), f("brief.md"), f("answers.md"), latest("plan"), question)
     }

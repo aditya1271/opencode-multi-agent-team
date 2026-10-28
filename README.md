@@ -80,7 +80,11 @@ To update later, run `git pull` in the clone and restart OpenCode.
   polished and confirmed the same way; the agents get both the polished text and your
   original words. Build/test commands are sent as typed. Set `"polish": "off"` to send
   everything as written.
+- **The polisher never answers you itself.** Everything you write goes to the team: a
+  request, a question, a reply, or feedback (on a finished task, as a new request).
 - **Ask about the code:** the Explorer answers. No task starts.
+- **Want a plan, not a quick fix?** Say so ("plan it first"). Triage still writes the brief
+  but can't take the quick path, so Senior always plans.
 - **Ask during a task:** while the team waits on you, a question goes to the agent the task
   waits on (Senior, or Triage before there's a plan), in its own session with the full
   context. The task doesn't move; you then answer or decide.

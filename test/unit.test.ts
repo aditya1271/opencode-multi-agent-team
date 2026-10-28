@@ -253,6 +253,12 @@ describe("sidebar", () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+  test("a forced plan takes TRIVIAL away from triage", () => {
+    const t = newTask("/tmp/x", "ses_p", "/w", "x", 40)
+    expect(allowedStatuses(DEFAULTS, "triage", t)).toContain("TRIVIAL")
+    t.forcePlan = true
+    expect(allowedStatuses(DEFAULTS, "triage", t)).toEqual(["ESCALATE", "QUESTIONS"])
+  })
   test("compact numbers and fixed-width lines", () => {
     expect([compact(950), compact(1234), compact(56_000), compact(2_500_000)]).toEqual(["950", "1.2k", "56k", "2.5M"])
     expect(line("●", "analyser", 1, 22, 333, "4.4k", "50%")).toHaveLength(35)

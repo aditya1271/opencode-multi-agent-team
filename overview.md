@@ -73,6 +73,8 @@ user ─► Polisher ─► [Send] [Edit] [Cancel]
 **Code questions** go straight to Explorer, and the answer comes back to the user. A
 question asked **while a task waits on the user** goes to the agent the task waits on
 (Senior, or Triage before there's a plan), which knows the task. The task doesn't move.
+The user can ask for a plan, which takes the trivial path away from Triage. The Polisher
+never answers the user itself; it only rewrites and forwards.
 
 ## User touchpoints
 

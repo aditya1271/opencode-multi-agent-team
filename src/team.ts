@@ -31,11 +31,12 @@ export interface TeamInput {
   action: TeamAction
   text?: string
   last?: number
+  plan?: boolean
 }
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
-  "Actions: start (text = the confirmed request), ask (text = a question; while a task is open, the agent it waits on answers),",
+  "Actions: start (text = the confirmed request; plan = true when the user wants a plan, not a quick fix), ask (text = a question; while a task is open, the agent it waits on answers),",
   "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments), stop, resume,",
   "retry, extend, stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
@@ -47,6 +48,7 @@ export const TEAM_SCHEMA = {
     action: { type: "string", enum: [...TEAM_ACTIONS] },
     text: { type: "string", description: "The confirmed request, question, answer or comments. Build/test commands word for word." },
     last: { type: "integer", minimum: 1, description: "stats only: totals over the last N tasks." },
+    plan: { type: "boolean", description: "start only: the user wants a plan, not a quick fix." },
   },
   required: ["action"],
   additionalProperties: false,
@@ -153,9 +155,9 @@ export class Team {
     if (!q) {
       q = { count: 0, usage: {} }
       for (const line of lastUsage(this.root, Number.MAX_SAFE_INTEGER).lines)
-        if (line.task === "ask" && line.session === polisherSession && line.usage.explorer) {
+        if (line.task === "ask" && line.session === polisherSession) {
           q.count++
-          add(q.usage, "explorer", line.usage.explorer)
+          for (const [role, u] of Object.entries(line.usage)) if (u) add(q.usage, role as Role, u)
         }
       this.questions.set(polisherSession, q)
     }
@@ -167,7 +169,7 @@ export class Team {
     if (task) task.usage.polisher = { ...(task.usage.polisher ?? this.emptyPolisher()), calls: (task.usage.polisher?.calls ?? 0) + 1 }
     switch (input.action) {
       case "start":
-        return this.start(polisherSession, input.text ?? "", signal)
+        return this.start(polisherSession, input.text ?? "", signal, input.plan === true)
       case "ask":
         if (task && !TERMINAL.includes(task.phase)) return this.reply(task, input.text ?? "", signal)
         return this.ask(polisherSession, input.text ?? "", signal)
@@ -307,7 +309,7 @@ export class Team {
 
   // ---- actions ----
 
-  private async start(polisherSession: string, text: string, signal: AbortSignal): Promise<string> {
+  private async start(polisherSession: string, text: string, signal: AbortSignal, forcePlan = false): Promise<string> {
     const active = this.task(polisherSession)
     if (active && !TERMINAL.includes(active.phase))
       return [
@@ -316,6 +318,7 @@ export class Team {
       ].join("\n")
     if (!text.trim()) return 'start needs text: the confirmed request. NEXT ACTION: call team with action "start" and the request.'
     const task = newTask(this.root, polisherSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)
+    if (forcePlan) task.forcePlan = true
     writeFile(task, "request.md", text)
     const original = await this.lastUserMessage(polisherSession)
     writeFile(task, "request-original.md", original?.text ?? text)
@@ -405,26 +408,27 @@ export class Team {
 
   private async ask(polisherSession: string, question: string, signal: AbortSignal): Promise<string> {
     if (!question.trim()) return 'ask needs text: the question. NEXT ACTION: call team with action "ask" and the question.'
+    const role = "explorer"
     const res = await runAgent(
       this.ctx,
       this.config,
       {
-        role: "explorer",
+        role,
         mode: "explorer",
         parentID: polisherSession,
-        title: "team: explorer (question)",
+        title: `team: ${role} (question)`,
         prompt: join("MODE: user question. Answer the user's question about the code. Report FOUND with the answer in content (path:line references, short excerpts), or NOT_FOUND with what you searched.", `<question>\n${question}\n</question>`),
         signal,
       },
       this.log,
     )
     const usage: Partial<Record<string, AgentUsage>> = {}
-    add(usage as never, "explorer", res.usage)
+    add(usage as never, role, res.usage)
     const asked = this.questionsIn(polisherSession)
     appendUsage(this.root, { task: "ask", session: polisherSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
     asked.count++
-    if (usage.explorer) add(asked.usage, "explorer", usage.explorer)
-    if (!res.report) return `The explorer couldn't answer: ${res.failure}.\nNEXT ACTION: tell the user.`
+    if (usage[role]) add(asked.usage, role, usage[role]!)
+    if (!res.report) return `The ${role} couldn't answer: ${res.failure}.\nNEXT ACTION: tell the user.`
     return join(
       `ANSWER (${res.report.status}):`,
       res.report.content,

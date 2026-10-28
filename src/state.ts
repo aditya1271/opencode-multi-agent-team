@@ -74,6 +74,8 @@ export interface TaskState {
   sessions: Partial<Record<WorkerRole, string>>
   seq: Record<string, number>
   trivialFailed?: boolean
+  /** The user asked for a plan: triage can't pick TRIVIAL. */
+  forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */
   skipChecks?: boolean
   plan: number
