@@ -148,6 +148,14 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         ...reports.slice(-4),
       )
     }
+    case "triage_reply":
+    case "senior_reply": {
+      const rules =
+        "MODE: user question. The task is waiting on the user, who asks you this before they answer or decide. Answer it in content: clear and specific, with pros, cons and impact when they ask about options. Don't revise the plan, ask questions or start new work. Report ANSWER."
+      const question = `<question>\n${p.note ?? ""}\n</question>`
+      if (!freshSession) return join(rules, question)
+      return join(rules, f("request.md"), f("brief.md"), f("answers.md"), latest("plan"), question)
+    }
   }
 }
 
@@ -174,7 +182,7 @@ export function render(task: TaskState): string {
       return join(
         `QUESTIONS from ${task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"}:`,
         (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"),
-        `NEXT ACTION: ask the user these questions as free text (no fixed options). Then call team with action "answer" and their answer word for word.`,
+        `NEXT ACTION: ask the user these questions as free text (no fixed options). Polish their answer and confirm it [Send] [Edit] [Cancel], then call team with action "answer" and the confirmed answer. If they ask something back instead, polish and confirm it, then call team with action "ask".`,
       )
     case "approval":
       return join(
@@ -182,7 +190,7 @@ export function render(task: TaskState): string {
         task.planSummary ?? "",
         task.oracleNote ? `Oracle's notes:\n${readTaskFile(task, task.oracleNote)}` : "",
         `Full plan: ${path.join(task.dir, `plan-${task.plan}.md`)}`,
-        `NEXT ACTION: show the summary, the risk and Oracle's notes (if any) to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change → ask for their comments, then team "change" with the comments word for word. Stop → team "stop".`,
+        `NEXT ACTION: show the summary, the risk, Oracle's notes (if any) and the full plan path to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change, or any feedback on the plan → polish the comments and confirm them [Send] [Edit] [Cancel], then team "change" with the confirmed comments. A question about the plan → polish and confirm it, then team "ask". Stop → team "stop".`,
       )
     case "stuck":
       return join(

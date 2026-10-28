@@ -70,11 +70,15 @@ user ─► Polisher ─► [Send] [Edit] [Cancel]
                        └─ unclear          ─► Oracle advice ─► Senior
 ```
 
-**Code questions** go straight to Explorer, and the answer comes back to the user.
+**Code questions** go straight to Explorer, and the answer comes back to the user. A
+question asked **while a task waits on the user** goes to the agent the task waits on
+(Senior, or Triage before there's a plan), which knows the task. The task doesn't move.
 
 ## User touchpoints
 
-- **Confirm the request** after it's rewritten.
+- **Confirm the request** after it's rewritten. Replies during the task (answers, plan
+  comments, questions) are rewritten and confirmed the same way; agents also get the
+  user's original words.
 - **Build and test commands** are set per project. Agents never work out how to build. If
   none are set, the task first asks the user for them, or the user skips build and test
   (the result then says "not built or tested").

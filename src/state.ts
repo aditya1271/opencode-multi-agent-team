@@ -15,6 +15,8 @@ export type Mode =
   | "diagnose"
   | "review"
   | "oracle_advice"
+  | "triage_reply"
+  | "senior_reply"
 
 export const MODE_ROLE: Record<Mode, WorkerRole> = {
   triage: "triage",
@@ -28,6 +30,8 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   diagnose: "analyser",
   review: "analyser",
   oracle_advice: "oracle",
+  triage_reply: "triage",
+  senior_reply: "senior",
 }
 
 export type Phase = "running" | "checks" | "questions" | "approval" | "stuck" | "budget" | "done" | "stopped"

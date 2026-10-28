@@ -132,7 +132,7 @@ export function systemPrompt(config: Config, role: Role): string {
     : [core, instructions].join("\n\n")
   const polishOff =
     role === "polisher" && config.polish === "off"
-      ? "Polishing is OFF: send the user's message to team start as written, without the [Send] [Edit] [Cancel] step."
+      ? "Polishing is OFF: send the user's requests and replies to the team as written, without rewriting them and without the [Send] [Edit] [Cancel] step. This overrides the polishing steps above."
       : ""
   const parts = [body, polishOff, toolsNote(config, role), a.append ? textOrFile(a.append) : ""]
   return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")

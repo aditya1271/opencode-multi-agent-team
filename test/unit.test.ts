@@ -220,6 +220,39 @@ describe("sidebar", () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+  test("mid-task questions go to the agent the task waits on; replies keep the user's original words", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-reply-"))
+    const context = [
+      { type: "user", text: "old request", time: { created: 1 } },
+      { type: "user", text: "lets keep option a", time: { created: 20 } },
+    ]
+    const team = new Team({ session: { context: async () => context } } as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    try {
+      const t = newTask(root, "ses_p", "/w", "x", 40)
+      t.phase = "questions"
+      t.questionsFrom = "triage"
+      expect(team.replier(t)).toBeUndefined()
+      t.sessions.triage = "ses_t"
+      expect(team.replier(t)).toBe("triage")
+      t.sessions.senior = "ses_s"
+      expect(team.replier(t)).toBe("triage")
+      t.questionsFrom = "senior"
+      expect(team.replier(t)).toBe("senior")
+      t.phase = "approval"
+      expect(team.replier(t)).toBe("senior")
+
+      t.askedAt = 10
+      const r = await team.withOriginal(t, "Grammar: option A (LLM-only).", "answer")
+      expect(r.polished).toBe("Grammar: option A (LLM-only).")
+      expect(r.note).toContain("<answer>\nGrammar: option A (LLM-only).\n</answer>")
+      expect(r.note).toContain("<original>\nlets keep option a\n</original>")
+      expect(r.note).not.toContain("old request")
+      expect((await team.withOriginal(t, "lets keep  option a", "answer")).note).not.toContain("<original>")
+      expect((await team.withOriginal(t, "", "answer")).polished).toBe("lets keep option a")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
   test("compact numbers and fixed-width lines", () => {
     expect([compact(950), compact(1234), compact(56_000), compact(2_500_000)]).toEqual(["950", "1.2k", "56k", "2.5M"])
     expect(line("●", "analyser", 1, 22, 333, "4.4k", "50%")).toHaveLength(35)

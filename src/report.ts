@@ -15,6 +15,8 @@ const BASE: Record<Mode, string[]> = {
   diagnose: ["LOCAL", "REPLAN", "ESCALATE"],
   review: ["PASS", "ISSUES"],
   oracle_advice: ["ADVICE", "QUESTIONS"],
+  triage_reply: ["ANSWER"],
+  senior_reply: ["ANSWER"],
 }
 
 /** Why a DONE doesn't hold: the check command wasn't run in this call, or its real exit code wasn't 0. */

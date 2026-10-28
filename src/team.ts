@@ -35,8 +35,9 @@ export interface TeamInput {
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
-  "Actions: start (text = the confirmed request), ask (text = a code question), continue, answer (text = the user's answer),",
-  "approve, change (text = the user's comments), stop, resume, retry, extend, stats (last = N tasks), status.",
+  "Actions: start (text = the confirmed request), ask (text = a question; while a task is open, the agent it waits on answers),",
+  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments), stop, resume,",
+  "retry, extend, stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
 ].join(" ")
 
@@ -44,7 +45,7 @@ export const TEAM_SCHEMA = {
   type: "object",
   properties: {
     action: { type: "string", enum: [...TEAM_ACTIONS] },
-    text: { type: "string", description: "Request, question, answer or comments, word for word." },
+    text: { type: "string", description: "The confirmed request, question, answer or comments. Build/test commands word for word." },
     last: { type: "integer", minimum: 1, description: "stats only: totals over the last N tasks." },
   },
   required: ["action"],
@@ -168,6 +169,7 @@ export class Team {
       case "start":
         return this.start(polisherSession, input.text ?? "", signal)
       case "ask":
+        if (task && !TERMINAL.includes(task.phase)) return this.reply(task, input.text ?? "", signal)
         return this.ask(polisherSession, input.text ?? "", signal)
       case "stats":
         return this.stats(polisherSession, input.last)
@@ -272,6 +274,37 @@ export class Team {
     return (last && last.time > (task.askedAt ?? 0) && last.text.trim() ? last.text : text).trim()
   }
 
+  /** Everything the user typed since the plugin last asked them (their original words behind a polished reply). */
+  private async userReplies(task: TaskState): Promise<string> {
+    const messages = (await this.ctx.session.context({ sessionID: task.polisherSession }).catch(() => [])) as unknown as Array<{
+      type?: string
+      text?: string
+      time?: { created?: number }
+    }>
+    return messages
+      .filter((m) => m.type === "user" && typeof m.text === "string" && (m.time?.created ?? 0) > (task.askedAt ?? 0))
+      .map((m) => m.text!.trim())
+      .filter(Boolean)
+      .join("\n\n")
+  }
+
+  /** The polished reply, plus the user's original words when they differ. */
+  private async withOriginal(task: TaskState, text: string, tag: string): Promise<{ polished: string; note: string }> {
+    const original = await this.userReplies(task)
+    const polished = text.trim() || original
+    const same = original.replace(/\s+/g, " ") === polished.replace(/\s+/g, " ")
+    const note = join(`<${tag}>\n${polished}\n</${tag}>`, original && !same ? `The user's original words:\n<original>\n${original}\n</original>` : "")
+    return { polished, note }
+  }
+
+  /** The agent the task waits on: the one that asked, else the senior if it has a session, else triage. */
+  private replier(task: TaskState): "triage" | "senior" | undefined {
+    if (task.phase === "questions" && task.questionsFrom === "triage" && task.sessions.triage) return "triage"
+    if (task.sessions.senior) return "senior"
+    if (task.sessions.triage) return "triage"
+    return undefined
+  }
+
   // ---- actions ----
 
   private async start(polisherSession: string, text: string, signal: AbortSignal): Promise<string> {
@@ -330,6 +363,46 @@ export class Team {
     return this.step(task, signal)
   }
 
+  /** A user question while a task is open: the agent the task waits on answers in its own session. The task doesn't move. */
+  private async reply(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
+    const role = this.replier(task)
+    if (!role) return this.ask(task.polisherSession, text, signal)
+    const { polished, note } = await this.withOriginal(task, text, "question")
+    if (!polished) return 'ask needs text: the question. NEXT ACTION: call team with action "ask" and the question.'
+    const mode: Mode = role === "senior" ? "senior_reply" : "triage_reply"
+    const sessionID = task.sessions[role]
+    this.log(`task ${task.id}: user question → ${role}`)
+    const res = await runAgent(
+      this.ctx,
+      this.config,
+      {
+        role,
+        mode,
+        task,
+        sessionID,
+        parentID: task.polisherSession,
+        title: `team: ${role} (user question)`,
+        prompt: buildPrompt(this.config, task, { mode, note }, !sessionID),
+        signal,
+      },
+      this.log,
+    )
+    add(task.usage, role, res.usage)
+    if (res.sessionID) task.sessions[role] = res.sessionID
+    const answer = res.report?.content ?? `${role} couldn't answer: ${res.failure ?? res.end}.`
+    appendFile(task, "answers.md", `## User question\n\n${note}\n\n## ${role} answered\n\n${answer}\n`)
+    task.askedAt = Date.now()
+    save(task)
+    this.onChange(task.polisherSession)
+    return join(
+      `ANSWER from ${role}:`,
+      answer,
+      "The task hasn't moved; it is still waiting on the user:",
+      render(task),
+      "NEXT ACTION: show the answer to the user, then continue with the waiting step above.",
+    )
+  }
+
   private async ask(polisherSession: string, question: string, signal: AbortSignal): Promise<string> {
     if (!question.trim()) return 'ask needs text: the question. NEXT ACTION: call team with action "ask" and the question.'
     const res = await runAgent(
@@ -376,9 +449,10 @@ export class Team {
   private async answer(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
     if (task.phase === "checks") return this.checks(task, text, signal)
     if (task.phase !== "questions" || !task.questionsFrom) return this.wrongPhase(task, "answer")
-    const answer = await this.userWords(task, text)
+    const { polished, note: answer } = await this.withOriginal(task, text, "answer")
+    if (!polished) return 'answer needs text: the user\'s answer. NEXT ACTION: call team with action "answer".'
     appendFile(task, "answers.md", `## Answer\n\n${answer}\n`)
-    const note = `The user answered your questions:\n<answer>\n${answer}\n</answer>`
+    const note = `The user answered your questions:\n${answer}`
     const from = task.questionsFrom
     task.pending =
       from === "triage" ? { mode: "triage", note } : from === "senior" ? { mode: "senior", note } : { mode: "senior", note: `Oracle asked the user questions. ${note}` }
@@ -390,10 +464,11 @@ export class Team {
 
   private async change(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
     if (task.phase !== "approval") return this.wrongPhase(task, "change")
-    const comments = await this.userWords(task, text)
+    const { polished, note: comments } = await this.withOriginal(task, text, "comments")
+    if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
     appendFile(task, "answers.md", `## Comments on plan ${task.plan}\n\n${comments}\n`)
     task.skipOracleReview = true
-    task.pending = { mode: "senior", note: `The user asked for changes to plan ${task.plan}. Revise it:\n<comments>\n${comments}\n</comments>` }
+    task.pending = { mode: "senior", note: `The user asked for changes to plan ${task.plan}. Revise it:\n${comments}` }
     task.phase = "running"
     save(task)
     return this.step(task, signal)

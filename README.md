@@ -76,9 +76,16 @@ To update later, run `git pull` in the clone and restart OpenCode.
 ## Use
 
 - **Change something:** describe it. The polisher shows the polished request and asks
-  [Send] [Edit] [Cancel]. Set `"polish": "off"` to send messages as written.
+  [Send] [Edit] [Cancel]. Your replies during a task (answers, plan comments, questions) are
+  polished and confirmed the same way; the agents get both the polished text and your
+  original words. Build/test commands are sent as typed. Set `"polish": "off"` to send
+  everything as written.
 - **Ask about the code:** the Explorer answers. No task starts.
-- **Plans:** you see each plan's summary and choose [Approve] [Change] [Stop].
+- **Ask during a task:** while the team waits on you, a question goes to the agent the task
+  waits on (Senior, or Triage before there's a plan), in its own session with the full
+  context. The task doesn't move; you then answer or decide.
+- **Plans:** you see each plan's summary and file path and choose [Approve] [Change] [Stop].
+  Any feedback on the plan is sent as Change.
 - **Questions:** Triage, Senior and Oracle may ask you questions. Answer in your own words.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the
   changed files) and choose [Retry] / [Continue +10] / [Stop].
