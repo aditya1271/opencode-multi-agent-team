@@ -1,6 +1,8 @@
 # Project guide for agents
 
 Fill in what an agent would otherwise have to work out on every task. Keep it short and exact.
+The build and test commands the team uses as checks go in the plugin config (`checks`); this
+file adds the details around them.
 
 ## Environment
 

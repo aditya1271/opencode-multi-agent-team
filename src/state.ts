@@ -30,7 +30,7 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   oracle_advice: "oracle",
 }
 
-export type Phase = "running" | "questions" | "approval" | "stuck" | "budget" | "done" | "stopped"
+export type Phase = "running" | "checks" | "questions" | "approval" | "stuck" | "budget" | "done" | "stopped"
 export const TERMINAL: Phase[] = ["done", "stopped"]
 
 export interface Pending {
@@ -73,6 +73,8 @@ export interface TaskState {
   seq: Record<string, number>
   trivial?: boolean
   trivialFailed?: boolean
+  /** The user chose to skip build and test: no check commands, builds are blocked. */
+  skipChecks?: boolean
   plan: number
   planSteps: number
   planRisk: boolean

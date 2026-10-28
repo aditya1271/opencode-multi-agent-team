@@ -4,7 +4,7 @@ import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { agentId, evaluate, permissionsFor, roleOf, toolVisible, type Rule } from "./agents.ts"
-import { ROLES, type Config, type Role } from "./config.ts"
+import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
 import { allowedStatuses, reportSchema } from "./report.ts"
 import { counter, runs, touch, type ToolKind } from "./runtime.ts"
 import { nextLogPath, save } from "./state.ts"
@@ -29,7 +29,7 @@ export function commandParts(command: string): string[] {
 
 export function matchesAny(command: string, patterns: string[]): boolean {
   const res = patterns.map((p) => (p.endsWith(" *") ? [globToRegExp(p), globToRegExp(p.slice(0, -2))] : [globToRegExp(p)])).flat()
-  return commandParts(command).some((part) => res.some((re) => re.test(part)))
+  return [command.trim(), ...commandParts(command)].some((part) => res.some((re) => re.test(part)))
 }
 
 export function toolKind(tool: string, input: unknown, config: Config): ToolKind {
@@ -39,7 +39,7 @@ export function toolKind(tool: string, input: unknown, config: Config): ToolKind
   const agents = Object.values(config.agents)
   if (tool === "shell") {
     const cmd = String((input as { command?: unknown })?.command ?? "")
-    if (matchesAny(cmd, config.buildCommands.patterns)) return "build"
+    if (matchesAny(cmd, buildPatterns(config))) return "build"
     return matchesAny(cmd, agents.flatMap((a) => a?.commands ?? [])) ? "index" : "shell"
   }
   if (tool === "execute" || tool.includes("_") || agents.some((a) => a?.tools?.includes(tool))) return "index"
@@ -155,6 +155,8 @@ export async function registerGuards(ctx: Context, config: Config) {
             ? " Running out of tool calls is not a reason for BLOCKED: report DONE only if the check passed, otherwise FAILED with the current error and what you tried."
             : ""),
       )
+    if (run.task?.skipChecks && kind === "build")
+      throw new Error("Build and test are skipped for this task (the user chose this). Don't build or test; finish the edits and report.")
     run.toolCalls++
     run.tools[kind] = (run.tools[kind] ?? 0) + 1
     run.inFlight++
@@ -180,7 +182,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     const task = run.task
     if (!task || (run.role !== "fixer" && run.role !== "analyser")) return
     const text = resultText(event.result)
-    const build = matchesAny(command, config.buildCommands.patterns)
+    const build = matchesAny(command, buildPatterns(config))
     if (!build && text.split("\n").length <= TRIM_LINES) return
     const logFile = nextLogPath(task)
     writeFileSync(logFile, `$ ${command}\n${text}\n[exit ${exit ?? "?"}]\n`)
@@ -193,7 +195,7 @@ export async function registerGuards(ctx: Context, config: Config) {
   })
 
   await ctx.shell.hook("create.before", (event) => {
-    if (matchesAny(event.command, config.buildCommands.patterns))
+    if (matchesAny(event.command, buildPatterns(config)))
       event.timeout = Math.max(event.timeout, config.buildCommands.timeoutMin * 60_000)
   })
 }

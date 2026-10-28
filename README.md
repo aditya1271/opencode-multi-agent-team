@@ -30,9 +30,9 @@ See [overview.md](overview.md) for the workflow, and [plan.md](plan.md) for the 
    `~/.config/opencode/opencode-multi-agent-team.json` or `<project>/.opencode/`. Then set a
    model for every role. The plugin ships no default models. List a backup model from a
    different provider after the main one; the plugin switches to it when the main model fails.
-3. Optionally add a project `AGENTS.md` with the exact build and test commands (template:
-   [examples/AGENTS.md](examples/AGENTS.md)). That saves every agent from working them out
-   on each task.
+3. Set each project's build and test commands (see
+   [Build and test commands](#build-and-test-commands)). Without them, every task first asks
+   you for them, or you can skip build and test.
 4. Restart OpenCode and select the `polisher` agent, or set `"defaultAgent": true`.
 
 ## Use
@@ -61,6 +61,44 @@ Edits are never reverted automatically. Every result lists the changed files.
 | Time per agent call | 30 min (fixer 240), or 15 min without activity |
 
 All limits are in the config file under `limits`.
+
+## Build and test commands
+
+The team never works out how to build a project. Give the commands in the project's config,
+`<project>/.opencode/opencode-multi-agent-team.json`:
+
+```jsonc
+{
+  "checks": {
+    "build": "make -j8 app",
+    "test": "make test"
+  }
+}
+```
+
+Use the exact commands you would type. For a remote build, give the whole command, e.g.
+`"build": "ssh buildhost \"cd /work/view3 && make -j16\""`. Leave out what doesn't exist
+(e.g. only `build`).
+
+- The commands go to Triage, Senior, Fixer and the Analyser, with the rule to use only these.
+  Plans use them as check commands. A step is done only when its check really ran and passed.
+- They count as builds: long timeout (`buildCommands.timeoutMin`), and the output goes to
+  `logs/`.
+- A project `AGENTS.md` can still explain more (targets, environment, how to read failures).
+
+**No commands configured:** `whenMissing` decides.
+
+| `checks.whenMissing` | What happens |
+|---|---|
+| `"ask"` (default) | Each task first asks you: **[Skip build/test]**, **[Give commands]** (for this task only) or **[Stop]**. |
+| `"skip"` | Tasks run without build and test. |
+
+**Build and test skipped:** agents don't build, test or look for how to, and build commands
+are blocked. Fixer reports a step done once its edits are made. The result says "Not built
+or tested". There is no extra review, so check the changes yourself.
+
+To skip in one project only, set `"checks": { "whenMissing": "skip" }` in that project's
+config.
 
 ## Per-agent tools and instructions
 

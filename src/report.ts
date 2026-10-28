@@ -87,9 +87,10 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (input.risk !== "yes" && input.risk !== "no") throw new Error('PLAN needs risk: "yes" or "no".')
     if (!Number.isInteger(input.steps) || (input.steps ?? 0) < 1) throw new Error("PLAN needs steps: the number of plan steps.")
   }
-  if (input.status === "DONE" && !input.checkCommand?.trim()) throw new Error("DONE needs checkCommand: the check command you ran.")
+  const skip = run.task?.skipChecks
+  if (input.status === "DONE" && !skip && !input.checkCommand?.trim()) throw new Error("DONE needs checkCommand: the check command you ran.")
   if (run.report) return "Already reported. Stop now."
-  if (input.status === "DONE") {
+  if (input.status === "DONE" && !skip) {
     const why = checkProblem(input.checkCommand ?? "", run.shells)
     if (why)
       throw new Error(

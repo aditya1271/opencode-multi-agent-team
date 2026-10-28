@@ -58,6 +58,19 @@ const fileBlock = (task: TaskState, name: string) => {
 
 const join = (...parts: (string | undefined | false)[]) => parts.filter(Boolean).join("\n\n")
 
+const checksText = (commands: string) =>
+  [
+    "# Build and test commands",
+    "Only Fixer and the Analyser run them; Triage and the planner don't build or test, they put these commands into the instruction or plan as check commands. Use only these; don't look for other ways to build or test. If they don't cover what is needed, the planner asks the user (QUESTIONS) and Fixer reports BLOCKED.",
+    commands,
+  ].join("\n\n")
+
+const SKIP_CHECKS = [
+  "# Build and test: skipped",
+  "The user chose to skip build and test for this task. Don't build, don't run tests, and don't look for how to.",
+  "Plans give `none` as each step's check. Fixer reports DONE once the edits are made (checkCommand `none`).",
+].join("\n\n")
+
 export class Team {
   readonly root: string
   private tasks = new Map<string, TaskState>()
@@ -202,8 +215,34 @@ export class Team {
     task.usage.polisher = { ...this.emptyPolisher(), calls: 1 }
     task.pending = { mode: "triage" }
     this.tasks.set(polisherSession, task)
+    const { build, test, whenMissing } = this.config.checks
+    if (build.trim() || test.trim()) {
+      const lines = [build.trim() && `- Build: \`${build.trim()}\``, test.trim() && `- Test: \`${test.trim()}\``].filter(Boolean)
+      writeFile(task, "checks.md", checksText(lines.join("\n")))
+    } else if (whenMissing === "skip") this.skipChecks(task)
+    else {
+      task.phase = "checks"
+      task.questionsAt = Date.now()
+    }
     save(task)
     this.log(`task ${task.id} started`)
+    return this.step(task, signal)
+  }
+
+  private skipChecks(task: TaskState) {
+    task.skipChecks = true
+    writeFile(task, "checks.md", SKIP_CHECKS)
+  }
+
+  /** The user's build and test commands for this task, or "skip". */
+  private async checks(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
+    const last = await this.lastUserMessage(task.polisherSession)
+    const given = (last && last.time > (task.questionsAt ?? 0) && last.text.trim() ? last.text : text).trim()
+    if (!given) return 'answer needs text: the commands, or "skip". NEXT ACTION: call team with action "answer".'
+    if (/^skip\b/i.test(given)) this.skipChecks(task)
+    else writeFile(task, "checks.md", checksText(`The user gave:\n\n${given}`))
+    task.phase = "running"
+    save(task)
     return this.step(task, signal)
   }
 
@@ -248,6 +287,7 @@ export class Team {
   }
 
   private async answer(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
+    if (task.phase === "checks") return this.checks(task, text, signal)
     if (task.phase !== "questions" || !task.questionsFrom) return this.wrongPhase(task, "answer")
     const last = await this.lastUserMessage(task.polisherSession)
     const answer = last && last.time > (task.questionsAt ?? 0) && last.text.trim() ? last.text : text
@@ -386,7 +426,7 @@ export class Team {
         return
       }
       case "fix_trivial": {
-        const failure = r.status === "DONE" ? this.checkFailure(res) : undefined
+        const failure = r.status === "DONE" ? this.checkFailure(task, res) : undefined
         const file = this.reportFile(task, "report", p.mode, r, failure ? `\n\n**Plugin:** ${failure}` : "")
         this.record(task, p.mode, failure ? { ...r, status: "FAILED", summary: failure } : r, file)
         if (r.status === "DONE" && !failure) {
@@ -454,7 +494,7 @@ export class Team {
         return
       }
       case "fix": {
-        const failure = r.status === "DONE" ? this.checkFailure(res) : undefined
+        const failure = r.status === "DONE" ? this.checkFailure(task, res) : undefined
         const file = this.reportFile(task, "report", p.mode, r, failure ? `\n\n**Plugin:** ${failure}` : "")
         this.record(task, p.mode, failure ? { ...r, status: "FAILED", summary: failure } : r, file)
         task.seniorUnseen.push(file)
@@ -503,7 +543,8 @@ export class Team {
   }
 
   /** Why a DONE doesn't count: the check command wasn't run, or its real exit code wasn't 0. */
-  private checkFailure(res: RunResult): string | undefined {
+  private checkFailure(task: TaskState, res: RunResult): string | undefined {
+    if (task.skipChecks) return undefined
     const why = checkProblem(res.report?.checkCommand ?? "", res.run?.shells ?? [])
     return why ? `${why}, so DONE counts as FAILED.` : undefined
   }
@@ -567,12 +608,13 @@ export class Team {
     switch (p.mode) {
       case "triage":
         if (!freshSession && p.note) return join(p.note, capNote())
-        return join(`Task ${task.id}: sort this request and report.`, f("request.md"), f("answers.md"), p.note, capNote())
+        return join(`Task ${task.id}: sort this request and report.`, f("request.md"), f("checks.md"), f("answers.md"), p.note, capNote())
       case "triage_fail":
         return join(
           "MODE: failure. The trivial attempt did not finish. Write the full brief for the planner, with code findings only: findings with path:line, the relevant code excerpts with line ranges, the edits that were kept, and why it is not trivial. Don't restate the user's goal or constraints; the planner gets the request itself. Report ESCALATE.",
           edited,
           f("request.md"),
+          f("checks.md"),
           f("answers.md"),
           f("brief.md"),
           latest("report"),
@@ -580,14 +622,18 @@ export class Team {
         )
       case "fix_trivial":
         return join(
-          "Make this trivial change. Run the check command, and iterate until it passes or you are stuck. Report DONE with checkCommand, or FAILED / BLOCKED.",
+          task.skipChecks
+            ? "Make this trivial change. Build and test are skipped: don't run them. Report DONE when the edit is made, or FAILED / BLOCKED."
+            : "Make this trivial change. Run the check command, and iterate until it passes or you are stuck. Report DONE with checkCommand, or FAILED / BLOCKED.",
           f("request.md"),
+          f("checks.md"),
           f("brief.md"),
         )
       case "review_trivial":
         return join(
           `MODE: review. A trivial change touched more than one file. Check the changes against the request and the instruction. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Fixer.`,
           f("request.md"),
+          f("checks.md"),
           f("answers.md"),
           f("brief.md"),
           latest("report"),
@@ -600,6 +646,7 @@ export class Team {
           return join(
             `Task ${task.id}: write a plan for this request.`,
             f("request.md"),
+          f("checks.md"),
             f("brief.md"),
             f("answers.md"),
             ...[...new Set([...earlier, ...unseen])].map(f),
@@ -618,6 +665,7 @@ export class Team {
         return join(
           "MODE: review of a destructive plan. Check that the destructive or irreversible steps are necessary and safe, and that nothing is lost. Report APPROVE (optional notes) or CHANGES (what must change and why).",
           f("request.md"),
+          f("checks.md"),
           f("answers.md"),
           f("brief.md"),
           f(`plan-${task.plan}.md`),
@@ -627,6 +675,7 @@ export class Team {
         return join(
           `MODE: advice. The task is stuck: ${p.note ?? ""}. Say which approach the senior planner should take (ADVICE), or, if the decision belongs to the user, report QUESTIONS.`,
           f("request.md"),
+          f("checks.md"),
           f("brief.md"),
           f("answers.md"),
           ...plans,
@@ -637,10 +686,12 @@ export class Team {
       }
       case "fix": {
         const head = `Plan ${task.plan}, step ${task.step} of ${task.planSteps}${task.step === task.planSteps ? " (the final check)" : ""}.`
-        const rules = "Do only this step. Iterate freely until its check command passes. Report DONE with checkCommand, FAILED when stuck, or BLOCKED when the step can't work as written."
+        const rules = task.skipChecks
+          ? "Do only this step. Build and test are skipped: don't run them. Report DONE when the step's edits are made, FAILED when stuck, or BLOCKED when the step can't work as written."
+          : "Do only this step. Iterate freely until its check command passes. Report DONE with checkCommand, FAILED when stuck, or BLOCKED when the step can't work as written."
         if (!task.fixerSeenPlan) {
           task.fixerSeenPlan = true
-          return join(`Carry out this plan one step at a time. ${head}`, rules, f(`plan-${task.plan}.md`), p.note)
+          return join(`Carry out this plan one step at a time. ${head}`, rules, f(`plan-${task.plan}.md`), f("checks.md"), p.note)
         }
         return join(head, p.note, rules)
       }
@@ -651,14 +702,16 @@ export class Team {
           task.latestLog ? `The latest full build/test log: ${task.latestLog} (read it as needed).` : "",
           "Decide: LOCAL (Fixer can fix it; give exact instructions), REPLAN (the plan is wrong, or the step is going in circles), or ESCALATE (cause unclear). If the same error came back or a fix undid an earlier one, do not answer LOCAL.",
           f(`plan-${task.plan}.md`),
+          f("checks.md"),
           ...stepFiles,
         )
       }
       case "review": {
         const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.file).map((h) => f(h.file!))
         return join(
-          `MODE: review. Plan ${task.plan} is finished and its final check passed. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Fixer.`,
+          `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Fixer.`,
           f("request.md"),
+          f("checks.md"),
           f("answers.md"),
           f(`plan-${task.plan}.md`),
           ...reports.slice(-4),
@@ -681,6 +734,11 @@ export class Team {
           task.pending?.mode === "fix" ? ` Next: fixer, step ${task.step} of ${task.planSteps}.` : task.pending ? ` Next: ${MODE_ROLE[task.pending.mode]} (${task.pending.mode}).` : ""
         return `PROGRESS: ${lastLine}.${progress} ${attempts}\nNEXT ACTION: show this progress line to the user in one line, then call team with action "continue".`
       }
+      case "checks":
+        return join(
+          "No build or test commands are configured for this project (checks.build / checks.test).",
+          `NEXT ACTION: ask the user [Skip build/test] [Give commands] [Stop]. Skip → team "answer" with text "skip". Give commands → ask for the build and test commands as free text, then team "answer" with them word for word. Stop → team "stop".`,
+        )
       case "questions":
         return join(
           `QUESTIONS from ${task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"}:`,
@@ -714,7 +772,14 @@ export class Team {
           `NEXT ACTION: show this to the user and ask [Continue +10 attempts] [Stop]. Continue → team "extend". Stop → team "stop".`,
         )
       case "done":
-        return join(`DONE: ${task.doneSummary ?? lastLine}`, `Changed files:\n${files}`, usage(), `Task folder: ${task.dir}`, "NEXT ACTION: tell the user the result. The task is finished.")
+        return join(
+          `DONE: ${task.doneSummary ?? lastLine}`,
+          task.skipChecks ? "Not built or tested: build and test were skipped." : "",
+          `Changed files:\n${files}`,
+          usage(),
+          `Task folder: ${task.dir}`,
+          "NEXT ACTION: tell the user the result. The task is finished.",
+        )
       case "stopped":
         return join(
           `STOPPED: task ${task.id}. Files already edited stay as they are; nothing was reverted.`,

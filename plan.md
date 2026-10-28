@@ -75,6 +75,12 @@ sandbox project. Where the build differs from the text below, "Built differently
   (`prompts/<role>.instructions.md`, replaced by `instructions`). The ask-first list for
   destructive commands comes after `commands`, so it always wins.
 - Usage tool kind "graph" is now "index" (any configured code-search tool or command).
+- Build and test commands come from config (`checks.build`, `checks.test`), not from agents
+  working them out. They go to every agent that builds or plans (`checks.md` in the task
+  folder) and count as build patterns. With none configured, `checks.whenMissing` decides:
+  `ask` (default: before triage the user picks [Skip build/test] [Give commands] [Stop]) or
+  `skip`. With skip, a hook blocks build commands, DONE needs no check, and the result says
+  "Not built or tested". No extra review is added. The user checks the changes.
 
 ---
 

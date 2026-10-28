@@ -75,6 +75,9 @@ user ─► Polisher ─► [Send] [Edit] [Cancel]
 ## User touchpoints
 
 - **Confirm the request** after it's rewritten.
+- **Build and test commands** are set per project. Agents never work out how to build. If
+  none are set, the task first asks the user for them, or the user skips build and test
+  (the result then says "not built or tested").
 - **Answer questions.** Only Triage, Senior and Oracle can ask them.
 - **Approve every plan,** together with Oracle's notes on destructive plans.
 - **Allow or deny dangerous commands** (reset, clean, delete, revert, submit) when they run.

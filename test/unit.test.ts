@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { evaluate, permissionsFor, systemPrompt, toolVisible } from "../src/agents.ts"
-import { DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
+import { buildPatterns, DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
 import { commandParts, matchesAny, toolKind, trimLog } from "../src/guards.ts"
-import { allowedStatuses, checkProblem } from "../src/report.ts"
+import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
+import { beginRun, runs } from "../src/runtime.ts"
 import { newTask, taskId } from "../src/state.ts"
 import { add, hints, table } from "../src/usage.ts"
 
@@ -64,6 +65,24 @@ describe("report statuses", () => {
     expect(checkProblem("make test", [])).toContain("was not run")
     expect(checkProblem("make test", [{ command: "make test", exit: 2 }])).toContain("exited with 2")
     expect(checkProblem("make test", [{ command: "cd x && make  test", exit: 0 }])).toBeUndefined()
+  })
+  test("DONE needs a passing check, unless the user skipped build and test", () => {
+    const t = newTask("/tmp/opencode/omat-test", "ses_y", "/tmp", "Goal\nedit", 40)
+    const done = { status: "DONE", summary: "s", content: "c" }
+    beginRun("ses_fix", { role: "fixer", mode: "fix", task: t, toolLimit: 10 })
+    expect(() => acceptReport(DEFAULTS, "ses_fix", done)).toThrow("checkCommand")
+    expect(() => acceptReport(DEFAULTS, "ses_fix", { ...done, checkCommand: "make" })).toThrow("was not run")
+    t.skipChecks = true
+    expect(acceptReport(DEFAULTS, "ses_fix", done)).toContain("Report received")
+    runs.delete("ses_fix")
+  })
+  test("buildPatterns adds the configured build and test commands", () => {
+    const c = merge(DEFAULTS, { checks: { build: "ssh host qftcmake", test: "" } })
+    expect(buildPatterns(c)).toContain("ssh host qftcmake *")
+    expect(toolKind("shell", { command: "ssh host qftcmake -j8" }, c)).toBe("build")
+    expect(toolKind("shell", { command: "ssh host qftcmake" }, c)).toBe("build")
+    const ssh = merge(DEFAULTS, { checks: { build: `ssh h "cd /v3 && qftcmake"` } })
+    expect(toolKind("shell", { command: `ssh h "cd /v3 && qftcmake" -j8` }, ssh)).toBe("build")
   })
   test("taskId skips a Goal heading", () => {
     expect(taskId("**Goal**\nFix the parser", new Date(2026, 0, 2, 3, 4, 5))).toBe("20260102-030405-fix-the-parser")

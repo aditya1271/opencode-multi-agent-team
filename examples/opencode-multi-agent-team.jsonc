@@ -45,7 +45,18 @@
   // Review runs after a failure, for risky plans, or when at least this many files changed.
   "review": { "minFiles": 4 },
 
-  // Build commands: long timeout, and their output goes to the task's logs/ folder.
+  // The project's build and test commands, exactly as you'd type them. Best set per project in
+  // <project>/.opencode/opencode-multi-agent-team.json. Agents use only these and never work out
+  // how to build. With both empty, whenMissing decides: "ask" (each task asks: skip, give
+  // commands, or stop) or "skip" (no build or test; the result says so).
+  "checks": {
+    "build": "",   // e.g. "make -j8 app" or "ssh buildhost \"cd /work && make -j16\""
+    "test": "",    // e.g. "make test"
+    "whenMissing": "ask"
+  },
+
+  // More build patterns: long timeout, and their output goes to the task's logs/ folder.
+  // The checks commands count as builds automatically.
   "buildCommands": { "patterns": ["make *", "ninja *", "cmake *"], "timeoutMin": 120 },
 
   // Extra shell patterns that always ask you first (added to the built-in list).

@@ -47,6 +47,8 @@ export interface Config {
     modelRetryWaits: number
   }
   review: { minFiles: number }
+  /** The project's build and test commands. When both are empty, whenMissing decides. */
+  checks: { build: string; test: string; whenMissing: "ask" | "skip" }
   buildCommands: { patterns: string[]; timeoutMin: number }
   askCommands: string[]
   readOnlyCommands: string[]
@@ -71,6 +73,7 @@ export const DEFAULTS: Config = {
     modelRetryWaits: 2,
   },
   review: { minFiles: 4 },
+  checks: { build: "", test: "", whenMissing: "ask" },
   buildCommands: { patterns: ["make *", "ninja *", "cmake *"], timeoutMin: 120 },
   askCommands: [],
   readOnlyCommands: [
@@ -85,6 +88,10 @@ export const ASK_COMMANDS = [
   "git reset *", "git clean *", "git checkout *", "git push *", "git rebase *", "rm -rf *", "rm -fr *",
   "p4 revert *", "p4 submit *", "p4 delete *", "p4 obliterate *", "sudo *",
 ]
+
+/** Build patterns plus the configured build and test commands (long timeout, output to logs/). */
+export const buildPatterns = (config: Config) =>
+  [...config.buildCommands.patterns, ...[config.checks.build, config.checks.test].filter((c) => c.trim()).map((c) => `${c.trim()} *`)]
 
 export const expandHome = (p: string) => (p.startsWith("~") ? path.join(homedir(), p.slice(1)) : p)
 
