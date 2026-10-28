@@ -20,20 +20,57 @@ See [overview.md](overview.md) for the workflow, and [plan.md](plan.md) for the 
 
 ## Install
 
-1. Add the plugin to `opencode.jsonc` (global or project):
+The plugin isn't on npm. OpenCode loads it from a local folder, so you clone the repository
+first and give OpenCode the folder's path. No `npm install` or build step is needed: OpenCode
+runs the TypeScript source directly. Requires OpenCode 2.2 or later.
 
-   ```jsonc
-   { "plugins": ["/path/to/opencode-multi-agent-team"] }
+1. **Clone the repository.** Any folder works; this example uses your home folder:
+
+   ```sh
+   git clone https://github.com/aditya1271/opencode-multi-agent-team.git ~/opencode-multi-agent-team
    ```
 
-2. Copy [examples/opencode-multi-agent-team.jsonc](examples/opencode-multi-agent-team.jsonc) to
-   `~/.config/opencode/opencode-multi-agent-team.json` or `<project>/.opencode/`. Then set a
+2. **Get the clone's full path.** You need it in the next step:
+
+   ```sh
+   cd ~/opencode-multi-agent-team
+   pwd
+   ```
+
+   This prints something like `/home/alice/opencode-multi-agent-team`.
+
+3. **Add that path to OpenCode's `plugins` list.** Open the global config,
+   `~/.config/opencode/opencode.json` (create it if it doesn't exist), or a project's
+   `<project>/.opencode/opencode.jsonc` to use the team in one project only. Use the full
+   path from step 2; `~` is not expanded here.
+
+   ```jsonc
+   {
+     "plugins": ["/home/alice/opencode-multi-agent-team"]
+   }
+   ```
+
+   If there is already a `plugins` list, add the path to it and keep the existing entries:
+   `"plugins": ["some-other-plugin", "/home/alice/opencode-multi-agent-team"]`.
+
+4. **Create the team's config and set the models.** Copy the example from the clone:
+
+   ```sh
+   cp ~/opencode-multi-agent-team/examples/opencode-multi-agent-team.jsonc ~/.config/opencode/opencode-multi-agent-team.json
+   ```
+
+   (or to `<project>/.opencode/opencode-multi-agent-team.json` for one project). Then set a
    model for every role. The plugin ships no default models. List a backup model from a
    different provider after the main one; the plugin switches to it when the main model fails.
-3. Set each project's build and test commands (see
+
+5. **Set each project's build and test commands** (see
    [Build and test commands](#build-and-test-commands)). Without them, every task first asks
    you for them, or you can skip build and test.
-4. Restart OpenCode and select the `polisher` agent, or set `"defaultAgent": true`.
+
+6. **Restart OpenCode** and select the `polisher` agent, or set `"defaultAgent": true` in the
+   team's config.
+
+To update later, run `git pull` in the clone and restart OpenCode.
 
 ## Use
 
