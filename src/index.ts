@@ -7,6 +7,7 @@ import { registerFallback } from "./fallback.ts"
 import { registerGuards } from "./guards.ts"
 import { acceptReport, REPORT_DESCRIPTION, REPORT_INPUT } from "./report.ts"
 import { stopAfterReport } from "./run.ts"
+import { TeamStats } from "./rpc.ts"
 import type { Report } from "./runtime.ts"
 import { Team, TEAM_DESCRIPTION, TEAM_SCHEMA, type TeamInput } from "./team.ts"
 
@@ -56,6 +57,8 @@ export default Plugin.define({
           } catch (e) {
             log(`team error: ${(e as Error).stack ?? String(e)}`)
             return { content: `The team plugin hit an error: ${(e as Error).message}\nNEXT ACTION: tell the user.` }
+          } finally {
+            team.onChange(context.sessionID)
           }
         },
       })
@@ -71,6 +74,11 @@ export default Plugin.define({
         },
       })
     })
+
+    const stats = await ctx.rpc.register(TeamStats, {
+      stats: async (input) => team.sidebar((input as { sessionID: string }).sessionID),
+    })
+    team.onChange = (sessionID) => void stats.events.emit("changed", { sessionID }).catch(() => {})
 
     await registerGuards(ctx, config)
     await registerFallback(ctx, config, log)

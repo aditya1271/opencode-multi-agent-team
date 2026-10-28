@@ -105,6 +105,8 @@ export function report(usage: Partial<Record<Role, AgentUsage>>, steps = 1): str
 
 export interface UsageLine {
   task: string
+  /** The polisher session (set for code questions, which have no task folder). */
+  session?: string
   time: number
   outcome: string
   usage: Partial<Record<Role, AgentUsage>>

@@ -5,8 +5,13 @@ import { toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, runs } from "../src/runtime.ts"
-import { newTask, taskId } from "../src/state.ts"
+import { newTask, save, taskId } from "../src/state.ts"
+import { Team } from "../src/team.ts"
+import { compact, line } from "../src/rpc.ts"
 import { add, hints, table } from "../src/usage.ts"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 describe("config", () => {
   test("stripJsonc keeps strings and drops comments and trailing commas", () => {
@@ -177,5 +182,46 @@ describe("usage", () => {
     expect(t).toContain("1.2M")
     expect(t.split("\n").pop()).toMatch(/^total\s+3\s+33\s+27/)
     expect(hints(usage)).toContain("polisher used 2 read/search/shell/edit calls (expected 0)")
+  })
+})
+
+describe("sidebar", () => {
+  test("current task rows with a live call, plus session totals over finished tasks", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-sidebar-"))
+    const tokens = (input: number, read: number, output: number) => ({ input, output, reasoning: 0, cache: { read, write: 0 } })
+    const ctx = { session: { get: async ({ sessionID }: { sessionID: string }) => ({ tokens: sessionID === "ses_fix" ? tokens(150, 500, 30) : tokens(0, 0, 0) }) } }
+    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root }), () => {})
+    try {
+      const old = newTask(root, "ses_p", "/w", "a old task", 40)
+      old.phase = "done"
+      add(old.usage, "fixer", { calls: 1, prompts: 2, tools: { edit: 3 }, input: 1000, cacheRead: 0, output: 0 })
+      save(old)
+      const cur = newTask(root, "ses_p", "/w", "b current task", 40)
+      cur.phase = "fixing" as never
+      cur.attempts = 3
+      add(cur.usage, "triage", { calls: 1, prompts: 4, tools: { search: 5 }, input: 300, cacheRead: 0, output: 0 })
+      save(cur)
+      const run = beginRun("ses_fix", { role: "fixer", mode: "fix", task: cur, toolLimit: 10 })
+      run.base = { input: 50, cacheRead: 0, output: 0 }
+      run.prompts = 2
+      run.tools = { edit: 1 }
+
+      const s = await team.sidebar("ses_p")
+      expect(s.task?.id).toBe(cur.id)
+      expect(s.task?.attempts).toBe(3)
+      expect(s.task?.rows.map((r) => [r.role, r.running])).toEqual([["triage", false], ["fixer", true]])
+      const fixer = s.task!.rows[1]!
+      expect([fixer.calls, fixer.prompts, fixer.tools, fixer.input, fixer.cacheRead, fixer.output]).toEqual([0, 2, 1, 100, 500, 30])
+      expect(s.session.tasks).toBe(2)
+      expect(s.session.total).toEqual({ calls: 2, prompts: 8, tools: 9, tokens: 300 + 630 + 1000 })
+      expect((await team.sidebar("ses_other")).task).toBeUndefined()
+    } finally {
+      runs.delete("ses_fix")
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  test("compact numbers and fixed-width lines", () => {
+    expect([compact(950), compact(1234), compact(56_000), compact(2_500_000)]).toEqual(["950", "1.2k", "56k", "2.5M"])
+    expect(line("●", "analyser", 1, 22, 333, "4.4k", "50%")).toHaveLength(35)
   })
 })

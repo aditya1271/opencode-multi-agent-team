@@ -33,6 +33,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 type Tokens = { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
 
+/** A session's token counts as the usage table counts them: input incl. cache writes, output incl. reasoning. */
+export const tokenCounts = (t: Tokens) => ({
+  input: t.input + (t.cache.write ?? 0),
+  cacheRead: t.cache.read,
+  output: t.output + t.reasoning,
+})
+
 export async function runAgent(ctx: Context, config: Config, input: RunInput, log: (msg: string) => void): Promise<RunResult> {
   const zero: UsageDelta = { prompts: 0, tools: {}, input: 0, cacheRead: 0, output: 0 }
   const models = modelsFor(config, input.role)
@@ -57,6 +64,7 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
     task: input.task,
     toolLimit: config.limits.toolCalls[input.role],
   })
+  run.base = tokenCounts(before.tokens as Tokens)
   const start = Date.now()
   const callMs = (input.role === "fixer" ? config.limits.callMinutes.fixer : config.limits.callMinutes.default) * 60_000
   const stallMs = config.limits.stallMinutes * 60_000
@@ -136,15 +144,15 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
   }
 
   const after = await ctx.session.get({ sessionID: sid }).catch(() => undefined)
-  const b = before.tokens as Tokens
-  const a = (after?.tokens ?? before.tokens) as Tokens
+  const b = run.base ?? tokenCounts(before.tokens as Tokens)
+  const a = tokenCounts((after?.tokens ?? before.tokens) as Tokens)
   const usage: UsageDelta = {
     calls: 1,
     prompts: run.prompts,
     tools: run.tools,
-    input: a.input + (a.cache.write ?? 0) - (b.input + (b.cache.write ?? 0)),
-    cacheRead: a.cache.read - b.cache.read,
-    output: a.output + a.reasoning - (b.output + b.reasoning),
+    input: a.input - b.input,
+    cacheRead: a.cacheRead - b.cacheRead,
+    output: a.output - b.output,
     model: modelLabel(models[modelIndex]),
     ms: Date.now() - start,
   }

@@ -38,6 +38,7 @@ runs the TypeScript source directly. Requires OpenCode 2.2 or later.
    ```
 
    This prints something like `/home/alice/opencode-multi-agent-team`.
+   The same path loads both the team (server part) and its sidebar section (TUI part).
 
 3. **Add that path to OpenCode's `plugins` list.** Open the global config,
    `~/.config/opencode/opencode.json` (create it if it doesn't exist), or a project's
@@ -83,6 +84,23 @@ To update later, run `git pull` in the clone and restart OpenCode.
   changed files) and choose [Retry] / [Continue +10] / [Stop].
 - **Usage:** ask "how was the work divided?" to get a per-agent table (calls, prompts, tool
   calls, tokens, model) for the task, or for the last N tasks.
+- **Sidebar:** a **Team** section in the session sidebar shows the current task's phase and
+  attempts, then one row per agent: calls, prompts, tool calls, tokens, and that agent's
+  share of the task's tokens. The running agent is marked `●` and its numbers update live.
+  The last lines total the task and the whole session (all tasks and code questions). Click
+  the header to collapse it. Child sessions show their polisher's numbers.
+
+  ```
+  ▼ Team fixing · 7/40 attempts
+   agent    call prmt tool   tok    %
+   polisher    0    6    5   41k  12%
+   triage      1   14   22   88k  26%
+  ●fixer       2   31   58  190k  57%
+   analyser    1    4    6   17k   5%
+   task        4   55   91  336k
+   session     9  120  170  910k
+    2 tasks · 3 questions
+  ```
 
 Edits are never reverted automatically. Every result lists the changed files.
 

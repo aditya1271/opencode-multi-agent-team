@@ -8,7 +8,9 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "types": ["node"],
-    "lib": ["ES2023"]
+    "lib": ["ES2023"],
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid"
   },
   "include": ["src"]
 }

@@ -1,13 +1,16 @@
+import { existsSync, readdirSync } from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
-import { expandHome, modelLabel, modelsFor, type Config, type WorkerRole } from "./config.ts"
+import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
 import { buildPrompt, checksText, join, render, SKIP_CHECKS } from "./messages.ts"
-import { runAgent, type RunResult } from "./run.ts"
-import { counter, type Report, type ToolKind } from "./runtime.ts"
+import type { SidebarStats } from "./rpc.ts"
+import { runAgent, tokenCounts, type RunResult } from "./run.ts"
+import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
 import {
   appendFile,
   findTask,
+  loadTask,
   MODE_ROLE,
   newTask,
   save,
@@ -19,7 +22,7 @@ import {
   type Phase,
   type TaskState,
 } from "./state.ts"
-import { add, appendUsage, lastUsage, report as usageReport, table, type AgentUsage } from "./usage.ts"
+import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
 export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "stop", "resume", "retry", "extend", "stats", "status"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
@@ -53,6 +56,12 @@ const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = { triage: "triage", tri
 export class Team {
   readonly root: string
   private tasks = new Map<string, TaskState>()
+  /** Task folders per polisher session, built on first use. */
+  private sessionDirs?: Map<string, string[]>
+  /** Code questions per polisher session (they have no task folder). */
+  private questions = new Map<string, { count: number; usage: Partial<Record<Role, AgentUsage>> }>()
+  /** Called when a session's numbers change (the sidebar refreshes). */
+  onChange: (polisherSession: string) => void = () => {}
 
   constructor(
     private ctx: Context,
@@ -60,6 +69,96 @@ export class Team {
     private log: (msg: string) => void,
   ) {
     this.root = expandHome(config.taskDir)
+  }
+
+  // ---- sidebar ----
+
+  /** Per-agent usage of the session's current task (live during a call), and totals over the session. */
+  async sidebar(sessionID: string): Promise<SidebarStats> {
+    const task = this.task(sessionID)
+    const asked = this.questionsIn(sessionID)
+    const session = { tasks: 0, questions: asked.count, total: { calls: 0, prompts: 0, tools: 0, tokens: 0 } }
+    const sum = (usage: Partial<Record<Role, AgentUsage>>) => {
+      for (const u of Object.values(usage)) {
+        if (!u) continue
+        session.total.calls += u.calls
+        session.total.prompts += u.prompts
+        session.total.tools += toolTotal(u)
+        session.total.tokens += u.input + u.cacheRead + u.output
+      }
+    }
+    sum(asked.usage)
+    let current: SidebarStats["task"]
+    if (task) {
+      if (!TERMINAL.includes(task.phase)) await this.refreshPolisher(task)
+      const usage = structuredClone(task.usage)
+      const live = await this.liveCall(task)
+      if (live) add(usage, live.role, live.delta)
+      const rows = ROLES.filter((r) => usage[r]).map((role) => {
+        const u = usage[role]!
+        return { role, calls: u.calls, prompts: u.prompts, tools: toolTotal(u), input: u.input, cacheRead: u.cacheRead, output: u.output, running: live?.role === role }
+      })
+      current = { id: task.id, phase: task.phase, attempts: task.attempts, attemptLimit: task.attemptLimit, rows }
+      sum(usage)
+      session.tasks++
+    }
+    for (const dir of this.dirsOf(sessionID)) {
+      if (dir === task?.dir) continue
+      const other = loadTask(dir)
+      if (!other) continue
+      sum(other.usage)
+      session.tasks++
+    }
+    return { task: current, session }
+  }
+
+  /** The call running for this task right now, with its usage so far. */
+  private async liveCall(task: TaskState): Promise<{ role: Role; delta: UsageDelta } | undefined> {
+    const entry = [...runs.entries()].find(([, r]) => r.task?.id === task.id)
+    if (!entry) return undefined
+    const [sessionID, run] = entry
+    const info = await this.ctx.session.get({ sessionID }).catch(() => undefined)
+    const now = info ? tokenCounts(info.tokens as never) : run.base
+    const base = run.base ?? now
+    return {
+      role: run.role,
+      delta: {
+        prompts: run.prompts,
+        tools: run.tools,
+        input: Math.max(0, (now?.input ?? 0) - (base?.input ?? 0)),
+        cacheRead: Math.max(0, (now?.cacheRead ?? 0) - (base?.cacheRead ?? 0)),
+        output: Math.max(0, (now?.output ?? 0) - (base?.output ?? 0)),
+      },
+    }
+  }
+
+  private dirsOf(polisherSession: string): string[] {
+    if (!this.sessionDirs) {
+      this.sessionDirs = new Map()
+      const names = existsSync(this.root) ? readdirSync(this.root, { withFileTypes: true }).filter((d) => d.isDirectory()) : []
+      for (const d of names) {
+        const t = loadTask(path.join(this.root, d.name))
+        if (!t) continue
+        const list = this.sessionDirs.get(t.polisherSession) ?? []
+        list.push(t.dir)
+        this.sessionDirs.set(t.polisherSession, list)
+      }
+    }
+    return this.sessionDirs.get(polisherSession) ?? []
+  }
+
+  private questionsIn(polisherSession: string) {
+    let q = this.questions.get(polisherSession)
+    if (!q) {
+      q = { count: 0, usage: {} }
+      for (const line of lastUsage(this.root, Number.MAX_SAFE_INTEGER).lines)
+        if (line.task === "ask" && line.session === polisherSession && line.usage.explorer) {
+          q.count++
+          add(q.usage, "explorer", line.usage.explorer)
+        }
+      this.questions.set(polisherSession, q)
+    }
+    return q
   }
 
   async handle(input: TeamInput, polisherSession: string, signal: AbortSignal): Promise<string> {
@@ -200,6 +299,7 @@ export class Team {
     task.usage.polisher = { ...this.emptyPolisher(), calls: 1 }
     task.pending = { mode: "triage" }
     this.tasks.set(polisherSession, task)
+    this.sessionDirs?.set(polisherSession, [...this.dirsOf(polisherSession), task.dir])
     const { build, test, whenMissing } = this.config.checks
     if (build.trim() || test.trim()) {
       const lines = [build.trim() && `- Build: \`${build.trim()}\``, test.trim() && `- Test: \`${test.trim()}\``].filter(Boolean)
@@ -247,7 +347,10 @@ export class Team {
     )
     const usage: Partial<Record<string, AgentUsage>> = {}
     add(usage as never, "explorer", res.usage)
-    appendUsage(this.root, { task: "ask", time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
+    const asked = this.questionsIn(polisherSession)
+    appendUsage(this.root, { task: "ask", session: polisherSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
+    asked.count++
+    if (usage.explorer) add(asked.usage, "explorer", usage.explorer)
     if (!res.report) return `The explorer couldn't answer: ${res.failure}.\nNEXT ACTION: tell the user.`
     return join(
       `ANSWER (${res.report.status}):`,
@@ -325,6 +428,7 @@ export class Team {
     const prompt = buildPrompt(this.config, task, pending, !sessionID)
     task.attempts++
     save(task)
+    this.onChange(task.polisherSession)
     this.log(`task ${task.id}: attempt ${task.attempts} → ${role} (${pending.mode})`)
     const res = await runAgent(
       this.ctx,
@@ -360,6 +464,7 @@ export class Team {
     if (phase === "stuck") await this.refreshPolisher(task)
     if (phase === "done") await this.finish(task, "done")
     save(task)
+    this.onChange(task.polisherSession)
     return render(task)
   }
 

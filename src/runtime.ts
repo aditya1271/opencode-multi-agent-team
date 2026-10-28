@@ -34,6 +34,8 @@ export interface SessionRun {
   inFlight: number
   shells: ShellRun[]
   edited: Set<string>
+  /** Session token counts when the call started, for live usage. */
+  base?: { input: number; cacheRead: number; output: number }
 }
 
 /** Prompt and tool counts for sessions outside a worker call (the polisher). */
