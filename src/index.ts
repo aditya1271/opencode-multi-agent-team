@@ -7,7 +7,6 @@ import { expandHome, loadConfig, modelsFor, ROLES } from "./config.ts"
 import { registerFallback } from "./fallback.ts"
 import { registerGuards } from "./guards.ts"
 import { acceptReport, REPORT_DESCRIPTION, REPORT_INPUT } from "./report.ts"
-import { stopAfterReport } from "./run.ts"
 import { TeamStats } from "./rpc.ts"
 import type { Report } from "./runtime.ts"
 import { Team, TEAM_DESCRIPTION, TEAM_SCHEMA, type TeamInput } from "./team.ts"
@@ -74,7 +73,6 @@ export default Plugin.define({
         options: { codemode: false },
         execute: async (input, context) => {
           const reply = acceptReport(config, context.sessionID, input as Report)
-          stopAfterReport(ctx, context.sessionID)
           return { content: reply }
         },
       })

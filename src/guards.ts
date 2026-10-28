@@ -105,6 +105,13 @@ export async function registerGuards(ctx: Context, config: Config) {
       if (role === "manager") counter(event.sessionID).prompts++
       return
     }
+    // After `report`, the turn's last step gets no tools, so the session ends on its own
+    // (outcome "succeeded") instead of being interrupted.
+    if (run.report) {
+      for (const id of Object.keys(event.tools)) delete event.tools[id]
+      event.system.push({ type: "text", text: "Your report was accepted. Reply with the single word: done." })
+      return
+    }
     run.prompts++
     touch(event.sessionID)
     const report = event.tools.report

@@ -123,5 +123,5 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
       )
   }
   run.report = { ...input, summary: input.summary.split("\n").slice(0, 5).join("\n") }
-  return "Report received. You are done; stop now without further text."
+  return "Report received. You are done; reply with the single word: done."
 }

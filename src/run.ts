@@ -158,10 +158,3 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
   }
   return { end, sessionID: sid, report: run.report, failure, usage, run }
 }
-
-/** Stops the report's session shortly after `report`, so it doesn't take another turn. */
-export function stopAfterReport(ctx: Context, sessionID: string) {
-  setTimeout(() => {
-    void ctx.session.interrupt({ sessionID, resume: false }).catch(() => undefined)
-  }, 300)
-}
