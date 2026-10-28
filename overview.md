@@ -58,7 +58,7 @@ user ─► Manager ─► [Send] [Edit] [Cancel]
                        │ plan
                        ├── destructive? ─► Principal review
                        ▼
-                 user approves the plan  [Approve] [Change] [Stop]
+                 user approves the plan (free reply)
                        │
                        ▼
                  Developer: step 1 … last step (full build/test)

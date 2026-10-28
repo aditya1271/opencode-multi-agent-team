@@ -319,6 +319,11 @@ export class Team {
 
   private async start(managerSession: string, text: string, signal: AbortSignal, forcePlan = false): Promise<string> {
     const active = this.task(managerSession)
+    // A confirmed message sent as "start" while the task waits on the user is the user's reply to it.
+    if (active?.phase === "questions") return this.answer(active, text, signal)
+    if (active?.phase === "approval") return this.change(active, text, signal)
+    if (active && active.phase !== "running" && !TERMINAL.includes(active.phase))
+      return join("The task waits on the user's choice below; the message was not sent.", render(active))
     if (active && !TERMINAL.includes(active.phase))
       return [
         `A task is already active in this session: ${active.id} (${active.phase}). Only one task runs per session.`,

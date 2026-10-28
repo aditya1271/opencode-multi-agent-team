@@ -186,6 +186,31 @@ describe("usage", () => {
   })
 })
 
+describe("start while the task waits on the user", () => {
+  test("goes to the waiting task instead of asking [Stop task] [Wait]", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-redirect-"))
+    const team = new Team({ session: { context: async () => [] } } as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    team.step = async (t: any) => t.pending
+    try {
+      save(newTask(root, "ses_r", "/w", "x", 40))
+      const t = team.task("ses_r")
+      t.phase = "approval"
+      t.plan = 1
+      save(t)
+      const p = await team.handle({ action: "start", text: "critically review the plan" }, "ses_r", new AbortController().signal)
+      expect(p.mode).toBe("architect")
+      expect(p.note).toContain("critically review the plan")
+      const q = team.task("ses_r")
+      q.phase = "questions"
+      q.questionsFrom = "lead"
+      save(q)
+      expect((await team.handle({ action: "start", text: "option B" }, "ses_r", new AbortController().signal)).mode).toBe("lead")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("plan approval", () => {
   test("step titles come from the bold lead of numbered lines", () => {
     const plan = "## Steps\n1. **Write the parser** — `a.py:1-20`\n   1. nested detail\n2. plain step text\n- not a step"

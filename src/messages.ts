@@ -215,7 +215,7 @@ export function render(task: TaskState): string {
       return join(
         `PLAN ${task.plan} ready for approval. Show this block to the user exactly as written, without rewording or shortening it:`,
         `<show>\n${block}\n</show>`,
-        `NEXT ACTION: show the block above, then ask [Approve] [Change] [Stop]. Approve → team "approve". Change, or any feedback on the plan → polish the comments and confirm them [Send] [Edit] [Cancel], then team "change" with the confirmed comments. A question about the plan → polish and confirm it, then team "ask". Stop → team "stop".`,
+        `NEXT ACTION: show the block above and end with one line: "Reply to approve, change or stop the plan, or ask about it." No buttons. Then act on the user's reply: a clear approval ("approve", "go ahead") → team "approve"; a clear stop → team "stop"; feedback or requests for changes → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask".`,
       )
     }
     case "stuck":
