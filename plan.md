@@ -57,7 +57,7 @@ sandbox project. Where the build differs from the text below, "Built differently
   ls, git/p4 diff, …). The Analyser is asked before any other shell command.
 - `DONE` is checked when `report` is called. If the check command didn't run in that call,
   or its real exit code wasn't 0, `report` refuses DONE and the agent must run it or report
-  FAILED. The plugin checks again afterwards and counts a bad DONE as FAILED.
+  FAILED. That is the only check; a refused DONE never reaches the state machine.
 - At the tool-call limit, Fixer is told to report FAILED (diagnosis), not BLOCKED (new plan).
 - Reviews and the Oracle review get the user's answers and plan comments (`answers.md`).
 - `team` has extra actions: `stats` (usage for this task, or `last: N` tasks), `status`,
@@ -866,11 +866,16 @@ opencode-multi-agent-team/
     config.ts     config
     agents.ts     agent definitions and permissions
     team.ts       team tool and state machine (sections 7–9)
-    report.ts     report tool (schema per agent and state), file writing
+    messages.ts   per-state hand-off prompts and the team tool's results
+    state.ts      task state and task-folder files
+    run.ts        runs one agent call (limits, stall, stop after report)
+    runtime.ts    per-call counters shared by hooks and the report tool
+    report.ts     report tool (schema per agent and state), DONE check
     guards.ts     exit codes, log trimming, timeouts, p4 edit, tool-call limits, hangs
+    match.ts      glob and shell-command matching
     fallback.ts   backup models
     usage.ts      per-agent usage: calls, prompts, tool calls, tokens (section 12A)
-  prompts/        polisher.md triage.md senior.md explorer.md fixer.md analyser.md oracle.md
+  prompts/        <role>.md core prompts + <role>.instructions.md editable defaults
   examples/       opencode-multi-agent-team.json, AGENTS.md template
 ```
 

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { ASK_COMMANDS, expandHome, type Config, type Role, ROLES } from "./config.ts"
+import { matches } from "./match.ts"
 
 export interface Rule {
   action: string
@@ -77,16 +78,6 @@ export function permissionsFor(config: Config, role: Role): Rule[] {
   }
 }
 
-function patternRegExp(pattern: string): RegExp {
-  const body = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*").replace(/\?/g, ".")
-  return new RegExp(`^${body}$`)
-}
-
-function matches(pattern: string, value: string, shell: boolean): boolean {
-  if (patternRegExp(pattern).test(value)) return true
-  return shell && pattern.endsWith(" *") && patternRegExp(pattern.slice(0, -2)).test(value)
-}
-
 /** Last matching rule per resource; any deny denies, otherwise any ask asks. */
 export function evaluate(rules: Rule[], action: string, resources: readonly string[]): Rule["effect"] {
   const effects = (resources.length ? resources : ["*"]).map((resource) => {
@@ -139,6 +130,10 @@ export function systemPrompt(config: Config, role: Role): string {
   const body = core.includes("{{instructions}}")
     ? core.replace("{{instructions}}", instructions)
     : [core, instructions].join("\n\n")
-  const parts = [body, toolsNote(config, role), a.append ? textOrFile(a.append) : ""]
+  const polishOff =
+    role === "polisher" && config.polish === "off"
+      ? "Polishing is OFF: send the user's message to team start as written, without the [Send] [Edit] [Cancel] step."
+      : ""
+  const parts = [body, polishOff, toolsNote(config, role), a.append ? textOrFile(a.append) : ""]
   return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")
 }

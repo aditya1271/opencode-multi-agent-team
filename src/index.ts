@@ -28,16 +28,13 @@ export default Plugin.define({
       for (const role of ROLES) {
         const id = agentId(config, role)
         const models = modelsFor(config, role)
-        let polisherSystem = systemPrompt(config, role)
-        if (role === "polisher" && config.polish === "off")
-          polisherSystem += "\n\nPolishing is OFF: send the user's message to team start as written, without the [Send] [Edit] [Cancel] step."
         editor.update(id, (a) => {
           a.id = id as never
           a.name = id as never
           a.mode = role === "polisher" ? "primary" : "subagent"
           a.hidden = role !== "polisher"
           a.description = DESCRIPTIONS[role]
-          a.system = polisherSystem
+          a.system = systemPrompt(config, role)
           if (models[0]) a.model = models[0] as never
           a.permissions = permissionsFor(config, role) as never
         })

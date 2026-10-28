@@ -4,6 +4,7 @@ import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { agentId, evaluate, permissionsFor, roleOf, toolVisible, type Rule } from "./agents.ts"
+import { matchesAny } from "./match.ts"
 import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
 import { allowedStatuses, reportSchema } from "./report.ts"
 import { counter, runs, touch, type ToolKind } from "./runtime.ts"
@@ -12,25 +13,6 @@ import { nextLogPath, save } from "./state.ts"
 const EDIT_TOOLS = new Set(["edit", "write", "patch"])
 const TRIM_LINES = 80
 const ERROR_LINE = /\b(error|fatal|undefined reference|cannot find|no such file|failed|segmentation fault|assert(ion)?|traceback)\b/i
-
-function globToRegExp(glob: string): RegExp {
-  const body = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")
-  return new RegExp(`^${body}$`)
-}
-
-/** Splits a command line into simple commands, unwrapping `bash -c '...'`. */
-export function commandParts(command: string): string[] {
-  const unwrapped = command.replace(/\b(?:bash|sh|csh|tcsh)\s+-l?c\s+(['"])([\s\S]*)\1/g, (_, __, inner: string) => ` ; ${inner} ; `)
-  return unwrapped
-    .split(/&&|\|\||;|\||\n/)
-    .map((p) => p.trim().replace(/^(?:\w+=\S*\s+)*/, "").replace(/^(?:cd\s+\S+\s*)$/, ""))
-    .filter(Boolean)
-}
-
-export function matchesAny(command: string, patterns: string[]): boolean {
-  const res = patterns.map((p) => (p.endsWith(" *") ? [globToRegExp(p), globToRegExp(p.slice(0, -2))] : [globToRegExp(p)])).flat()
-  return [command.trim(), ...commandParts(command)].some((part) => res.some((re) => re.test(part)))
-}
 
 export function toolKind(tool: string, input: unknown, config: Config): ToolKind {
   if (tool === "read") return "read"
@@ -46,7 +28,7 @@ export function toolKind(tool: string, input: unknown, config: Config): ToolKind
   return "other"
 }
 
-function editedPaths(tool: string, input: unknown, cwd: string): string[] {
+function editedPaths(input: unknown, cwd: string): string[] {
   const i = (input ?? {}) as Record<string, unknown>
   const direct = i.filePath ?? i.path ?? i.file_path ?? i.file
   if (typeof direct === "string") return [path.resolve(cwd, direct)]
@@ -162,7 +144,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     run.inFlight++
     if (run.role === "fixer" && (event.tool === "edit" || event.tool === "write" || event.tool === "patch")) {
       const cwd = run.task?.workspace ?? ctx.location.directory
-      for (const file of editedPaths(event.tool, event.input, cwd)) if (isReadOnly(file)) await p4Edit(file)
+      for (const file of editedPaths(event.input, cwd)) if (isReadOnly(file)) await p4Edit(file)
     }
   })
 
@@ -173,7 +155,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     run.inFlight = Math.max(0, run.inFlight - 1)
     if (event.status !== "completed") return
     const cwd = run.task?.workspace ?? ctx.location.directory
-    if (EDIT_TOOLS.has(event.tool)) for (const file of editedPaths(event.tool, event.input, cwd)) run.edited.add(file)
+    if (EDIT_TOOLS.has(event.tool)) for (const file of editedPaths(event.input, cwd)) run.edited.add(file)
     if (event.tool !== "shell") return
     const command = String((event.input as { command?: unknown })?.command ?? "")
     const exit = resultExit(event.result)

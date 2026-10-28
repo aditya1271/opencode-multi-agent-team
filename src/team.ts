@@ -2,7 +2,7 @@ import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { expandHome, modelLabel, modelsFor, type Config, type WorkerRole } from "./config.ts"
-import { checkProblem } from "./report.ts"
+import { buildPrompt, checksText, join, render, SKIP_CHECKS } from "./messages.ts"
 import { runAgent, type RunResult } from "./run.ts"
 import { counter, type Report, type ToolKind } from "./runtime.ts"
 import {
@@ -10,7 +10,6 @@ import {
   findTask,
   MODE_ROLE,
   newTask,
-  readTaskFile,
   save,
   TERMINAL,
   writeFile,
@@ -51,26 +50,6 @@ export const TEAM_SCHEMA = {
 
 const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = { triage: "triage", triage_fail: "triage", senior: "senior", fix: "fixer" }
 
-const fileBlock = (task: TaskState, name: string) => {
-  const body = readTaskFile(task, name)
-  return body ? `<file name="${name}">\n${body}\n</file>` : ""
-}
-
-const join = (...parts: (string | undefined | false)[]) => parts.filter(Boolean).join("\n\n")
-
-const checksText = (commands: string) =>
-  [
-    "# Build and test commands",
-    "Only Fixer and the Analyser run them; Triage and the planner don't build or test, they put these commands into the instruction or plan as check commands. Use only these; don't look for other ways to build or test. If they don't cover what is needed, the planner asks the user (QUESTIONS) and Fixer reports BLOCKED.",
-    commands,
-  ].join("\n\n")
-
-const SKIP_CHECKS = [
-  "# Build and test: skipped",
-  "The user chose to skip build and test for this task. Don't build, don't run tests, and don't look for how to.",
-  "Plans give `none` as each step's check. Fixer reports DONE once the edits are made (checkCommand `none`).",
-].join("\n\n")
-
 export class Team {
   readonly root: string
   private tasks = new Map<string, TaskState>()
@@ -97,13 +76,13 @@ export class Team {
     if (!task) return "No task in this session. NEXT ACTION: polish the user's request and call team with action \"start\"."
     switch (input.action) {
       case "status":
-        return this.render(task)
+        return render(task)
       case "continue":
         if (task.phase === "stopped")
           return `Task ${task.id} is stopped.\nNEXT ACTION: ask the user whether to resume it. Yes → call team with action "resume".`
         return this.step(task, signal)
       case "resume":
-        if (task.phase !== "stopped") return this.render(task)
+        if (task.phase !== "stopped") return render(task)
         task.phase = task.pending ? "running" : "stuck"
         save(task)
         return this.step(task, signal)
@@ -136,7 +115,7 @@ export class Team {
         save(task)
         return this.step(task, signal)
     }
-    return this.render(task)
+    return render(task)
   }
 
   // ---- task lookup and polisher usage ----
@@ -188,6 +167,12 @@ export class Team {
     return undefined
   }
 
+  /** The user's own words: their latest message if it came after the plugin asked, else the polisher's text. */
+  private async userWords(task: TaskState, text: string): Promise<string> {
+    const last = await this.lastUserMessage(task.polisherSession)
+    return (last && last.time > (task.askedAt ?? 0) && last.text.trim() ? last.text : text).trim()
+  }
+
   // ---- actions ----
 
   private async start(polisherSession: string, text: string, signal: AbortSignal): Promise<string> {
@@ -222,7 +207,7 @@ export class Team {
     } else if (whenMissing === "skip") this.skipChecks(task)
     else {
       task.phase = "checks"
-      task.questionsAt = Date.now()
+      task.askedAt = Date.now()
     }
     save(task)
     this.log(`task ${task.id} started`)
@@ -236,8 +221,7 @@ export class Team {
 
   /** The user's build and test commands for this task, or "skip". */
   private async checks(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
-    const last = await this.lastUserMessage(task.polisherSession)
-    const given = (last && last.time > (task.questionsAt ?? 0) && last.text.trim() ? last.text : text).trim()
+    const given = await this.userWords(task, text)
     if (!given) return 'answer needs text: the commands, or "skip". NEXT ACTION: call team with action "answer".'
     if (/^skip\b/i.test(given)) this.skipChecks(task)
     else writeFile(task, "checks.md", checksText(`The user gave:\n\n${given}`))
@@ -289,8 +273,7 @@ export class Team {
   private async answer(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
     if (task.phase === "checks") return this.checks(task, text, signal)
     if (task.phase !== "questions" || !task.questionsFrom) return this.wrongPhase(task, "answer")
-    const last = await this.lastUserMessage(task.polisherSession)
-    const answer = last && last.time > (task.questionsAt ?? 0) && last.text.trim() ? last.text : text
+    const answer = await this.userWords(task, text)
     appendFile(task, "answers.md", `## Answer\n\n${answer}\n`)
     const note = `The user answered your questions:\n<answer>\n${answer}\n</answer>`
     const from = task.questionsFrom
@@ -304,8 +287,7 @@ export class Team {
 
   private async change(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
     if (task.phase !== "approval") return this.wrongPhase(task, "change")
-    const last = await this.lastUserMessage(task.polisherSession)
-    const comments = last && last.time > (task.questionsAt ?? 0) && last.text.trim() ? last.text : text
+    const comments = await this.userWords(task, text)
     appendFile(task, "answers.md", `## Comments on plan ${task.plan}\n\n${comments}\n`)
     task.skipOracleReview = true
     task.pending = { mode: "senior", note: `The user asked for changes to plan ${task.plan}. Revise it:\n<comments>\n${comments}\n</comments>` }
@@ -315,32 +297,32 @@ export class Team {
   }
 
   private async stop(task: TaskState): Promise<string> {
-    if (TERMINAL.includes(task.phase)) return this.render(task)
+    if (TERMINAL.includes(task.phase)) return render(task)
     task.phase = "stopped"
     await this.finish(task, "stopped")
-    return this.render(task)
+    return render(task)
   }
 
   private wrongPhase(task: TaskState, action: string) {
-    return `"${action}" doesn't apply now; the task is in phase ${task.phase}.\n\n${this.render(task)}`
+    return `"${action}" doesn't apply now; the task is in phase ${task.phase}.\n\n${render(task)}`
   }
 
   // ---- running one agent ----
 
   private async step(task: TaskState, signal: AbortSignal): Promise<string> {
-    if (task.phase !== "running" || !task.pending) return this.render(task)
+    if (task.phase !== "running" || !task.pending) return render(task)
     if (task.attempts >= task.attemptLimit) {
       task.phase = "budget"
       await this.refreshPolisher(task)
       save(task)
-      return this.render(task)
+      return render(task)
     }
     const pending = task.pending
     const role = MODE_ROLE[pending.mode]
     const keep = SESSION_MODES[pending.mode]
     const sessionID = keep && !pending.fresh ? task.sessions[keep] : undefined
     if (pending.mode === "fix" && !sessionID) task.fixerSeenPlan = false
-    const prompt = this.prompt(task, pending, !sessionID)
+    const prompt = buildPrompt(this.config, task, pending, !sessionID)
     task.attempts++
     save(task)
     this.log(`task ${task.id}: attempt ${task.attempts} → ${role} (${pending.mode})`)
@@ -378,7 +360,7 @@ export class Team {
     if (phase === "stuck") await this.refreshPolisher(task)
     if (phase === "done") await this.finish(task, "done")
     save(task)
-    return this.render(task)
+    return render(task)
   }
 
   private async finish(task: TaskState, outcome: string) {
@@ -406,30 +388,25 @@ export class Team {
     })
   }
 
-  private reportFile(task: TaskState, kind: string, mode: Mode, r: Report, extra = ""): string {
+  private reportFile(task: TaskState, kind: string, mode: Mode, r: Report): string {
     const where = task.plan && ["fix", "diagnose", "review"].includes(mode) ? ` (plan ${task.plan}, step ${task.step})` : ""
-    return writeNumbered(task, kind, `# ${MODE_ROLE[mode]}: ${r.status}${where}\n\n${r.summary}\n\n${r.content}${extra}`)
+    return writeNumbered(task, kind, `# ${MODE_ROLE[mode]}: ${r.status}${where}\n\n${r.summary}\n\n${r.content}`)
   }
 
   private apply(task: TaskState, p: Pending, r: Report, res: RunResult) {
-    const limits = this.config.limits
     switch (p.mode) {
       case "triage":
       case "triage_fail": {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
         writeFile(task, "brief.md", r.content)
         this.record(task, p.mode, r, "brief.md")
-        if (r.status === "TRIVIAL") {
-          task.trivial = true
-          task.pending = { mode: "fix_trivial", fresh: true }
-        } else task.pending = { mode: "senior" }
+        task.pending = r.status === "TRIVIAL" ? { mode: "fix_trivial", fresh: true } : { mode: "senior" }
         return
       }
       case "fix_trivial": {
-        const failure = r.status === "DONE" ? this.checkFailure(task, res) : undefined
-        const file = this.reportFile(task, "report", p.mode, r, failure ? `\n\n**Plugin:** ${failure}` : "")
-        this.record(task, p.mode, failure ? { ...r, status: "FAILED", summary: failure } : r, file)
-        if (r.status === "DONE" && !failure) {
+        const file = this.reportFile(task, "report", p.mode, r)
+        this.record(task, p.mode, r, file)
+        if (r.status === "DONE") {
           if ((res.run?.edited.size ?? 0) <= 1) return this.done(task, r.summary)
           task.pending = { mode: "review_trivial" }
           return
@@ -494,12 +471,11 @@ export class Team {
         return
       }
       case "fix": {
-        const failure = r.status === "DONE" ? this.checkFailure(task, res) : undefined
-        const file = this.reportFile(task, "report", p.mode, r, failure ? `\n\n**Plugin:** ${failure}` : "")
-        this.record(task, p.mode, failure ? { ...r, status: "FAILED", summary: failure } : r, file)
+        const file = this.reportFile(task, "report", p.mode, r)
+        this.record(task, p.mode, r, file)
         task.seniorUnseen.push(file)
         if (r.status === "BLOCKED") return this.planFailure(task, `Fixer is blocked on step ${task.step}: ${r.summary}`)
-        if (r.status === "DONE" && !failure) {
+        if (r.status === "DONE") {
           if (task.step < task.planSteps) {
             task.step++
             task.rounds = 0
@@ -542,13 +518,6 @@ export class Team {
     }
   }
 
-  /** Why a DONE doesn't count: the check command wasn't run, or its real exit code wasn't 0. */
-  private checkFailure(task: TaskState, res: RunResult): string | undefined {
-    if (task.skipChecks) return undefined
-    const why = checkProblem(res.report?.checkCommand ?? "", res.run?.shells ?? [])
-    return why ? `${why}, so DONE counts as FAILED.` : undefined
-  }
-
   private reviewRequired(task: TaskState) {
     return task.planHadFailure || task.planRisk || task.editedFiles.length >= this.config.review.minFiles
   }
@@ -575,7 +544,7 @@ export class Team {
 
   private toApproval(task: TaskState) {
     task.phase = "approval"
-    task.questionsAt = Date.now()
+    task.askedAt = Date.now()
   }
 
   private askUser(task: TaskState, mode: Mode, r: Report) {
@@ -585,213 +554,11 @@ export class Team {
     task.phase = "questions"
     task.questions = r.questions
     task.questionsFrom = mode
-    task.questionsAt = Date.now()
+    task.askedAt = Date.now()
   }
 
   private done(task: TaskState, summary: string) {
     task.phase = "done"
     task.doneSummary = summary
-  }
-
-  // ---- prompts ----
-
-  private prompt(task: TaskState, p: Pending, freshSession: boolean): string {
-    const f = (name: string) => fileBlock(task, name)
-    const latest = (kind: string) => (task.seq[kind] ? f(`${kind}-${task.seq[kind]}.md`) : "")
-    const edited = task.editedFiles.length ? `Files changed so far (kept): ${task.editedFiles.join(", ")}` : "No files changed so far."
-    const capNote = (): string | false => {
-      const notes: string[] = []
-      if (task.needInfo >= this.config.limits.needInfoPerTask) notes.push("The search limit is reached: plan with what you have, or ESCALATE.")
-      if (task.questionRounds >= this.config.limits.questionsPerTask) notes.push("The question limit is reached: decide with what you have.")
-      return notes.length ? notes.join(" ") : false
-    }
-    switch (p.mode) {
-      case "triage":
-        if (!freshSession && p.note) return join(p.note, capNote())
-        return join(`Task ${task.id}: sort this request and report.`, f("request.md"), f("checks.md"), f("answers.md"), p.note, capNote())
-      case "triage_fail":
-        return join(
-          "MODE: failure. The trivial attempt did not finish. Write the full brief for the planner, with code findings only: findings with path:line, the relevant code excerpts with line ranges, the edits that were kept, and why it is not trivial. Don't restate the user's goal or constraints; the planner gets the request itself. Report ESCALATE.",
-          edited,
-          f("request.md"),
-          f("checks.md"),
-          f("answers.md"),
-          f("brief.md"),
-          latest("report"),
-          latest("analysis"),
-        )
-      case "fix_trivial":
-        return join(
-          task.skipChecks
-            ? "Make this trivial change. Build and test are skipped: don't run them. Report DONE when the edit is made, or FAILED / BLOCKED."
-            : "Make this trivial change. Run the check command, and iterate until it passes or you are stuck. Report DONE with checkCommand, or FAILED / BLOCKED.",
-          f("request.md"),
-          f("checks.md"),
-          f("brief.md"),
-        )
-      case "review_trivial":
-        return join(
-          `MODE: review. A trivial change touched more than one file. Check the changes against the request and the instruction. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Fixer.`,
-          f("request.md"),
-          f("checks.md"),
-          f("answers.md"),
-          f("brief.md"),
-          latest("report"),
-        )
-      case "senior": {
-        const unseen = [...new Set(task.seniorUnseen)]
-        task.seniorUnseen = []
-        if (freshSession) {
-          const earlier = task.history.map((h) => h.file).filter((x): x is string => !!x && x !== "brief.md")
-          return join(
-            `Task ${task.id}: write a plan for this request.`,
-            f("request.md"),
-          f("checks.md"),
-            f("brief.md"),
-            f("answers.md"),
-            ...[...new Set([...earlier, ...unseen])].map(f),
-            p.note,
-            capNote(),
-          )
-        }
-        return join("New information since your last call:", ...unseen.map(f), p.note, capNote(), "Report again.")
-      }
-      case "explorer":
-        return join(
-          "MODE: planner search. Answer these queries for the senior planner with path:line findings and short code excerpts. Report FOUND, or NOT_FOUND with what you searched.",
-          `<queries>\n${p.note ?? ""}\n</queries>`,
-        )
-      case "oracle_review":
-        return join(
-          "MODE: review of a destructive plan. Check that the destructive or irreversible steps are necessary and safe, and that nothing is lost. Report APPROVE (optional notes) or CHANGES (what must change and why).",
-          f("request.md"),
-          f("checks.md"),
-          f("answers.md"),
-          f("brief.md"),
-          f(`plan-${task.plan}.md`),
-        )
-      case "oracle_advice": {
-        const plans = Array.from({ length: task.seq.plan ?? 0 }, (_, i) => f(`plan-${i + 1}.md`))
-        return join(
-          `MODE: advice. The task is stuck: ${p.note ?? ""}. Say which approach the senior planner should take (ADVICE), or, if the decision belongs to the user, report QUESTIONS.`,
-          f("request.md"),
-          f("checks.md"),
-          f("brief.md"),
-          f("answers.md"),
-          ...plans,
-          latest("report"),
-          latest("analysis"),
-          latest("escalation"),
-        )
-      }
-      case "fix": {
-        const head = `Plan ${task.plan}, step ${task.step} of ${task.planSteps}${task.step === task.planSteps ? " (the final check)" : ""}.`
-        const rules = task.skipChecks
-          ? "Do only this step. Build and test are skipped: don't run them. Report DONE when the step's edits are made, FAILED when stuck, or BLOCKED when the step can't work as written."
-          : "Do only this step. Iterate freely until its check command passes. Report DONE with checkCommand, FAILED when stuck, or BLOCKED when the step can't work as written."
-        if (!task.fixerSeenPlan) {
-          task.fixerSeenPlan = true
-          return join(`Carry out this plan one step at a time. ${head}`, rules, f(`plan-${task.plan}.md`), f("checks.md"), p.note)
-        }
-        return join(head, p.note, rules)
-      }
-      case "diagnose": {
-        const stepFiles = task.history.filter((h) => h.plan === task.plan && h.step === task.step && h.file).map((h) => f(h.file!))
-        return join(
-          `MODE: diagnosis. Fixer is stuck on step ${task.step} of plan ${task.plan}. Below is the step's whole attempt history.`,
-          task.latestLog ? `The latest full build/test log: ${task.latestLog} (read it as needed).` : "",
-          "Decide: LOCAL (Fixer can fix it; give exact instructions), REPLAN (the plan is wrong, or the step is going in circles), or ESCALATE (cause unclear). If the same error came back or a fix undid an earlier one, do not answer LOCAL.",
-          f(`plan-${task.plan}.md`),
-          f("checks.md"),
-          ...stepFiles,
-        )
-      }
-      case "review": {
-        const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.file).map((h) => f(h.file!))
-        return join(
-          `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Fixer.`,
-          f("request.md"),
-          f("checks.md"),
-          f("answers.md"),
-          f(`plan-${task.plan}.md`),
-          ...reports.slice(-4),
-        )
-      }
-    }
-  }
-
-  // ---- what the polisher gets back ----
-
-  render(task: TaskState): string {
-    const last = task.history[task.history.length - 1]
-    const lastLine = last ? `${last.role} → ${last.status}: ${last.summary.split("\n")[0].replace(/[.\s]+$/, "")}` : "started"
-    const files = task.editedFiles.length ? task.editedFiles.map((f) => `- ${f}`).join("\n") : "(none)"
-    const attempts = `Attempts: ${task.attempts}/${task.attemptLimit}.`
-    const usage = () => usageReport(task.usage, Math.max(1, task.planSteps))
-    switch (task.phase) {
-      case "running": {
-        const progress =
-          task.pending?.mode === "fix" ? ` Next: fixer, step ${task.step} of ${task.planSteps}.` : task.pending ? ` Next: ${MODE_ROLE[task.pending.mode]} (${task.pending.mode}).` : ""
-        return `PROGRESS: ${lastLine}.${progress} ${attempts}\nNEXT ACTION: show this progress line to the user in one line, then call team with action "continue".`
-      }
-      case "checks":
-        return join(
-          "No build or test commands are configured for this project (checks.build / checks.test).",
-          `NEXT ACTION: ask the user [Skip build/test] [Give commands] [Stop]. Skip → team "answer" with text "skip". Give commands → ask for the build and test commands as free text, then team "answer" with them word for word. Stop → team "stop".`,
-        )
-      case "questions":
-        return join(
-          `QUESTIONS from ${task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"}:`,
-          (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"),
-          `NEXT ACTION: ask the user these questions as free text (no fixed options). Then call team with action "answer" and their answer word for word.`,
-        )
-      case "approval":
-        return join(
-          `PLAN ${task.plan} ready for approval. Risk: ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}. Steps: ${task.planSteps}.`,
-          task.planSummary ?? "",
-          task.oracleNote ? `Oracle's notes:\n${readTaskFile(task, task.oracleNote)}` : "",
-          `Full plan: ${path.join(task.dir, `plan-${task.plan}.md`)}`,
-          `NEXT ACTION: show the summary to the user and ask [Approve] [Change] [Stop]. Approve → team "approve". Change → ask for their comments, then team "change" with the comments word for word. Stop → team "stop".`,
-        )
-      case "stuck":
-        return join(
-          `STUCK: ${task.stuckReason}`,
-          `What was tried: ${task.plan} plan(s), ${task.planFailures} plan failure(s), round ${task.rounds} on step ${task.step}.`,
-          this.lastErrors(task),
-          `Files changed so far (kept, not reverted):\n${files}`,
-          usage(),
-          attempts,
-          `NEXT ACTION: show this to the user and ask [Retry] [Stop]. Retry → team "retry" (runs the agent once more in a fresh session). Stop → team "stop".`,
-        )
-      case "budget":
-        return join(
-          `ATTEMPT BUDGET USED UP: ${task.attempts} agent calls. Last: ${lastLine}.`,
-          task.pending ? `Left to do: ${task.pending.mode}${task.planSteps ? `, step ${task.step} of ${task.planSteps}` : ""}.` : "",
-          `Files changed so far:\n${files}`,
-          usage(),
-          `NEXT ACTION: show this to the user and ask [Continue +10 attempts] [Stop]. Continue → team "extend". Stop → team "stop".`,
-        )
-      case "done":
-        return join(
-          `DONE: ${task.doneSummary ?? lastLine}`,
-          task.skipChecks ? "Not built or tested: build and test were skipped." : "",
-          `Changed files:\n${files}`,
-          usage(),
-          `Task folder: ${task.dir}`,
-          "NEXT ACTION: tell the user the result. The task is finished.",
-        )
-      case "stopped":
-        return join(
-          `STOPPED: task ${task.id}. Files already edited stay as they are; nothing was reverted.`,
-          `Files changed:\n${files}`,
-          usage(),
-          "NEXT ACTION: tell the user. They can resume later (team \"continue\").",
-        )
-    }
-  }
-
-  private lastErrors(task: TaskState): string {
-    const lastFail = [...task.history].reverse().find((h) => ["FAILED", "BLOCKED", "REPLAN", "ESCALATE", "ISSUES"].includes(h.status))
-    return lastFail ? `Last problem (${lastFail.role}, ${lastFail.status}): ${lastFail.summary}` : ""
   }
 }

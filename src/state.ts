@@ -61,17 +61,14 @@ export interface TaskState {
   updated: number
   phase: Phase
   pending?: Pending
-  /** Shown to the user while phase is questions/approval/stuck/budget/done. */
-  message?: string
   questions?: string[]
   questionsFrom?: Mode
-  questionsAt?: number
+  askedAt?: number
   stuckReason?: string
   attempts: number
   attemptLimit: number
   sessions: Partial<Record<WorkerRole, string>>
   seq: Record<string, number>
-  trivial?: boolean
   trivialFailed?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */
   skipChecks?: boolean
@@ -83,7 +80,6 @@ export interface TaskState {
   rounds: number
   planFailures: number
   oracleAdviceUsed: number
-  oracleReviewDone: boolean
   skipOracleReview: boolean
   needInfo: number
   questionRounds: number
@@ -142,7 +138,6 @@ export function newTask(root: string, polisherSession: string, workspace: string
     rounds: 0,
     planFailures: 0,
     oracleAdviceUsed: 0,
-    oracleReviewDone: false,
     skipOracleReview: false,
     needInfo: 0,
     questionRounds: 0,
