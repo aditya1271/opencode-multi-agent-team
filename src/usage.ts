@@ -79,12 +79,15 @@ export function hints(usage: Partial<Record<Role, AgentUsage>>, steps = 1): stri
     const work = (p.tools.read ?? 0) + (p.tools.search ?? 0) + (p.tools.shell ?? 0) + (p.tools.edit ?? 0) + (p.tools.build ?? 0)
     if (work) out.push(`manager used ${work} read/search/shell/edit calls (expected 0)`)
   }
-  const s = usage.architect
-  if (s) {
-    const other = (s.tools.search ?? 0) + (s.tools.shell ?? 0) + (s.tools.edit ?? 0)
-    if (other) out.push(`architect used ${other} grep/shell/edit calls (expected only code-search tools)`)
-    if (s.calls && s.prompts / s.calls > 15) out.push(`architect: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
+  for (const role of ["architect", "principal"] as const) {
+    const s = usage[role]
+    if (!s) continue
+    const k = s.tools
+    const work = (k.read ?? 0) + (k.search ?? 0) + (k.index ?? 0) + (k.shell ?? 0) + (k.edit ?? 0) + (k.build ?? 0)
+    if (work) out.push(`${role} used ${work} file or code tool calls (expected 0: it asks Lead)`)
   }
+  const s = usage.architect
+  if (s?.calls && s.prompts / s.calls > 15) out.push(`architect: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
   for (const role of ["lead", "architect", "intern", "reviewer", "principal"] as const) {
     const edits = usage[role]?.tools.edit ?? 0
     if (edits) out.push(`${role} made ${edits} edit calls (only developer edits)`)

@@ -93,8 +93,21 @@ To update later, run `git pull` in the clone and restart OpenCode.
 - **The manager never answers you itself.** Everything you write goes to the team: a
   request, a question, a reply, or feedback (on a finished task, as a new request).
 - **Ask about the code:** the Intern answers. No task starts.
+- **What first, then how.** A non-trivial change is planned in two stages before anyone edits.
+  When the request leaves open what the feature should do, you first approve a
+  **what-document**: what it does, the process, when it happens, the choices weighed and the
+  decisions (each marked yours, from your material, or assumed). No code in it. Then the team
+  plans the change in fresh sessions that get only the approved what-document, and you approve
+  the plan. When the request already fixes the behaviour ("add a --upper flag that uppercases
+  the output"), the plan starts with a short Behaviour section instead. Trivial fixes go
+  straight to the edit. If the how stage finds that a decision of the what-document can't work
+  in the code, you get the what-document back with the evidence and decide.
 - **Want a plan, not a quick fix?** Say so ("plan it first"). The Lead still writes the
   brief but can't take the quick path, so the Architect always plans.
+- **Who knows what:** Lead reads the code and your files. The Architect and Principal have no
+  file or code access: they work from Lead's brief and ask Lead (numbered questions A1, A2, …,
+  answered in `brief-answer-N.md`) when they need more. Code-search tools configured for them
+  are ignored, with a warning in the log.
 - **Ask during a task:** while the team waits on you, a question goes to the agent the task
   waits on (Architect, or Lead before there's a plan), in its own session with the full
   context. The task doesn't move; you then answer or decide.
@@ -108,20 +121,24 @@ To update later, run `git pull` in the clone and restart OpenCode.
 
 ### Plan documents (`plan-manager`)
 
-The Lead reads the code and writes a brief, and the Architect writes the plan document to a
-standard (`prompts/plan.instructions.md`): context, goals and non-goals, decisions marked as
-yours or assumed, alternatives weighed, design, file map, risks, verification and an outline.
-Nobody edits code, and there is no build or test. The document is saved to `docs/<task>.md` in
-the project (`workflows.plan.output`), or to the path you name. A default path never
-overwrites an existing file; a path you name is edited in place. If
+A plan task has two approvals. First the Lead reads your files and the code and writes a
+**concept brief**: the concerns that decide whether the result is good (yours first, in your
+framing), approaches for each, feasibility notes only where an idea could fail, and
+assumptions. You see it and can adjust it (`workflows.plan.confirmBrief`). The Architect then
+writes the **what-document** to `prompts/plan.instructions.md`. Once you approve it, the
+**how-document** (the change plan, `prompts/how.instructions.md`) is written in fresh sessions
+and saved next to it as `<name>.how.md`. Nobody edits code, and there is no build or test.
+The what-document is saved to `docs/<task>.md` in the project (`workflows.plan.output`), or to
+the path you name. A default path never overwrites an existing file; a path you name is edited
+in place. If
 [opencode-edited-files](https://github.com/aditya1271/opencode-edited-files) is installed, the
 saved document shows in its sidebar.
 
-You reply in your own words. Comments on a plan or research document go to the Lead first,
-who turns them into a revision brief (including places with the same problem that you didn't
-name); the Architect then revises the document. Once you approve, an **[Implement it]** button switches the
-session to `build-manager` and starts a code task that carries out the document. The
-Architect still writes an implementation plan for you to approve first.
+You reply in your own words. Comments on any plan or document go to the Lead first, who turns
+them into a revision brief (including places with the same problem that you didn't name); the
+Architect then revises it. Once you approve the how-document, an **[Implement it]** button
+switches the session to `build-manager` and starts a code task in which Developer carries out
+that plan directly.
 
 ### Research reports (`research-manager`)
 
@@ -132,9 +149,11 @@ The Intern collects evidence (claim, source, verbatim excerpt) in a capped numbe
 `prompts/research.instructions.md`. A follow-up question on a finished report is appended to
 it as a new section.
 
-To change what a good plan or report looks like ("make plans verbose", "always list
-alternatives"), set `workflows.plan.instructions` or `workflows.research.instructions` (inline
-text or a file). The Architect writes to it and Principal reviews against it.
+To change what a good document looks like ("make plans verbose", "always list
+alternatives"), set `workflows.plan.instructions` (what-document), `workflows.plan.howInstructions`
+(how-document and code plans) or `workflows.research.instructions` (inline text or a file). The
+Architect writes to it and Principal reviews against it. Code tasks use the same what and how
+standards; `workflows.code.confirmBrief` (default off) shows the concept brief there too.
 - **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
   Your answer goes back to the agent that asked, in its own session, so it keeps its context.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the
@@ -265,6 +284,8 @@ Each task writes to `~/.cache/opencode-multi-agent-team/<task-id>/` (`taskDir`):
 - `request.md`, `brief.md`, `plan-N.md`, `doc-N.md`, `findings-N.md`, `report-N.md`,
   `analysis-N.md`, `principal-N.md`, `answers.md`, `existing.md` (the document as it was
   before a task edited it)
+- how stage: `how-brief.md`, `how-answers.md`; Lead's answers to the Architect or Principal:
+  `brief-answer-N.md` / `how-brief-answer-N.md`; `infeasible-N.md`
 - `logs/`: full build and long command output
 - `state.json`
 

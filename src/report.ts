@@ -1,27 +1,32 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { runs, type Report, type ShellRun } from "./runtime.ts"
-import { isDocWorkflow, type Mode, type TaskState } from "./state.ts"
+import { draftIsDoc, isDocWorkflow, type Mode, type TaskState } from "./state.ts"
 
 const BASE: Record<Mode, string[]> = {
-  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS"],
+  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "INFEASIBLE"],
   lead_fail: ["ESCALATE"],
   fix_trivial: ["DONE", "FAILED", "BLOCKED"],
   review_trivial: ["PASS", "ISSUES"],
-  architect: ["PLAN", "NEED_INFO", "QUESTIONS", "ESCALATE"],
+  architect: ["PLAN", "ASK", "QUESTIONS", "ESCALATE", "INFEASIBLE"],
   intern: ["FOUND", "NOT_FOUND"],
-  principal_review: ["APPROVE", "CHANGES"],
+  principal_review: ["APPROVE", "CHANGES", "ASK"],
   fix: ["DONE", "FAILED", "BLOCKED"],
   diagnose: ["LOCAL", "REPLAN", "ESCALATE"],
   review: ["PASS", "ISSUES"],
-  principal_advice: ["ADVICE", "QUESTIONS"],
+  principal_advice: ["ADVICE", "QUESTIONS", "ASK"],
   lead_reply: ["ANSWER"],
   architect_reply: ["ANSWER"],
   principal_reply: ["ANSWER"],
-  principal_doc_review: ["APPROVE", "CHANGES"],
+  principal_doc_review: ["APPROVE", "CHANGES", "ASK"],
+  lead_answer: ["ANSWER"],
 }
 
-/** Intern rounds the Architect may ask for: per research depth, else the task-wide search limit. */
+/** Code task, Lead's first sort: ESCALATE must say whether the request already fixes the behaviour. */
+const needsWhat = (mode: Mode, task?: TaskState) =>
+  mode === "lead" && !!task && !task.workflow && !task.stage && !task.revising && !task.trivialFailed
+
+/** Rounds of questions to Lead (or the Intern, in research): per research depth, else the task-wide limit. */
 export function needInfoLimit(config: Config, task: TaskState): number {
   if (task.workflow === "research" && task.depth) return config.workflows.research.internRounds[task.depth]
   return config.limits.needInfoPerTask
@@ -50,11 +55,14 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
   let list = BASE[mode]
   if (task) {
     if (task.trivialFailed && mode === "lead") list = ["ESCALATE"]
-    if ((task.forcePlan || isDocWorkflow(task)) && mode === "lead") list = list.filter((s) => s !== "TRIVIAL")
-    if (isDocWorkflow(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
+    if ((task.forcePlan || isDocWorkflow(task) || task.stage) && mode === "lead") list = list.filter((s) => s !== "TRIVIAL")
+    // Only the how stage can find an approved what-decision unworkable.
+    if (task.stage !== "how" || !task.doc || task.revising) list = list.filter((s) => s !== "INFEASIBLE")
+    if (task.workflow === "research" && mode === "architect") list = list.map((s) => (s === "ASK" ? "NEED_INFO" : s))
+    if (draftIsDoc(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
-    if (mode === "architect" && task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO")
-  }
+    if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
+  } else list = list.filter((s) => s !== "INFEASIBLE")
   return list
 }
 
@@ -64,8 +72,14 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     summary: { type: "string", description: "At most 5 lines, shown to the user." },
     content: { type: "string", description: "Markdown. The plugin writes it to the task folder." },
   }
-  if (statuses.includes("QUESTIONS"))
-    properties.questions = { type: "array", items: { type: "string" }, description: "Required for QUESTIONS." }
+  if (statuses.includes("QUESTIONS") || statuses.includes("ASK"))
+    properties.questions = {
+      type: "array",
+      items: { type: "string" },
+      description: statuses.includes("ASK") ? "Required for QUESTIONS (to the user) and ASK (to Lead): one question per item." : "Required for QUESTIONS.",
+    }
+  if (needsWhat(mode, task) && statuses.includes("ESCALATE"))
+    properties.what = { type: "string", enum: ["settled", "open"], description: "Required for ESCALATE: settled when the request already fixes the behaviour, else open." }
   if (mode === "lead" && task?.workflow === "research")
     properties.depth = { type: "string", enum: ["quick", "breadth", "depth"], description: "Required for ESCALATE: how big the research is." }
   if (mode === "architect" && statuses.includes("PLAN")) {
@@ -89,6 +103,7 @@ export const REPORT_INPUT = {
     steps: { type: "integer" },
     checkCommand: { type: "string" },
     depth: { type: "string" },
+    what: { type: "string" },
   },
   required: ["status", "summary", "content"],
 }
@@ -103,7 +118,16 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   const statuses = allowedStatuses(config, run.mode, run.task)
   if (!statuses.includes(input.status)) throw new Error(`Invalid status "${input.status}". Allowed now: ${statuses.join(", ")}.`)
   if (typeof input.summary !== "string" || typeof input.content !== "string") throw new Error("summary and content are required.")
-  if (input.status === "QUESTIONS" && !input.questions?.length) throw new Error("QUESTIONS needs a non-empty questions list.")
+  if ((input.status === "QUESTIONS" || input.status === "ASK") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
+  if (input.status === "ESCALATE" && needsWhat(run.mode, run.task)) {
+    if (input.what !== "settled" && input.what !== "open") throw new Error('ESCALATE needs what: "settled" or "open".')
+    if (input.what === "settled" && !/^#+\s*Why the behaviour is settled/im.test(input.content))
+      throw new Error('what "settled" needs a "## Why the behaviour is settled" section at the top of content.')
+  }
+  if (run.mode === "lead_answer") {
+    const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))
+    if (missing.length) throw new Error(`Answer every question by its id; missing: ${missing.join(", ")}.`)
+  }
   if (input.status === "PLAN") {
     if (input.risk !== "yes" && input.risk !== "no") throw new Error('PLAN needs risk: "yes" or "no".')
     if (!Number.isInteger(input.steps) || (input.steps ?? 0) < 1) throw new Error("PLAN needs steps: the number of plan steps.")

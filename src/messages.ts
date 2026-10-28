@@ -3,7 +3,7 @@ import path from "node:path"
 import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
 import { needInfoLimit } from "./report.ts"
-import { isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
+import { answerFiles, answersName, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
 import { report as usageReport } from "./usage.ts"
 
 export const fileBlock = (task: TaskState, name: string) => {
@@ -32,26 +32,82 @@ export const sectionTitles = (doc: string): string[] => {
   return (h2.length ? h2 : heads("#")).slice(0, 20)
 }
 
-/** The "## Research brief" section of Lead's brief, else the whole brief. */
-export const researchBrief = (brief: string): string => {
-  const m = /^## Research brief\s*\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(brief)
-  return (m ? m[1]! : brief).trim()
+/** The body of a document's "## <title>" section (optionally numbered), or "" when it has none. */
+export const section = (doc: string, title: string): string => {
+  const esc = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const m = new RegExp(`^## (?:\\d+\\.\\s*)?(?:\\*\\*)?${esc}[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "mi").exec(doc)
+  return m ? m[1]!.trim() : ""
 }
 
-export const docName = (task: TaskState) => (task.workflow === "research" ? "research report" : "plan document")
+/** The "## Research brief" section of Lead's brief, else the whole brief. */
+export const researchBrief = (brief: string): string => section(brief, "Research brief") || brief.trim()
 
-const LEAD_PLAN = [
-  "Workflow: plan. The deliverable is a plan document, not code: nobody edits files in this task, and there is no build or test.",
-  "Look before you ask: read every file the request names in full first, then the code or material it connects to, until you can explain how the relevant parts work today and what the plan would touch. Never ask what the project or the user's files already answer.",
-  "Report ESCALATE with the brief for the Architect: findings with `path:line` or file references, the relevant excerpts, how things work today, and constraints you found (existing patterns, conflicts, a cheaper path). If you found something the user may not have considered that would change what they ask for, say so plainly.",
-  "Report QUESTIONS only for decisions that belong to the user and change what gets built: at most 4, most important first. Each question gives the options, your recommended option, and why the answer matters. Anything with a sensible default is not a question: write it in the brief as an assumption.",
+/** At most `max` lines of a section shown in chat; the rest stays in the file. */
+const clip = (text: string, max = 40) => {
+  const lines = text.split("\n")
+  return lines.length <= max ? text : `${lines.slice(0, max).join("\n")}\n… (${lines.length - max} more lines in the file)`
+}
+
+/** The Architect's current draft: research report, what-document or how-document / plan. */
+export const docName = (task: TaskState) =>
+  task.workflow === "research" ? "research report" : task.stage === "what" ? "what-document" : task.workflow === "plan" && !task.stage ? "plan document" : task.workflow === "plan" ? "how-document" : "plan"
+
+/** The Architect's latest draft file in this task. */
+export const draftFile = (task: TaskState) => (draftIsDoc(task) ? `doc-${task.doc}.md` : `plan-${task.plan}.md`)
+
+const FEASIBILITY =
+  "Feasibility: note it only for a concept that could kill the idea or force a different one, and that isn't plainly known (work nobody here has done before, an assumption about how parts fit, a solution assumed to exist). Swappable mechanics (how a model or service is connected, which parser or file format, storage, configuration) get no feasibility note and no options: one line, \"left to the how stage\". In a code project, code facts count: what language, standard, build system, interface or platform the code where the feature goes supports, quoted with `path:line`."
+
+const LEAD_WHAT = [
+  "Stage: WHAT. This stage decides what to build and how it behaves as a process, independent of code: no files, functions, interfaces, storage, flags or tests. The implementation plan comes later, after the user approves the what-document.",
+  "Read every file the request names in full first, then what they connect to (material, code). Read to understand the problem; code matters here only where it rules a behaviour in or out.",
+  "The Architect has no file access: your brief and your later answers are all it knows. Quote, don't paraphrase.",
+  [
+    "Write `content` in two parts. First `## Concept brief` (the user may read it before the Architect writes):",
+    "- **Concerns**: the concepts that decide whether the result is good. The ones the user named or stressed first, in their framing; then ones they didn't mention but should consider. For each: why it matters (with the source when the user's material says so), and 2-3 approaches with what each trades off. No pick unless the material settles it.",
+    `- ${FEASIBILITY}`,
+    "- **Assumptions**: defaults you'd take where nothing settles a point, each marked as assumed.",
+    "Then `## Excerpts`: the verbatim passages (with `path:line` or file and heading) the Architect needs, grouped by concern. Nothing else: don't restate the request, the Architect gets it.",
+  ].join("\n"),
 ].join("\n\n")
+
+const LEAD_ASK =
+  "Report QUESTIONS only for decisions that belong to the user and change what gets built: at most 4, most important first, each with the options, your recommended option, and why the answer matters. Anything with a sensible default is not a question: put it in the brief as an assumption."
+
+const LEAD_PLAN = join("Workflow: plan. Nobody edits files in this task, and there is no build or test. Report ESCALATE with the brief.", LEAD_WHAT, LEAD_ASK)
+
+const LEAD_CODE = [
+  "Workflow: code. Decide TRIVIAL or ESCALATE (see your instructions). For ESCALATE, set `what`:",
+  "- **settled**: the request already fixes the behaviour (\"add a --upper flag that uppercases the output\"); only the implementation is open. Write the how brief below, starting with `## Why the behaviour is settled` (one or two lines). The plan will start with a short Behaviour section instead of a separate what-document.",
+  "- **open**: what the feature should do, as a process, is still to decide (a new feature, several valid behaviours). Write the what brief below. The user approves the behaviour before anyone plans code.",
+  "When unsure, it is open.",
+].join("\n")
+
+const HOW_BRIEF = [
+  "Stage: HOW. Brief the Architect for the change plan. The Architect has no file access: your brief and your later answers are all it knows, so search the code until every place the change touches can be shown.",
+  [
+    "Write `content` with:",
+    "- `## Code`: each location that will change, as `path:start-end` with the current code excerpt (exact lines), and the patterns or analogous features the change should follow.",
+    "- `## Impact`: for each location, what depends on it: callers, users of the interface, build files, tests, other modules, found with your code-search tools or grep and listed with `path:line`. Say \"no other users\" only after you searched.",
+    "- `## Constraints`: code facts that limit the change (language and standard, build system, platform, public interfaces).",
+    "Don't restate the request or the what-document; the Architect gets both.",
+  ].join("\n"),
+].join("\n\n")
+
+const LEAD_INFEASIBLE =
+  "If a decision of the what-document can't work in this code, report INFEASIBLE: which decision, the evidence (`path:line`, excerpt), and what would work instead. Don't quietly plan around it."
 
 const LEAD_REVISION = [
   "MODE: revision. The user commented on the {doc} below. Don't rewrite it; brief the Architect, who revises it.",
   "Where the comments give examples, treat them as examples: find every place in the document with the same problem, not only the ones named. Check the files the request names, and the code or material they connect to, where the comments need it.",
+  "The Architect has no file access: quote what it needs (`path:line`, excerpt). Don't repeat what your earlier brief and answers already hold; point to them.",
   "Report ESCALATE with the revision brief: each change, with the section it applies to, what is wrong and what it should become; the places you found beyond the ones named; and what must stay as it is.",
   "Report QUESTIONS only if a comment leaves open a decision that belongs to the user: at most 4, each with the options, your recommended option, and why the answer matters.",
+].join("\n\n")
+
+const LEAD_ANSWER = [
+  "MODE: answer. {asker} has no file access and asks you the questions below. Look up what you need.",
+  "Report ANSWER. `content` answers each question under its id (\"### A3\"), with only new facts: exact quotes with `path:line`, or what you searched when something isn't there. Where your brief or an earlier answer already holds it, point to it (\"see brief.md, Excerpts: glossary\") instead of repeating it. When a question is a decision for the user, say so under its id.",
 ].join("\n\n")
 
 const LEAD_RESEARCH = [
@@ -73,12 +129,12 @@ const INTERN_RESEARCH =
   "MODE: research search for the Architect. Return evidence, not prose. For each query, a list of records: **claim** (one fact), **source** (`path:line`, the file, or the URL), **excerpt** (the few lines, verbatim; don't paraphrase or summarize them). \"Not found\" is a finding: say what you searched. When sources conflict, give both. When a source speculates (\"could\", \"may\", plans), say so. Stop a query when your last two searches added nothing new. Report FOUND, or NOT_FOUND with what you searched."
 
 const REVIEW_PLAN = [
-  "Part 1, can it be built as written. Read the document and every file it references; check that each reference exists and says what the document claims. Simulate building 2-3 representative parts as a capable builder who cannot talk to the author: where would you have to guess, and would a wrong guess matter (more than about 10% guesswork)? Check that every requirement and constraint in the request maps to a decision and to a verification, that acceptance criteria are observable, and that names and interfaces are consistent. Skip anything the document explicitly leaves to the builder, anything a builder could reasonably decide alone, and wording nitpicks.",
+  "Part 1, can it be built as written. Check that each reference the document makes is backed by the brief, Lead's answers or the user's words, and says what the document claims. Simulate building 2-3 representative parts as a capable builder who cannot talk to the author: where would you have to guess, and would a wrong guess matter (more than about 10% guesswork)? Check that every requirement and constraint in the request maps to a decision and to a verification, that acceptance criteria are observable, and that names and interfaces are consistent. Skip anything the document explicitly leaves to the builder, anything a builder could reasonably decide alone, and wording nitpicks.",
   "Part 2, is it the right design. Were the strongest alternative and \"use what exists\" weighed? Is anything built that the request doesn't need (layers, options, future-proofing)? Are the risks named, and are the assumed decisions reasonable defaults? Here you may disagree with the approach: say concretely what you would do instead and why.",
 ].join("\n\n")
 
 const REVIEW_RESEARCH = [
-  "Part 1, the evidence. Spot-check the key references against the code or files: do they exist and say what is claimed? Every sub-question of the brief is answered or listed under Gaps; no claim goes beyond its source; conflicts are reported, not hidden; speculation is flagged; descriptive mode has no recommendations.",
+  "Part 1, the evidence. Spot-check the key references against the findings and the brief: are they there, and do they say what is claimed? Every sub-question of the brief is answered or listed under Gaps; no claim goes beyond its source; conflicts are reported, not hidden; speculation is flagged; descriptive mode has no recommendations.",
   "Part 2, is it the right answer. Are there sources or angles it missed that would change the conclusion? In evaluative mode, does the recommendation follow from the evidence?",
 ].join("\n\n")
 
@@ -100,10 +156,20 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
   const f = (name: string) => fileBlock(task, name)
   const latest = (kind: string) => (task.seq[kind] ? f(`${kind}-${task.seq[kind]}.md`) : "")
   const edited = task.editedFiles.length ? `Files changed so far (kept): ${task.editedFiles.join(", ")}` : "No files changed so far."
+  /** Lead's brief for the stage and its answers to questions so far. */
+  const stageBrief = () => join(f(briefName(task)), ...answerFiles(task).map(f))
+  const answers = () => f(answersName(task))
+  /** The how stage starts from the approved what-document only, not the research behind it. */
+  const whatDoc = () => (task.stage === "how" && task.doc ? join("The approved what-document:", f(`doc-${task.doc}.md`)) : "")
+  const delivered = () => (p.files ?? []).map(f)
   const capNote = (): string | false => {
     const notes: string[] = []
     if (task.needInfo >= needInfoLimit(config, task))
-      notes.push(isDocWorkflow(task) ? "The search limit is reached: write the document with what you have, and list what is missing." : "The search limit is reached: plan with what you have, or ESCALATE.")
+      notes.push(
+        task.workflow === "research"
+          ? "The search limit is reached: write the document with what you have, and list what is missing."
+          : "The limit for questions to Lead is reached: work with what you have, and list what is missing.",
+      )
     if (task.questionRounds >= config.limits.questionsPerTask) notes.push("The question limit is reached: decide with what you have.")
     return notes.length ? notes.join(" ") : false
   }
@@ -111,22 +177,51 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "lead":
       if (p.revision)
         return join(
-          LEAD_REVISION.replaceAll("{doc}", `${docName(task)} (doc-${task.doc}.md)`),
-          freshSession && join(f("request.md"), f("brief.md"), f("answers.md")),
-          f(`doc-${task.doc}.md`),
+          LEAD_REVISION.replaceAll("{doc}", `${docName(task)} (${draftFile(task)})`),
+          freshSession && join(f("request.md"), whatDoc(), stageBrief(), answers()),
+          f(draftFile(task)),
+          ...delivered(),
           `The user's comments:\n${p.note ?? ""}`,
           capNote(),
         )
-      if (!freshSession && p.note) return join(p.note, capNote())
+      if (!freshSession && p.note) return join(p.note, ...delivered(), capNote())
+      if (task.stage === "how")
+        return join(
+          `Task ${task.id}: ${task.doc ? "the user approved the what-document below. " : ""}Brief the Architect for the change plan. Report ESCALATE with the brief.`,
+          HOW_BRIEF,
+          !!task.doc && LEAD_INFEASIBLE,
+          f("request.md"),
+          f("checks.md"),
+          whatDoc(),
+          answers(),
+          ...delivered(),
+          p.note,
+          capNote(),
+        )
       return join(
         `Task ${task.id}: sort this request and report.`,
         task.workflow === "plan" && LEAD_PLAN,
         task.workflow === "research" && LEAD_RESEARCH,
-        !isDocWorkflow(task) && task.forcePlan && "The user asked for a plan: don't choose TRIVIAL. Write the brief and report ESCALATE (or QUESTIONS).",
-        f("request.md"), f("checks.md"), f("answers.md"), p.note, capNote())
+        !task.workflow && task.stage === "what" && join("Workflow: code. Report ESCALATE with the what brief.", LEAD_WHAT, LEAD_ASK),
+        !task.workflow &&
+          !task.stage &&
+          join(
+            LEAD_CODE,
+            task.forcePlan && "The user asked for a plan: don't choose TRIVIAL.",
+            `### The what brief (what: open)\n\n${LEAD_WHAT}`,
+            `### The how brief (what: settled)\n\n${HOW_BRIEF}`,
+            LEAD_ASK,
+          ),
+        f("request.md"), f("checks.md"), answers(), p.note, capNote())
+    case "lead_answer": {
+      const head = LEAD_ANSWER.replace("{asker}", p.asker === "architect" ? "The Architect" : "Principal")
+      if (!freshSession) return join(head, p.note)
+      return join(head, f("request.md"), whatDoc(), stageBrief(), answers(), p.note)
+    }
     case "lead_fail":
       return join(
-        "MODE: failure. The trivial attempt did not finish. Write the full brief for the planner, with code findings only: findings with path:line, the relevant code excerpts with line ranges, the edits that were kept, and why it is not trivial. Don't restate the user's goal or constraints; the planner gets the request itself. Report ESCALATE.",
+        "MODE: failure. The trivial attempt did not finish. The request fixes the behaviour; brief the Architect for the change plan, and say why it is not trivial and which edits were kept. Report ESCALATE.",
+        HOW_BRIEF,
         edited,
         f("request.md"),
         f("checks.md"),
@@ -157,16 +252,22 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       const unseen = [...new Set(task.architectUnseen)]
       task.architectUnseen = []
       if (freshSession) {
-        const earlier = task.history.map((h) => h.file).filter((x): x is string => !!x && x !== "brief.md")
-        const doc = isDocWorkflow(task) && task.workflow
+        // A fresh session gets each file of this stage once, and only the latest draft.
+        const given = new Set([briefName(task), ...answerFiles(task), answersName(task)])
+        const stageFiles = task.history.filter((h) => h.stageRun === task.stageRun && h.file).map((h) => h.file!)
+        const isDraft = (x: string) => /^(doc|plan)-\d+\.md$/.test(x)
+        const draft = stageFiles.filter(isDraft).at(-1)
+        const others = [...new Set([...stageFiles, ...unseen])].filter((x) => !given.has(x) && !isDraft(x))
         return join(
-          doc ? `Task ${task.id}: write the ${docName(task)} for this request (workflow ${doc}).` : `Task ${task.id}: write a plan for this request.`,
-          doc && docHandoff(config, task),
+          `Task ${task.id}: write the ${docName(task)} for this request.`,
+          architectHandoff(config, task),
           f("request.md"),
-          f("checks.md"),
-          f("brief.md"),
-          f("answers.md"),
-          ...[...new Set([...earlier, ...unseen])].map(f),
+          task.stage !== "what" && f("checks.md"),
+          whatDoc(),
+          stageBrief(),
+          answers(),
+          ...others.map(f),
+          draft && join(`Your latest draft (${draft}):`, f(draft)),
           p.note,
           capNote(),
         )
@@ -180,23 +281,26 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         `<queries>\n${p.note ?? ""}\n</queries>`,
       )
     case "principal_review":
+      if (!freshSession && p.note) return join(p.note, ...delivered(), "Report again.", capNote())
       return join(
-        "MODE: review of a destructive plan. Check that the destructive or irreversible steps are necessary and safe, and that nothing is lost. Report APPROVE (optional notes) or CHANGES (what must change and why).",
+        "MODE: review of a destructive plan. Check that the destructive or irreversible steps are necessary and safe, and that nothing is lost. Report APPROVE (optional notes) or CHANGES (what must change and why), or ASK Lead for a fact you need.",
         f("request.md"),
         f("checks.md"),
-        f("answers.md"),
-        f("brief.md"),
+        answers(),
+        whatDoc(),
+        stageBrief(),
         f(`plan-${task.plan}.md`),
       )
     case "principal_advice": {
-      if (!freshSession && p.note) return join(p.note, "Now give your advice (ADVICE), or report QUESTIONS if a decision still belongs to the user.", capNote())
+      if (!freshSession && p.note) return join(p.note, ...delivered(), "Now give your advice (ADVICE), or report QUESTIONS if a decision still belongs to the user.", capNote())
       const plans = Array.from({ length: task.seq.plan ?? 0 }, (_, i) => f(`plan-${i + 1}.md`))
       return join(
-        `MODE: advice. The task is stuck: ${p.note ?? ""}. Say which approach the Architect should take (ADVICE), or, if the decision belongs to the user, report QUESTIONS.`,
+        `MODE: advice. The task is stuck: ${p.note ?? ""}. Say which approach the Architect should take (ADVICE), or, if the decision belongs to the user, report QUESTIONS. ASK Lead for a fact you need.`,
         f("request.md"),
         f("checks.md"),
-        f("brief.md"),
-        f("answers.md"),
+        whatDoc(),
+        stageBrief(),
+        answers(),
         ...plans,
         latest("report"),
         latest("analysis"),
@@ -232,7 +336,8 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Developer.`,
         f("request.md"),
         f("checks.md"),
-        f("answers.md"),
+        answers(),
+        whatDoc(),
         f(`plan-${task.plan}.md`),
         ...reports.slice(-4),
       )
@@ -244,21 +349,25 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         "MODE: user question. The task is waiting on the user, who asks you this before they answer or decide. Answer it in content: clear and specific, with pros, cons and impact when they ask about options. Don't revise the plan, ask questions or start new work. Report ANSWER."
       const question = p.note ?? ""
       if (!freshSession) return join(rules, question)
-      return join(rules, f("request.md"), f("brief.md"), f("answers.md"), latest(isDocWorkflow(task) ? "doc" : "plan"), question)
+      const draft = (draftIsDoc(task) ? task.doc : task.plan) ? f(draftFile(task)) : ""
+      return join(rules, f("request.md"), whatDoc(), stageBrief(), answers(), draft, question)
     }
     case "principal_doc_review": {
+      if (!freshSession && p.note && p.files?.length) return join(p.note, ...delivered(), "Report again.", capNote())
       const research = task.workflow === "research"
-      const file = isDocWorkflow(task) ? `doc-${task.doc}.md` : `plan-${task.plan}.md`
-      const what = isDocWorkflow(task) ? `the ${docName(task)}` : `plan ${task.plan}`
-      const standard = isDocWorkflow(task) ? workflowInstructions(config, task.workflow as "plan" | "research") : ""
+      const file = draftFile(task)
+      const what = `the ${docName(task)}${draftIsDoc(task) ? "" : ` (plan ${task.plan})`}`
+      const standard = workflowInstructions(config, research ? "research" : draftIsDoc(task) ? "what" : "how")
       return join(
         `MODE: critical review of ${what} (${file}), asked for by the user (review ${task.reviews ?? 1} of at most ${config.limits.principalReviews}). Review it in two parts, and keep them apart in your report.`,
         research ? REVIEW_RESEARCH : REVIEW_PLAN,
         "Report APPROVE when it holds as written (content: optional notes for the user), or CHANGES: at most 5 must-fix items, most important first, each with where, the problem and the fix; then any should-consider items, marked as such. Don't rewrite the document.",
+        "You have no file access: check claims against the brief, Lead's answers and the findings. When a claim matters and nothing quotes it, ASK Lead for the exact quote.",
         p.note && `What the user asked the review to look at:\n${p.note}`,
         f("request.md"),
-        f("answers.md"),
-        f("brief.md"),
+        answers(),
+        whatDoc(),
+        stageBrief(),
         standard && `<standard>\n${standard}\n</standard>`,
         ...task.history.filter((h) => h.mode === "principal_doc_review" && h.file).map((h) => f(h.file!)),
         f(file),
@@ -267,19 +376,43 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
   }
 }
 
-/** What the Architect is told about writing a plan document or research report. */
-function docHandoff(config: Config, task: TaskState): string {
-  const wf = task.workflow as "plan" | "research"
+/** What the Architect is told about its draft in this stage: the status to report and the standard. */
+function architectHandoff(config: Config, task: TaskState): string {
+  const ask =
+    "When a fact is missing, report ASK with your questions for Lead in `questions` (one per item, unnumbered; the plugin numbers them A1, A2, …); Lead answers in a new file. When a decision belongs to the user and changes what gets built, report QUESTIONS, each with the options and your recommendation."
+  if (task.workflow === "research")
+    return join(
+      "Write only from evidence: the brief's findings and the Intern's findings. When a sub-question lacks evidence, report NEED_INFO with precise queries for the Intern: for each, the objective, what to return, where to look and what is out of scope, with no overlap between queries. Stop searching when the last round added nothing new; list what is still missing under Gaps.",
+      `Report DOC with the whole document in \`content\` (markdown); the plugin saves it to ${task.output}. \`summary\`: the first line says what the document gives the user ("Approving this gives you …").`,
+      readTaskFile(task, "existing.md") && "That file already exists (below): keep it and append a `## Follow-up <date>: <topic>` section for the new question.",
+      fileBlock(task, "existing.md"),
+      `<standard>\n${workflowInstructions(config, "research")}\n</standard>`,
+    )
+  if (draftIsDoc(task))
+    return join(
+      "Stage: WHAT. Write the what-document: what the feature does, as a process, independent of code. The change plan comes after the user approves it.",
+      ask,
+      `Report DOC with the whole document in \`content\` (markdown)${task.output ? `; the plugin saves it to ${task.output}` : ""}. \`summary\`: the first line says what the user decides by approving ("Approving this settles …").`,
+      readTaskFile(task, "existing.md") && "That file already exists (below): keep it and change only what the request asks for.",
+      fileBlock(task, "existing.md"),
+      `<standard>\n${workflowInstructions(config, "what")}\n</standard>`,
+    )
+  const plan = task.workflow === "plan"
   return join(
-    wf === "plan"
-      ? "Nobody changes code in this task: the document is the deliverable. When a fact is missing, report NEED_INFO with precise queries. When a decision belongs to the user and changes what gets built, report QUESTIONS, each with the options and your recommendation."
-      : "Write only from evidence: the brief's findings, the Intern's findings and what you read yourself. When a sub-question lacks evidence, report NEED_INFO with precise queries for the Intern: for each, the objective, what to return, where to look and what is out of scope, with no overlap between queries. Stop searching when the last round added nothing new; list what is still missing under Gaps.",
-    `Report DOC with the whole document in \`content\` (markdown); the plugin saves it to ${task.output}. \`summary\`: the first line says what the document gives the user ("Approving this gives you …").`,
-    readTaskFile(task, "existing.md") &&
-      "That file already exists (below): keep it and change only what the request asks for. For a research follow-up, append a `## Follow-up <date>: <topic>` section.",
-    fileBlock(task, "existing.md"),
-    `<standard>\n${workflowInstructions(config, wf)}\n</standard>`,
+    `Stage: HOW. Write the change plan${task.doc ? " for the approved what-document" : ""}. Developer carries it out step by step${plan ? " once the user chooses [Implement it]; nobody edits files before that" : " once the user approves it"}.`,
+    !task.doc && "There is no what-document: Lead found that the request fixes the behaviour (see the brief). Start the plan with a short `## Behaviour` section: what the change does, as the user will see it, in a few lines.",
+    !!task.doc && "Follow every decision of the what-document. If one can't work in this code, report INFEASIBLE: which decision, the evidence from the brief or Lead's answers, and what would work instead. Never quietly change a decision.",
+    ask,
+    plan && !readTaskFile(task, "checks.md") && "No build or test commands are known yet: give each step's check as what it must prove, plus the command when the brief names one.",
+    `Report PLAN with the whole plan in \`content\`${plan && task.output ? `; the plugin saves it to ${howOutput(task.output)}` : ""}.`,
+    `<standard>\n${workflowInstructions(config, "how")}\n</standard>`,
   )
+}
+
+/** Where a plan task's how-document goes: next to the what-document. */
+export const howOutput = (output: string) => {
+  const ext = path.extname(output)
+  return `${output.slice(0, output.length - ext.length)}.how${ext || ".md"}`
 }
 
 // ---- what the manager gets back ----
@@ -318,42 +451,66 @@ export function render(task: TaskState): string {
         (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"),
         `NEXT ACTION: ask the user these questions as free text (no fixed options). Polish their answer and confirm it [Send] [Edit] [Cancel], then call team with action "answer" and the confirmed answer. If they ask something back instead, polish and confirm it, then call team with action "ask".`,
       )
-    case "brief":
+    case "brief": {
+      const research = task.workflow === "research"
+      const brief = readTaskFile(task, "brief.md")
+      const title = research ? `**Research brief** (${task.depth ?? "?"} research)` : "**Concept brief**"
+      const shown = research ? researchBrief(brief) : section(brief, "Concept brief") || brief
       return join(
-        "RESEARCH BRIEF ready. Show this block to the user exactly as written:",
-        `<show>\n**Research brief** (${task.depth ?? "?"} research)\n\n${researchBrief(readTaskFile(task, "brief.md"))}\n</show>`,
-        `NEXT ACTION: show the block above and end with one line: "Reply to start the research, adjust the brief, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask".`,
+        `${research ? "RESEARCH" : "CONCEPT"} BRIEF ready. Show this block to the user exactly as written:`,
+        `<show>\n${title}\n\n${shown}\n</show>`,
+        `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask".`,
       )
+    }
     case "approval": {
-      if (isDocWorkflow(task)) {
+      const name = docName(task)
+      const Name = `${name[0]!.toUpperCase()}${name.slice(1)}`
+      if (draftIsDoc(task)) {
         const doc = readTaskFile(task, `doc-${task.doc}.md`)
+        const research = task.workflow === "research"
+        const decisions = !research && section(doc, "Decisions")
+        const findings = research && section(doc, "Key findings")
+        const conflicts = research && section(doc, "Conflicts")
         const block = join(
-          `**${docName(task)[0]!.toUpperCase()}${docName(task).slice(1)}** (version ${task.doc})`,
+          `**${Name}** (version ${task.doc})`,
           `**What you get**\n${task.docSummary ?? "(no summary)"}`,
+          task.infeasible && `**The how stage found a decision that can't work** (${task.infeasible})\n${clip(readTaskFile(task, task.infeasible), 30)}`,
+          decisions ? `**Decisions**\n${clip(decisions)}` : "",
+          findings ? `**Key findings**\n${clip(findings)}` : "",
+          conflicts ? `**Conflicts between sources**\n${clip(conflicts, 20)}` : "",
           `**Sections**\n${sectionTitles(doc).map((t) => `- ${t}`).join("\n") || "(none)"}`,
           principalBlock(task),
-          `**File:** ${task.output}`,
+          `**File:** ${task.output ?? path.join(task.dir, `doc-${task.doc}.md`)}`,
         )
+        const reply =
+          task.stage === "what"
+            ? task.infeasible
+              ? "Reply with how to change the what-document, approve it as it is (the team plans again), stop, ask about it, or have Principal review it."
+              : "Reply to approve the behaviour (the team then plans the change), change or stop it, ask about it, or have Principal review it."
+            : "Reply to approve, change or stop it, ask about it, or have Principal review it."
         return join(
-          `${docName(task).toUpperCase()} ready for the user. Show this block to the user exactly as written, without rewording or shortening it:`,
+          `${name.toUpperCase()} ready for the user. Show this block to the user exactly as written, without rewording or shortening it:`,
           `<show>\n${block}\n</show>`,
-          `NEXT ACTION: show the block above and end with one line: "Reply to approve, change or stop it, ask about it, or have Principal review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+          `NEXT ACTION: show the block above and end with one line: "${reply}" No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
         )
       }
-      const planFile = path.join(task.dir, `plan-${task.plan}.md`)
-      const titles = stepTitles(readTaskFile(task, `plan-${task.plan}.md`))
+      const planText = readTaskFile(task, `plan-${task.plan}.md`)
+      const howDoc = task.workflow === "plan" && task.output ? howOutput(task.output) : undefined
+      const titles = stepTitles(planText)
+      const behaviour = section(planText, "Behaviour")
       const block = join(
-        `**Plan ${task.plan}**`,
+        `**${howDoc ? `${Name} (plan ${task.plan})` : `Plan ${task.plan}`}**`,
         `**What you get**\n${task.planSummary ?? "(no summary)"}`,
+        behaviour ? `**Behaviour**\n${clip(behaviour, 20)}` : "",
         `**Steps**\n${titles.length ? titles.join("\n") : `${task.planSteps} step(s); see the plan file.`}`,
         `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}`,
         principalBlock(task),
-        `**Plan file:** ${planFile}`,
+        `**Plan file:** ${howDoc ?? path.join(task.dir, `plan-${task.plan}.md`)}`,
       )
       return join(
         `PLAN ${task.plan} ready for approval. Show this block to the user exactly as written, without rewording or shortening it:`,
         `<show>\n${block}\n</show>`,
-        `NEXT ACTION: show the block above and end with one line: "Reply to approve, change or stop the plan, ask about it, or have Principal review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+        `NEXT ACTION: show the block above and end with one line: "${howDoc ? "Reply to approve (then you can implement it)" : "Reply to approve"}, change or stop the plan, ask about it, or have Principal review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
       )
     }
     case "stuck":
@@ -377,8 +534,10 @@ export function render(task: TaskState): string {
     case "done":
       if (isDocWorkflow(task))
         return join(
-          `DONE: the ${docName(task)} is approved: ${task.output}`,
-          task.docSummary,
+          task.workflow === "plan" && task.stage === "how" && task.output
+            ? `DONE: the plan is approved. What-document: ${task.output}${task.plan ? `\nHow-document: ${howOutput(task.output)}` : ""}`
+            : `DONE: the ${docName(task)} is approved: ${task.output}`,
+          task.workflow === "plan" && task.stage === "how" ? task.planSummary : task.docSummary,
           usage(),
           `Task folder: ${task.dir}`,
           task.workflow === "plan"

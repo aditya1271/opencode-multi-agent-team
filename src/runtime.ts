@@ -10,6 +10,8 @@ export interface Report {
   steps?: number
   checkCommand?: string
   depth?: "quick" | "breadth" | "depth"
+  /** Code task, Lead's ESCALATE: is the behaviour already fixed by the request? */
+  what?: "settled" | "open"
 }
 
 export interface ShellRun {

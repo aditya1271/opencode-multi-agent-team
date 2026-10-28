@@ -4,12 +4,15 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, docName, join, render, SKIP_CHECKS } from "./messages.ts"
+import { buildPrompt, checksText, docName, draftFile, howOutput, join, render, SKIP_CHECKS } from "./messages.ts"
 import { EditedFilesTrack, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
 import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
 import {
+  answersName,
   appendFile,
+  briefName,
+  draftIsDoc,
   findTask,
   isDocWorkflow,
   loadTask,
@@ -69,9 +72,13 @@ export const TEAM_SCHEMA = {
 const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = {
   lead: "lead",
   lead_fail: "lead",
+  lead_answer: "lead",
   architect: "architect",
   fix: "developer",
   principal_advice: "principal",
+  // Kept so a review can continue after Lead answers its questions; each review starts fresh.
+  principal_review: "principal",
+  principal_doc_review: "principal",
 }
 
 export class Team {
@@ -220,8 +227,13 @@ export class Team {
           return this.step(task, signal)
         }
         if (task.phase !== "approval") return this.wrongPhase(task, "approve")
+        if (task.stage === "what") {
+          this.toHow(task)
+          save(task)
+          return this.step(task, signal)
+        }
         if (isDocWorkflow(task)) {
-          this.done(task, task.docSummary ?? "")
+          this.done(task, (task.stage === "how" ? task.planSummary : task.docSummary) ?? "")
           await this.finish(task, "done")
           return render(task)
         }
@@ -346,7 +358,8 @@ export class Team {
 
   // ---- actions ----
 
-  private async start(managerSession: string, text: string, signal: AbortSignal, opts: Partial<TeamInput> = {}): Promise<string> {
+  /** `seed` prepares a task that doesn't start with Lead (implementing an approved plan). */
+  private async start(managerSession: string, text: string, signal: AbortSignal, opts: Partial<TeamInput> = {}, seed?: (task: TaskState) => void): Promise<string> {
     const active = this.task(managerSession)
     // A confirmed message sent as "start" while the task waits on the user is the user's reply to it.
     if (active?.phase === "questions") return this.answer(active, text, signal)
@@ -383,13 +396,15 @@ export class Team {
     }
     task.usage.manager = { ...this.emptyManager(), calls: 1 }
     task.pending = { mode: "lead" }
+    seed?.(task)
     this.tasks.set(managerSession, task)
     this.sessionDirs?.set(managerSession, [...this.dirsOf(managerSession), task.dir])
     const { build, test, whenMissing } = this.config.checks
+    const lines = [build.trim() && `- Build: \`${build.trim()}\``, test.trim() && `- Test: \`${test.trim()}\``].filter(Boolean)
     if (isDocWorkflow(task)) {
-      // No build or test: nobody changes code in a plan or research task.
-    } else if (build.trim() || test.trim()) {
-      const lines = [build.trim() && `- Build: \`${build.trim()}\``, test.trim() && `- Test: \`${test.trim()}\``].filter(Boolean)
+      // Nobody builds or tests in a plan or research task; a plan's how-document still names the configured checks.
+      if (task.workflow === "plan" && lines.length) writeFile(task, "checks.md", checksText(lines.join("\n")))
+    } else if (lines.length) {
       writeFile(task, "checks.md", checksText(lines.join("\n")))
     } else if (whenMissing === "skip") this.skipChecks(task)
     else {
@@ -414,16 +429,16 @@ export class Team {
   }
 
   /** Saves the document to the project; on failure the copy in the task folder is still there. */
-  private writeOutput(task: TaskState, content: string, copy: string): string | undefined {
+  private writeOutput(task: TaskState, file: string, content: string, copy: string): string | undefined {
     try {
-      const before = existsSync(task.output!) ? readFileSync(task.output!, "utf8") : undefined
-      mkdirSync(path.dirname(task.output!), { recursive: true })
-      writeFileSync(task.output!, content.endsWith("\n") ? content : content + "\n")
-      this.trackEdit(task.managerSession, task.output!, before)
+      const before = existsSync(file) ? readFileSync(file, "utf8") : undefined
+      mkdirSync(path.dirname(file), { recursive: true })
+      writeFileSync(file, content.endsWith("\n") ? content : content + "\n")
+      this.trackEdit(task.managerSession, file, before)
       return undefined
     } catch (e) {
-      this.log(`task ${task.id}: cannot write ${task.output}: ${(e as Error).message}`)
-      return `Could not write ${task.output} (${(e as Error).message}); the document is in ${path.join(task.dir, copy)}.`
+      this.log(`task ${task.id}: cannot write ${file}: ${(e as Error).message}`)
+      return `Could not write ${file} (${(e as Error).message}); the document is in ${path.join(task.dir, copy)}.`
     }
   }
 
@@ -482,7 +497,7 @@ export class Team {
     add(task.usage, role, res.usage)
     if (res.sessionID) task.sessions[role] = res.sessionID
     const answer = res.report?.content ?? `${role} couldn't answer: ${res.failure ?? res.end}.`
-    appendFile(task, "answers.md", `## User question\n\n${note}\n\n## ${role} answered\n\n${answer}\n`)
+    appendFile(task, answersName(task), `## User question\n\n${note}\n\n## ${role} answered\n\n${answer}\n`)
     task.askedAt = Date.now()
     save(task)
     this.onChange(task.managerSession)
@@ -544,7 +559,7 @@ export class Team {
     if (task.phase !== "questions" || !task.questionsFrom) return this.wrongPhase(task, "answer")
     const { polished, note: answer } = await this.withOriginal(task, text, "answer")
     if (!polished) return 'answer needs text: the user\'s answer. NEXT ACTION: call team with action "answer".'
-    appendFile(task, "answers.md", `## Answer\n\n${answer}\n`)
+    appendFile(task, answersName(task), `## Answer\n\n${answer}\n`)
     const note = `The user answered your questions:\n${answer}`
     const from = task.questionsFrom
     task.pending =
@@ -566,16 +581,16 @@ export class Team {
     const { polished, note: comments } = await this.withOriginal(task, text, "comments")
     if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
     if (task.phase === "brief") {
-      appendFile(task, "answers.md", `## Comments on the research brief\n\n${comments}\n`)
-      task.pending = { mode: "lead", note: `The user adjusted the research brief. Revise it and report ESCALATE again:\n${comments}` }
-    } else if (isDocWorkflow(task)) {
-      appendFile(task, "answers.md", `## Comments on ${docName(task)} ${task.doc}\n\n${comments}\n`)
-      task.revising = true
-      task.pending = { mode: "lead", note: comments, revision: true }
+      const which = task.workflow === "research" ? "research" : "concept"
+      appendFile(task, answersName(task), `## Comments on the ${which} brief\n\n${comments}\n`)
+      task.pending = { mode: "lead", note: `The user adjusted the ${which} brief. Revise it and report ESCALATE again with the whole brief:\n${comments}` }
     } else {
-      appendFile(task, "answers.md", `## Comments on plan ${task.plan}\n\n${comments}\n`)
-      task.skipPrincipalReview = true
-      task.pending = { mode: "architect", note: `The user asked for changes to plan ${task.plan}. Revise it:\n${comments}` }
+      // Comments go through Lead, who briefs the Architect (it has no file access).
+      appendFile(task, answersName(task), `## Comments on the ${docName(task)} (${draftFile(task)})\n\n${comments}\n`)
+      if (!draftIsDoc(task)) task.skipPrincipalReview = true
+      task.revising = true
+      task.pending = { mode: "lead", note: comments, revision: true, files: task.infeasible ? [task.infeasible] : undefined }
+      task.infeasible = undefined
     }
     task.phase = "running"
     save(task)
@@ -589,7 +604,7 @@ export class Team {
     if ((task.reviews ?? 0) >= limit)
       return join(`Principal has already reviewed this task ${limit} time(s), the limit (limits.principalReviews).`, render(task))
     const focus = text.trim() ? (await this.withOriginal(task, text, "focus")).note : undefined
-    if (focus) appendFile(task, "answers.md", `## Review requested\n\n${focus}\n`)
+    if (focus) appendFile(task, answersName(task), `## Review requested\n\n${focus}\n`)
     task.reviews = (task.reviews ?? 0) + 1
     task.pending = { mode: "principal_doc_review", note: focus, fresh: true }
     task.phase = "running"
@@ -607,8 +622,8 @@ export class Team {
   /** The "Implement it" button: switches the session to build-manager and starts a code task from the approved plan document. */
   private async implement(task: TaskState, signal: AbortSignal): Promise<string> {
     if (task.workflow !== "plan" || !task.output) return this.wrongPhase(task, "implement")
-    if (task.phase === "approval") {
-      this.done(task, task.docSummary ?? "")
+    if (task.phase === "approval" && task.stage === "how") {
+      this.done(task, task.planSummary ?? "")
       await this.finish(task, "done")
     }
     if (task.phase !== "done") return this.wrongPhase(task, "implement")
@@ -619,11 +634,41 @@ export class Team {
       this.log(`task ${task.id}: switch to ${FRONT_AGENTS.code} failed: ${(e as Error).message}`)
       note = `Could not switch the agent (${(e as Error).message}); the user can press Tab to switch to ${FRONT_AGENTS.code}.`
     }
-    const text = join(
-      `Implement the plan in ${task.output}. The user approved that plan document; read it first and follow it.`,
-      `The planning request was:\n${readFileSync(path.join(task.dir, "request.md"), "utf8").trim()}`,
-    )
-    return join(note, await this.start(task.managerSession, text, signal, { plan: true, workflow: "code" }))
+    const request = readFileSync(path.join(task.dir, "request.md"), "utf8").trim()
+    if (task.stage !== "how" || !task.plan) {
+      // A plan document from before the what/how stages: the code task plans from it.
+      const text = join(
+        `Implement the plan in ${task.output}. The user approved that plan document; read it first and follow it.`,
+        `The planning request was:\n${request}`,
+      )
+      return join(note, await this.start(task.managerSession, text, signal, { plan: true, workflow: "code" }))
+    }
+    // The approved how-document is the plan: Developer carries it out; the Architect steps in only if a step fails.
+    const text = join(`Implement the approved plan (${howOutput(task.output)}) for the what-document ${task.output}.`, `The planning request was:\n${request}`)
+    const seed = (code: TaskState) => {
+      const copy = (from: string, to = from) => {
+        if (existsSync(path.join(task.dir, from))) writeFile(code, to, readFileSync(path.join(task.dir, from), "utf8"))
+      }
+      if (task.doc) copy(`doc-${task.doc}.md`, "doc-1.md")
+      copy(`plan-${task.plan}.md`, "plan-1.md")
+      copy("how-brief.md")
+      copy("how-answers.md")
+      const kind = "how-brief-answer"
+      for (let n = 1; n <= (task.seq[kind] ?? 0); n++) copy(`${kind}-${n}.md`)
+      code.seq = { ...code.seq, plan: 1, ...(task.doc ? { doc: 1 } : {}), ...(task.seq[kind] ? { [kind]: task.seq[kind]! } : {}) }
+      code.doc = task.doc ? 1 : undefined
+      code.docSummary = task.docSummary
+      code.stage = "how"
+      code.stageRun = 1
+      code.plan = 1
+      code.planSteps = task.planSteps
+      code.planRisk = task.planRisk
+      code.planSummary = task.planSummary
+      code.step = 1
+      code.history.push({ n: 0, mode: "architect", role: "architect", status: "PLAN", summary: `approved in plan task ${task.id}`, file: "plan-1.md", plan: 1, stageRun: 1 })
+      code.pending = { mode: "fix", fresh: true }
+    }
+    return join(note, await this.start(task.managerSession, text, signal, { workflow: "code" }, seed))
   }
 
   private wrongPhase(task: TaskState, action: string) {
@@ -710,6 +755,7 @@ export class Team {
       file,
       step: mode === "fix" || mode === "diagnose" || mode === "review" ? task.step : undefined,
       plan: task.plan || undefined,
+      stageRun: task.stageRun,
     })
   }
 
@@ -723,28 +769,53 @@ export class Team {
       case "lead":
       case "lead_fail": {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
+        if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
         if (task.revising) {
           task.revising = false
           const file = writeNumbered(task, "revision", r.content)
           this.record(task, p.mode, r, file)
           task.architectUnseen.push(file)
+          const doc = draftIsDoc(task)
           task.pending = {
             mode: "architect",
-            note: `The user asked for changes to the ${docName(task)} (doc-${task.doc}.md); Lead's revision brief is ${file}. Revise the document accordingly and report DOC with the whole revised document${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
+            note: `The user asked for changes to the ${docName(task)} (${draftFile(task)}); Lead's revision brief is ${file}. Revise it accordingly and report ${doc ? "DOC" : "PLAN"} with the whole revised ${doc ? "document" : "plan"}${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
           }
           return
         }
-        writeFile(task, "brief.md", r.content)
-        this.record(task, p.mode, r, "brief.md")
-        if (task.workflow === "research") {
-          task.depth = r.depth ?? "breadth"
-          if (this.config.workflows.research.confirmBrief && task.depth !== "quick") {
-            task.phase = "brief"
-            task.askedAt = Date.now()
-            return
-          }
+        if (r.status === "TRIVIAL") {
+          writeFile(task, "brief.md", r.content)
+          this.record(task, p.mode, r, "brief.md")
+          task.pending = { mode: "fix_trivial", fresh: true }
+          return
         }
-        task.pending = r.status === "TRIVIAL" ? { mode: "fix_trivial", fresh: true } : { mode: "architect" }
+        // Code: a failed trivial attempt, or behaviour the request already fixes, goes straight to the how stage.
+        if (!task.workflow && !task.stage && (p.mode === "lead_fail" || r.what === "settled")) this.setStage(task, "how")
+        else if (task.workflow !== "research" && !task.stage) this.setStage(task, "what")
+        writeFile(task, briefName(task), r.content)
+        this.record(task, p.mode, r, briefName(task))
+        if (task.workflow === "research") task.depth = r.depth ?? task.depth ?? "breadth"
+        const confirm =
+          task.workflow === "research"
+            ? this.config.workflows.research.confirmBrief && task.depth !== "quick"
+            : task.stage === "what" && this.config.workflows[task.workflow === "plan" ? "plan" : "code"].confirmBrief
+        if (confirm) {
+          task.phase = "brief"
+          task.askedAt = Date.now()
+          return
+        }
+        task.pending = { mode: "architect", fresh: task.stage === "how" && !!task.doc }
+        return
+      }
+      case "lead_answer": {
+        const kind = `${briefName(task).slice(0, -3)}-answer`
+        const file = writeNumbered(task, kind, `# Lead's answers (${(p.ids ?? []).join(", ")})\n\n${r.content}`)
+        this.record(task, p.mode, r, file)
+        const asker = p.asker ?? "architect"
+        const note = `Lead answered your questions ${(p.ids ?? []).join(", ")} in ${file}.`
+        if (asker === "architect") {
+          task.architectUnseen.push(file)
+          task.pending = { mode: "architect", note, afterReview: p.afterReview }
+        } else task.pending = { mode: asker, note, files: [file], afterReview: p.afterReview }
         return
       }
       case "fix_trivial": {
@@ -769,6 +840,8 @@ export class Team {
       }
       case "architect": {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
+        if (r.status === "ASK") return this.askLead(task, p, r)
+        if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
         if (r.status === "NEED_INFO") {
           task.needInfo++
           this.record(task, p.mode, r)
@@ -778,44 +851,46 @@ export class Team {
         if (r.status === "ESCALATE") {
           const file = writeNumbered(task, "escalation", r.content)
           this.record(task, p.mode, r, file)
-          return this.toAdvice(task, `architect escalated (${file})`, { mode: "architect", note: `Retry: write the ${isDocWorkflow(task) ? docName(task) : "plan"}, or escalate again.` })
+          return this.toAdvice(task, `architect escalated (${file})`, { mode: "architect", note: `Retry: write the ${docName(task)}, or escalate again.` })
         }
         task.principalNote = p.afterReview
         if (r.status === "DOC") {
           const file = writeNumbered(task, "doc", r.content)
           this.record(task, p.mode, r, file)
           task.doc = task.seq.doc
-          const failed = this.writeOutput(task, r.content, file)
+          const failed = task.output ? this.writeOutput(task, task.output, r.content, file) : undefined
           task.docSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
           return this.afterDraft(task)
         }
         const file = writeNumbered(task, "plan", r.content)
         this.record(task, p.mode, r, file)
+        const failed = task.workflow === "plan" && task.output ? this.writeOutput(task, howOutput(task.output), r.content, file) : undefined
         task.plan = task.seq.plan
         task.planSteps = r.steps ?? 1
         task.planRisk = r.risk === "yes"
         task.planHadFailure = task.planFailures > 0
         task.step = 1
         task.rounds = 0
-        task.planSummary = r.summary
+        task.planSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
         const review = task.planRisk && !task.skipPrincipalReview
         task.skipPrincipalReview = false
         if (review) {
-          task.pending = { mode: "principal_review" }
+          task.pending = { mode: "principal_review", fresh: true }
         } else this.afterDraft(task)
         return
       }
       case "principal_doc_review": {
+        if (r.status === "ASK") return this.askLead(task, p, r)
         const file = this.reportFile(task, "principal", p.mode, r)
         this.record(task, p.mode, r, file)
         task.principalNote = file
         if (r.status === "APPROVE") return this.toApproval(task)
         task.architectUnseen.push(file)
-        const doc = isDocWorkflow(task)
+        const doc = draftIsDoc(task)
         task.pending = {
           mode: "architect",
           afterReview: file,
-          note: `Principal critically reviewed the ${doc ? `${docName(task)} (doc-${task.doc}.md)` : `plan ${task.plan}`} at the user's request (${file}). Revise it: fix every must-fix item, or say in the ${doc ? "document" : "plan"} why not. Report ${doc ? "DOC" : "PLAN"} with the whole revised ${doc ? "document" : "plan"}.`,
+          note: `Principal critically reviewed the ${docName(task)} (${draftFile(task)}) at the user's request (${file}). Revise it: fix every must-fix item, or say in the ${doc ? "document" : "plan"} why not. Report ${doc ? "DOC" : "PLAN"} with the whole revised ${doc ? "document" : "plan"}.`,
         }
         return
       }
@@ -827,6 +902,7 @@ export class Team {
         return
       }
       case "principal_review": {
+        if (r.status === "ASK") return this.askLead(task, p, r)
         const file = this.reportFile(task, "principal", p.mode, r)
         this.record(task, p.mode, r, file)
         task.principalNote = file
@@ -873,6 +949,7 @@ export class Team {
         return this.round(task, file, r)
       }
       case "principal_advice": {
+        if (r.status === "ASK") return this.askLead(task, p, r)
         // Counted once advice is given: a question round before it is part of the same advice.
         if (r.status === "ADVICE") task.principalAdviceUsed++
         const file = this.reportFile(task, "principal", p.mode, r)
@@ -926,10 +1003,63 @@ export class Team {
     task.askedAt = Date.now()
   }
 
+  private setStage(task: TaskState, stage: "what" | "how") {
+    task.stage = stage
+    task.stageRun = (task.stageRun ?? 0) + 1
+    task.needInfo = 0
+    task.architectUnseen = []
+  }
+
+  /** The user approved the what-document: the how stage starts in fresh sessions with only that document. */
+  private toHow(task: TaskState) {
+    task.whatSessions = { lead: task.sessions.lead, architect: task.sessions.architect }
+    task.sessions.lead = undefined
+    task.sessions.architect = undefined
+    task.sessions.principal = undefined
+    task.principalNote = undefined
+    task.skipPrincipalReview = false
+    this.setStage(task, "how")
+    const infeasible = task.infeasible
+    task.infeasible = undefined
+    task.phase = "running"
+    task.pending = infeasible
+      ? { mode: "lead", fresh: true, files: [infeasible], note: `An earlier how stage found a decision unworkable (${infeasible}); the user kept the what-document as it is. Find a way that keeps it, or report INFEASIBLE again with stronger evidence.` }
+      : { mode: "lead", fresh: true }
+  }
+
+  /** The Architect or Principal asks Lead; Lead's continuing session answers in a numbered file. */
+  private askLead(task: TaskState, p: Pending, r: Report) {
+    task.needInfo++
+    const start = task.askSeq ?? 0
+    const ids = (r.questions ?? []).map((_, i) => `A${start + i + 1}`)
+    task.askSeq = start + ids.length
+    const text = (r.questions ?? []).map((q, i) => `- **${ids[i]}**: ${q}`).join("\n")
+    this.record(task, p.mode, { ...r, summary: `asked Lead ${ids.join(", ")}` })
+    task.pending = {
+      mode: "lead_answer",
+      ids,
+      asker: p.mode,
+      afterReview: p.afterReview,
+      note: join(`Questions from ${MODE_ROLE[p.mode] === "architect" ? "the Architect" : "Principal"}:`, text, r.content.trim() && `Context:\n${r.content}`),
+    }
+  }
+
+  /** The how stage found an approved what-decision unworkable: back to the what-document, and the user decides. */
+  private infeasible(task: TaskState, mode: Mode, r: Report) {
+    const file = writeNumbered(task, "infeasible", `# ${MODE_ROLE[mode]}: a decision can't work\n\n${r.summary}\n\n${r.content}`)
+    this.record(task, mode, r, file)
+    task.sessions = { ...task.sessions, ...(task.whatSessions ?? {}), principal: undefined }
+    task.whatSessions = undefined
+    task.principalNote = undefined
+    this.setStage(task, "what")
+    task.infeasible = file
+    this.toApproval(task)
+  }
+
   private askUser(task: TaskState, mode: Mode, r: Report) {
     task.questionRounds++
     this.record(task, mode, r)
-    appendFile(task, "answers.md", `## Questions from ${MODE_ROLE[mode]}\n\n${r.content}\n\n${(r.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n")}\n`)
+    appendFile(task, answersName(task), `## Questions from ${MODE_ROLE[mode]}\n\n${r.content}\n\n${(r.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n")}\n`)
     task.phase = "questions"
     task.questions = r.questions
     task.questionsFrom = mode

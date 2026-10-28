@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 import { appendFileSync, mkdirSync } from "node:fs"
 import path from "node:path"
-import { agentId, DESCRIPTIONS, FRONT_AGENTS, FRONT_DESCRIPTIONS, managerPrompt, permissionsFor, systemPrompt, workflowOf } from "./agents.ts"
+import { agentId, DESCRIPTIONS, FRONT_AGENTS, FRONT_DESCRIPTIONS, ignoredTools, managerPrompt, permissionsFor, systemPrompt, workflowOf } from "./agents.ts"
 import { WORKFLOWS } from "./state.ts"
 import { expandHome, loadConfig, modelsFor, ROLES } from "./config.ts"
 import { registerFallback } from "./fallback.ts"
@@ -24,6 +24,7 @@ export default Plugin.define({
     }
     const missing = ROLES.filter((r) => modelsFor(config, r).length === 0)
     if (missing.length) log(`no model configured for: ${missing.join(", ")} (set agents.<role>.model)`)
+    for (const warning of ignoredTools(config)) log(`warning: ${warning}`)
 
     await ctx.agent.transform((editor) => {
       for (const role of ROLES) {

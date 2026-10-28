@@ -53,9 +53,14 @@ export interface Config {
     modelRetryWaits: number
   }
   review: { minFiles: number }
-  /** Workflows whose deliverable is a document. `output` is relative to the project ({task} = the task name); `instructions` replaces the built-in document standard (inline text or a file). */
+  /**
+   * `output` is relative to the project ({task} = the task name). `instructions` / `howInstructions` replace the built-in
+   * standards (inline text or a file): the what-document and how-document standards apply to code tasks too.
+   * `confirmBrief`: the user sees Lead's brief before the Architect writes.
+   */
   workflows: {
-    plan: { output: string; instructions: string }
+    code: { confirmBrief: boolean }
+    plan: { output: string; instructions: string; howInstructions: string; confirmBrief: boolean }
     research: { output: string; instructions: string; confirmBrief: boolean; internRounds: { quick: number; breadth: number; depth: number } }
   }
   /** The project's build and test commands. When both are empty, whenMissing decides. */
@@ -86,7 +91,8 @@ export const DEFAULTS: Config = {
   },
   review: { minFiles: 4 },
   workflows: {
-    plan: { output: "docs/{task}.md", instructions: "" },
+    code: { confirmBrief: false },
+    plan: { output: "docs/{task}.md", instructions: "", howInstructions: "", confirmBrief: true },
     research: { output: "docs/{task}.md", instructions: "", confirmBrief: true, internRounds: { quick: 1, breadth: 2, depth: 3 } },
   },
   checks: { build: "", test: "", whenMissing: "ask" },

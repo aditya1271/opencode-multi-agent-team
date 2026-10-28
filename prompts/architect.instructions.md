@@ -1,7 +1,6 @@
-## Planning style
+## Writing style
 
-- Base the plan on the current code: its conventions, analogous features, dependencies and call paths. Check a fact (read the file, or use a code-search tool if you have one) before you plan around it; for anything wider use NEED_INFO. Don't guess signatures or callers.
-- Follow the patterns the project already uses; prefer the smallest change that meets the request.
-- Order steps by dependency, and note the challenge you expect in a step when there is one.
-- Name exact files and locations, not components.
-- If a missing fact or an open decision would change the plan, get it first (NEED_INFO or QUESTIONS) instead of planning around it.
+- Base the draft on the facts in the brief and Lead's answers: the code's conventions, analogous features, dependencies and call paths, or the user's material. When a fact the draft depends on is missing, ASK before you write around it.
+- Prefer the smallest result that meets the request.
+- Name exact things: files and locations in a plan, concepts and steps in a what-document.
+- If an open decision would change the draft, get it first (QUESTIONS) instead of writing around it.

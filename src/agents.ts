@@ -74,11 +74,11 @@ export function permissionsFor(config: Config, role: Role): Rule[] {
     case "lead":
       return [...base, ...readSearch, ...readOnly, ...addonRules(config, role), allow("report")]
     case "architect":
-      return [...base, allow("read"), ...addonRules(config, role), allow("report")]
+    case "principal":
+      // No file or code access: they know only what Lead's brief and answers tell them.
+      return [deny("*"), ...(config.agents[role]?.skills ?? []).map((s) => allow("skill", s)), allow("report")]
     case "intern":
       return [...base, ...readSearch, ...readOnly, ...addonRules(config, role), allow("report")]
-    case "principal":
-      return [...base, ...readSearch, ...addonRules(config, role), allow("report")]
     case "reviewer":
       return [...base, ...readSearch, ask("shell"), ...readOnly, ...addonRules(config, role), ...askList, allow("report")]
     case "developer":
@@ -124,10 +124,26 @@ function textOrFile(value: string): string {
   return value.trim()
 }
 
-/** A workflow's document standard: the configured text or file, else the built-in prompts/<workflow>.instructions.md. */
-export function workflowInstructions(config: Config, workflow: "plan" | "research"): string {
-  const configured = config.workflows[workflow].instructions
-  return configured.trim() ? textOrFile(configured) : readPrompt(path.join(PROMPT_DIR, `${workflow}.instructions.md`))
+/** Roles with no file or code access. */
+export const BRIEF_ONLY: Role[] = ["architect", "principal"]
+
+/** Configured tools a brief-only role can't use; the plugin ignores them and logs a warning. */
+export function ignoredTools(config: Config): string[] {
+  return BRIEF_ONLY.flatMap((role) => {
+    const a = config.agents[role] ?? {}
+    const extra = [...(a.mcps ?? []), ...(a.tools ?? []), ...(a.commands ?? [])]
+    return extra.length ? [`agents.${role}: ${extra.join(", ")} ignored (${role} has no tool access; Lead answers its questions)`] : []
+  })
+}
+
+/**
+ * A document standard: the configured text or file, else the built-in prompt.
+ * what: plan.instructions(.md); how: plan.howInstructions (how.instructions.md); research: research.instructions(.md).
+ */
+export function workflowInstructions(config: Config, kind: "what" | "how" | "research"): string {
+  const configured = kind === "research" ? config.workflows.research.instructions : kind === "how" ? config.workflows.plan.howInstructions : config.workflows.plan.instructions
+  const file = kind === "research" ? "research" : kind === "how" ? "how" : "plan"
+  return configured?.trim() ? textOrFile(configured) : readPrompt(path.join(PROMPT_DIR, `${file}.instructions.md`))
 }
 
 /** The code-search tools configured for a role, listed for the prompt. */
@@ -135,6 +151,7 @@ function toolsNote(config: Config, role: Role): string {
   const a = config.agents[role] ?? {}
   const lines: string[] = []
   if (role === "manager") return ""
+  if (BRIEF_ONLY.includes(role)) return a.skills?.length ? `## Your tools\n\n- Load these skills before you start working: ${a.skills.join(", ")}.` : ""
   if (a.skills?.length) lines.push(`- Load these skills before you start working: ${a.skills.join(", ")}.`)
   if (a.mcps?.length) lines.push(`- MCP servers, through the execute tool: ${a.mcps.join(", ")}.`)
   if (a.tools?.length) lines.push(`- Tools: ${a.tools.join(", ")}.`)

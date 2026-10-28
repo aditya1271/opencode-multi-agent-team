@@ -19,6 +19,7 @@ export type Mode =
   | "architect_reply"
   | "principal_reply"
   | "principal_doc_review"
+  | "lead_answer"
 
 export const MODE_ROLE: Record<Mode, WorkerRole> = {
   lead: "lead",
@@ -36,6 +37,7 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   architect_reply: "architect",
   principal_reply: "principal",
   principal_doc_review: "principal",
+  lead_answer: "lead",
 }
 
 /** code: change files (the default). plan: write a plan document. research: write a findings report. */
@@ -43,6 +45,25 @@ export type Workflow = "code" | "plan" | "research"
 export const WORKFLOWS: Workflow[] = ["code", "plan", "research"]
 export type ResearchDepth = "quick" | "breadth" | "depth"
 export const isDocWorkflow = (task: { workflow?: Workflow }) => task.workflow === "plan" || task.workflow === "research"
+
+/** Plan and non-trivial code tasks: first WHAT (code-independent behaviour), then HOW (the change plan). */
+export type Stage = "what" | "how"
+
+/** The Architect's next draft is a document (what-document, research report), not a step plan. */
+export const draftIsDoc = (task: { workflow?: Workflow; stage?: Stage }) =>
+  task.workflow === "research" || task.stage === "what" || (task.workflow === "plan" && task.stage !== "how")
+
+/** Lead's brief for the current stage. */
+export const briefName = (task: { stage?: Stage }) => (task.stage === "how" ? "how-brief.md" : "brief.md")
+
+/** The user's answers and comments for the current stage; the how stage starts its own. */
+export const answersName = (task: { stage?: Stage }) => (task.stage === "how" ? "how-answers.md" : "answers.md")
+
+/** Lead's answers to the Architect's or Principal's questions in the current stage, oldest first. */
+export const answerFiles = (task: TaskState): string[] => {
+  const kind = `${briefName(task).slice(0, -3)}-answer`
+  return Array.from({ length: task.seq[kind] ?? 0 }, (_, i) => `${kind}-${i + 1}.md`)
+}
 
 export type Phase = "running" | "checks" | "questions" | "brief" | "approval" | "stuck" | "budget" | "done" | "stopped"
 export const TERMINAL: Phase[] = ["done", "stopped"]
@@ -57,6 +78,11 @@ export interface Pending {
   afterReview?: string
   /** Lead hand-off of the user's comments on the document (`note`), for a revision brief. */
   revision?: boolean
+  /** lead_answer: the question ids Lead must answer, and the mode that asked. */
+  ids?: string[]
+  asker?: Mode
+  /** Task files delivered with this hand-off (a continuing session sees them once). */
+  files?: string[]
 }
 
 export interface HistoryEntry {
@@ -68,6 +94,8 @@ export interface HistoryEntry {
   file?: string
   step?: number
   plan?: number
+  /** The stage run the entry belongs to (see TaskState.stageRun). */
+  stageRun?: number
 }
 
 export interface TaskState {
@@ -103,6 +131,16 @@ export interface TaskState {
   reviews?: number
   /** The user commented on the document: Lead is writing a revision brief for the Architect. */
   revising?: boolean
+  /** Plan and non-trivial code tasks: the current stage. */
+  stage?: Stage
+  /** Counts stage changes; a fresh session gets only the files of the current run. */
+  stageRun?: number
+  /** Lead's and the Architect's what-stage sessions, kept while the how stage runs in fresh ones. */
+  whatSessions?: Partial<Record<WorkerRole, string>>
+  /** The how stage found a what-decision unworkable (infeasible-N.md); the user decides. */
+  infeasible?: string
+  /** Questions asked of Lead so far (ids A1, A2, …). */
+  askSeq?: number
   /** The user asked for a plan: lead can't pick TRIVIAL. */
   forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */

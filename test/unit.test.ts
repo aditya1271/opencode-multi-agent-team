@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { evaluate, FRONT_AGENTS, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
+import { evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
 import { buildPatterns, DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
 import { toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
@@ -59,10 +59,44 @@ describe("guards", () => {
 describe("report statuses", () => {
   const task = newTask("/tmp/opencode/omat-test", "ses_x", "/tmp", "Goal\nfix the thing", 40)
   test("caps remove statuses", () => {
-    expect(allowedStatuses(DEFAULTS, "architect", task)).toContain("NEED_INFO")
+    expect(allowedStatuses(DEFAULTS, "architect", task)).toEqual(["PLAN", "ASK", "QUESTIONS", "ESCALATE"])
     task.needInfo = 6
     task.questionRounds = 4
     expect(allowedStatuses(DEFAULTS, "architect", task)).toEqual(["PLAN", "ESCALATE"])
+    task.needInfo = 0
+    task.questionRounds = 0
+  })
+  test("stages pick the Architect's statuses; only the how stage after a what-document may report INFEASIBLE", () => {
+    const t = newTask("/tmp/opencode/omat-test", "ses_s", "/tmp", "Goal\nadd a feature", 40)
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["TRIVIAL", "ESCALATE", "QUESTIONS"])
+    t.stage = "what"
+    expect(allowedStatuses(DEFAULTS, "architect", t)).toEqual(["DOC", "ASK", "QUESTIONS", "ESCALATE"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS"])
+    t.stage = "how"
+    expect(allowedStatuses(DEFAULTS, "architect", t)).toEqual(["PLAN", "ASK", "QUESTIONS", "ESCALATE"])
+    t.doc = 1
+    expect(allowedStatuses(DEFAULTS, "architect", t)).toContain("INFEASIBLE")
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("INFEASIBLE")
+    const r = newTask("/tmp/opencode/omat-test", "ses_rs", "/tmp", "Goal\nresearch", 40)
+    r.workflow = "research"
+    expect(allowedStatuses(DEFAULTS, "architect", r)).toEqual(["DOC", "NEED_INFO", "QUESTIONS", "ESCALATE"])
+  })
+  test("Lead's first ESCALATE in a code task must say whether the behaviour is settled", () => {
+    const t = newTask("/tmp/opencode/omat-test", "ses_ws", "/tmp", "Goal\nadd --upper", 40)
+    beginRun("ses_lead", { role: "lead", mode: "lead", task: t, toolLimit: 10 })
+    const esc = { status: "ESCALATE", summary: "s", content: "## Code\n\nx" }
+    expect(() => acceptReport(DEFAULTS, "ses_lead", esc)).toThrow("what")
+    expect(() => acceptReport(DEFAULTS, "ses_lead", { ...esc, what: "settled" })).toThrow("Why the behaviour is settled")
+    expect(acceptReport(DEFAULTS, "ses_lead", { ...esc, what: "settled", content: "## Why the behaviour is settled\n\nThe flag is named.\n\n## Code\n\nx" })).toContain("Report received")
+    runs.delete("ses_lead")
+  })
+  test("Lead's answer must cite every question id", () => {
+    const t = newTask("/tmp/opencode/omat-test", "ses_la", "/tmp", "Goal\nx", 40)
+    t.pending = { mode: "lead_answer", ids: ["A1", "A2"] }
+    beginRun("ses_ans", { role: "lead", mode: "lead_answer", task: t, toolLimit: 10 })
+    expect(() => acceptReport(DEFAULTS, "ses_ans", { status: "ANSWER", summary: "s", content: "### A1\nyes" })).toThrow("missing: A2")
+    expect(acceptReport(DEFAULTS, "ses_ans", { status: "ANSWER", summary: "s", content: "### A1\nyes\n### A2\nno" })).toContain("Report received")
+    runs.delete("ses_ans")
   })
   test("lead after a failed trivial attempt may only escalate", () => {
     task.trivialFailed = true
@@ -107,10 +141,12 @@ describe("permissions", () => {
     expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
     expect(rules.filter((r) => r.effect === "allow").map((r) => r.action)).toEqual(["team", "question"])
   })
-  test("architect has no grep or shell", () => {
-    const allowed = permissionsFor(DEFAULTS, "architect").filter((r) => r.effect === "allow").map((r) => r.action)
-    expect(allowed).not.toContain("grep")
-    expect(allowed).not.toContain("shell")
+  test("architect and principal can only report (and load their skills)", () => {
+    const config = merge(DEFAULTS, { agents: { principal: { skills: ["csh-terminal"] } } })
+    expect(permissionsFor(config, "architect").filter((r) => r.effect === "allow").map((r) => r.action)).toEqual(["report"])
+    const principal = permissionsFor(config, "principal")
+    expect(principal.filter((r) => r.effect === "allow").map((r) => r.action)).toEqual(["skill", "report"])
+    expect(evaluate(principal, "read", ["a.ts"])).toBe("deny")
   })
   test("evaluate: last match wins, team rules decide", () => {
     const lead = permissionsFor(DEFAULTS, "lead")
@@ -137,15 +173,18 @@ describe("permissions", () => {
   test("per-agent search tools, commands and mcps", () => {
     const config = merge(DEFAULTS, {
       agents: {
-        architect: { mcps: ["codebase-memory"], tools: ["docs_search"], commands: ["graphify *"] },
+        lead: { mcps: ["codebase-memory"], tools: ["docs_search"], commands: ["graphify *"] },
+        architect: { mcps: ["codebase-memory"] },
         developer: { commands: ["rm -rf *"] },
       },
     })
-    const architect = permissionsFor(config, "architect")
-    expect(evaluate(architect, "codebase-memory_search_graph", ["*"])).toBe("allow")
-    expect(evaluate(architect, "docs_search", ["*"])).toBe("allow")
-    expect(evaluate(architect, "shell", ["graphify query foo"])).toBe("allow")
-    expect(evaluate(architect, "shell", ["grep foo"])).toBe("deny")
+    const lead = permissionsFor(config, "lead")
+    expect(evaluate(lead, "codebase-memory_search_graph", ["*"])).toBe("allow")
+    expect(evaluate(lead, "docs_search", ["*"])).toBe("allow")
+    expect(evaluate(lead, "shell", ["graphify query foo"])).toBe("allow")
+    expect(evaluate(lead, "shell", ["rm foo"])).toBe("deny")
+    expect(evaluate(permissionsFor(config, "architect"), "codebase-memory_search_graph", ["*"])).toBe("deny")
+    expect(ignoredTools(config)).toEqual(["agents.architect: codebase-memory ignored (architect has no tool access; Lead answers its questions)"])
     expect(evaluate(permissionsFor(config, "developer"), "shell", ["rm -rf /"])).toBe("ask")
     expect(toolKind("docs_search", {}, config)).toBe("index")
     expect(toolKind("shell", { command: "graphify query foo" }, config)).toBe("index")
@@ -232,26 +271,55 @@ describe("plan and research workflows", () => {
       writeFileSync(path.join(workspace, "docs", path.basename(t.output)), "someone else's file")
       // outputPath was fixed at start; a second task with the same name gets -2
       expect(team.outputPath(t)).toMatch(/-2\.md$/)
-      team.apply(t, { mode: "lead" }, report("ESCALATE"), {})
-      expect(t.pending.mode).toBe("architect")
+      // What stage: Lead's concept brief waits for the user, then the Architect writes the what-document.
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: "## Concept brief\n\n**Concerns**: speed\n\n## Excerpts\n\nE" }), {})
+      expect([t.stage, t.phase]).toEqual(["what", "brief"])
+      expect(render(t)).toContain("**Concept brief**\n\n**Concerns**: speed")
+      expect(render(t)).not.toContain("## Excerpts")
+      save(t)
+      expect((await team.handle({ action: "approve" }, "ses_w", signal)).mode).toBe("architect")
       t.pending = undefined
-      team.apply(t, { mode: "architect" }, report("DOC"), {})
+      team.apply(t, { mode: "architect" }, report("DOC", { content: "# Design\n\n## Options\n\nA or B\n\n## Decisions\n\n- A (yours)" }), {})
       expect(t.phase).toBe("approval")
       expect(readFileSync(t.output, "utf8")).toContain("## Options")
+      expect(render(t)).toContain("**Decisions**\n- A (yours)")
       expect(render(t)).toContain("**Sections**\n- Options")
+      t.sessions.lead = "ses_lead_what"
+      save(t)
+
+      // Approving the what-document starts the how stage in fresh sessions.
+      const how = await team.handle({ action: "approve" }, "ses_w", signal)
+      expect([how.mode, how.fresh, t.stage, t.sessions.lead, t.whatSessions.lead]).toEqual(["lead", true, "how", undefined, "ses_lead_what"])
+      const leadPrompt = buildPrompt(DEFAULTS, t, how, true)
+      expect(leadPrompt).toContain("Stage: HOW")
+      expect(leadPrompt).toContain("The approved what-document:")
+      expect(leadPrompt).not.toContain("**Concerns**: speed")
+      t.pending = undefined
+      team.apply(t, how, report("ESCALATE", { content: "## Code\n\n`a.ts:1-3`" }), {})
+      expect([t.pending.mode, t.pending.fresh]).toEqual(["architect", true])
+      const archPrompt = buildPrompt(DEFAULTS, t, t.pending, true)
+      expect(archPrompt).toContain('name="how-brief.md"')
+      expect(archPrompt).not.toContain('name="brief.md"')
+      t.pending = undefined
+      team.apply(t, { mode: "architect" }, report("PLAN", { content: "## Steps\n1. **Add the cache** — `a.ts:1`", steps: 1, risk: "no" }), {})
+      expect(t.phase).toBe("approval")
+      const howDoc = t.output.replace(/\.md$/, ".how.md")
+      expect(readFileSync(howDoc, "utf8")).toContain("Add the cache")
+      expect(render(t)).toContain(`**Plan file:** ${howDoc}`)
       save(t)
       await team.handle({ action: "approve" }, "ses_w", signal)
       expect(t.phase).toBe("done")
       expect(render(t)).toContain("[Implement it]")
       expect(t.history.some((h: any) => h.role === "developer")).toBe(false)
 
+      // Implementing hands the approved plan straight to Developer.
       const p = await team.handle({ action: "implement", workflow: "plan" }, "ses_w", signal)
       expect(switched).toEqual(["build-manager"])
       const code = team.task("ses_w")
       expect(code.id).not.toBe(t.id)
-      expect([code.workflow, code.forcePlan]).toEqual([undefined, true])
-      expect(readFileSync(path.join(code.dir, "request.md"), "utf8")).toContain(`Implement the plan in ${t.output}`)
-      expect(p).toContain("Switched to build-manager")
+      expect([code.workflow, code.forcePlan, code.stage, code.plan, code.pending.mode]).toEqual([undefined, undefined, "how", 1, "fix"])
+      expect(readFileSync(path.join(code.dir, "plan-1.md"), "utf8")).toContain("Add the cache")
+      expect(readFileSync(path.join(code.dir, "request.md"), "utf8")).toContain(`Implement the approved plan (${howDoc})`)
     } finally {
       cleanup()
     }
@@ -306,6 +374,45 @@ describe("plan and research workflows", () => {
     }
   })
 
+  test("code: settled behaviour skips the what stage; the Architect asks Lead; INFEASIBLE goes back to the user", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "add --upper" }, "ses_c", signal)
+      const t = team.task("ses_c")
+      t.phase = "running"
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { what: "settled", content: "## Why the behaviour is settled\n\nNamed.\n\n## Code\n\nx" }), {})
+      expect([t.stage, t.pending.mode]).toEqual(["how", "architect"])
+      expect(readFileSync(path.join(t.dir, "how-brief.md"), "utf8")).toContain("settled")
+      expect(buildPrompt(DEFAULTS, t, t.pending, true)).toContain("## Behaviour")
+
+      // ASK: numbered questions to Lead, answered in a numbered file the Architect gets next.
+      t.pending = undefined
+      team.apply(t, { mode: "architect" }, report("ASK", { questions: ["which file?", "C or C++?"], content: "" }), {})
+      expect([t.pending.mode, t.pending.ids, t.needInfo]).toEqual(["lead_answer", ["A1", "A2"], 1])
+      expect(t.pending.note).toContain("**A2**: C or C++?")
+      const ask = t.pending
+      t.pending = undefined
+      team.apply(t, ask, report("ANSWER", { content: "### A1\nmain.c\n### A2\nC only (`CMakeLists.txt:3`)" }), {})
+      expect([t.pending.mode, t.architectUnseen]).toEqual(["architect", ["how-brief-answer-1.md"]])
+      expect(buildPrompt(DEFAULTS, t, t.pending, true)).toContain('name="how-brief-answer-1.md"')
+
+      // INFEASIBLE in a how stage after a what-document: back to the what approval with the what sessions.
+      t.pending = undefined
+      t.stage = "how"
+      t.doc = 1
+      writeFileSync(path.join(t.dir, "doc-1.md"), "# What\n\n## Decisions\n\n- C++")
+      t.whatSessions = { lead: "ses_lw", architect: "ses_aw" }
+      team.apply(t, { mode: "architect" }, report("INFEASIBLE", { content: "C++ can't build here" }), {})
+      expect([t.stage, t.phase, t.infeasible, t.sessions.lead]).toEqual(["what", "approval", "infeasible-1.md", "ses_lw"])
+      expect(render(t)).toContain("C++ can't build here")
+      save(t)
+      const again = await team.handle({ action: "approve" }, "ses_c", signal)
+      expect([again.mode, again.files, t.stage]).toEqual(["lead", ["infeasible-1.md"], "how"])
+    } finally {
+      cleanup()
+    }
+  })
+
   test("research: Lead's brief waits for the user unless the research is quick", async () => {
     const { team, cleanup } = setup()
     try {
@@ -350,7 +457,7 @@ describe("start while the task waits on the user", () => {
       t.plan = 1
       save(t)
       const p = await team.handle({ action: "start", text: "critically review the plan" }, "ses_r", new AbortController().signal)
-      expect(p.mode).toBe("architect")
+      expect([p.mode, p.revision]).toEqual(["lead", true])
       expect(p.note).toContain("critically review the plan")
       const q = team.task("ses_r")
       q.phase = "questions"
