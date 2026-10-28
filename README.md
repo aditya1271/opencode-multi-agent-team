@@ -109,6 +109,10 @@ To update later, run `git pull` in the clone and restart OpenCode.
     2 tasks · 3 questions
   ```
 
+  The section appears once the session has a task or a question. If it never appears after
+  updating from a version without the sidebar, the background server still has the old
+  plugin list: close OpenCode and run `opencode service restart` (`/reload` isn't enough).
+
 Edits are never reverted automatically. Every result lists the changed files.
 
 ## Limits (defaults)
