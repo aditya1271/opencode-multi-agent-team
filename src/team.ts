@@ -118,7 +118,8 @@ export class Team {
       sum(other.usage)
       session.tasks++
     }
-    return { task: current, session }
+    // The RPC output check rejects `task: undefined`; leave the key out instead.
+    return current ? { task: current, session } : { session }
   }
 
   /** The call running for this task right now, with its usage so far. */

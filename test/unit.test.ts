@@ -214,7 +214,7 @@ describe("sidebar", () => {
       expect([developer.calls, developer.prompts, developer.tools, developer.input, developer.cacheRead, developer.output]).toEqual([0, 2, 1, 100, 500, 30])
       expect(s.session.tasks).toBe(2)
       expect(s.session.total).toEqual({ calls: 2, prompts: 8, tools: 9, tokens: 300 + 630 + 1000 })
-      expect((await team.sidebar("ses_other")).task).toBeUndefined()
+      expect("task" in (await team.sidebar("ses_other"))).toBe(false)
     } finally {
       runs.delete("ses_fix")
       rmSync(root, { recursive: true, force: true })

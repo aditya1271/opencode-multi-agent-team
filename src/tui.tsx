@@ -16,6 +16,20 @@ const resolveColor = (theme: unknown, tokenPath: string, fallback: string) => {
 
 const tokensOf = (r: StatsRow) => r.input + r.cacheRead + r.output
 
+/** RPC errors are plain objects ({ type, message }), not Error instances. */
+const errorText = (e: unknown): string => {
+  if (e instanceof Error) return e.message
+  if (e && typeof e === "object") {
+    const o = e as { message?: unknown; type?: unknown; _tag?: unknown }
+    const text = [o.type ?? o._tag, o.message].filter((x) => typeof x === "string").join(": ")
+    if (text) return text.split("\n")[0]
+    try {
+      return JSON.stringify(e)
+    } catch {}
+  }
+  return String(e)
+}
+
 export default Plugin.define({
   id: "multi-agent-team.tui",
   setup(context) {
@@ -55,7 +69,7 @@ export default Plugin.define({
             }
           } catch (e) {
             // Keep the last numbers if the server is briefly unavailable; say why when there are none.
-            if (mine === seq) setError(e instanceof Error ? e.message : String(e))
+            if (mine === seq) setError(errorText(e))
           }
         }, 150)
       }
