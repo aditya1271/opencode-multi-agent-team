@@ -12,9 +12,25 @@ export interface ModelRef {
   variant?: string
 }
 
+export interface AgentConfig {
+  model?: string | string[]
+  variant?: string
+  /** Skills the agent loads first. */
+  skills?: string[]
+  /** MCP servers, used through Code Mode (`execute`). */
+  mcps?: string[]
+  /** Tool ids from other plugins (e.g. a docs search). */
+  tools?: string[]
+  /** Extra shell command patterns the agent may run (e.g. "graphify *"). */
+  commands?: string[]
+  /** Replaces the role's default instructions: inline text or a file path. */
+  instructions?: string
+  /** Added at the end of the prompt: inline text or a file path. */
+  append?: string
+}
+
 export interface Config {
-  agents: Partial<Record<Role, { model?: string | string[]; variant?: string }>>
-  addons: Partial<Record<Role, { mcps?: string[]; skills?: string[] }>>
+  agents: Partial<Record<Role, AgentConfig>>
   polish: "on" | "off"
   agentPrefix: string
   defaultAgent: boolean
@@ -35,12 +51,10 @@ export interface Config {
   askCommands: string[]
   readOnlyCommands: string[]
   taskDir: string
-  promptAppend: Partial<Record<Role, string>>
 }
 
 export const DEFAULTS: Config = {
   agents: {},
-  addons: {},
   polish: "on",
   agentPrefix: "team-",
   defaultAgent: false,
@@ -65,7 +79,6 @@ export const DEFAULTS: Config = {
     "git log *", "git status *", "git show *", "pwd",
   ],
   taskDir: "~/.cache/opencode-multi-agent-team",
-  promptAppend: {},
 }
 
 export const ASK_COMMANDS = [

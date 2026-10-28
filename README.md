@@ -62,6 +62,39 @@ Edits are never reverted automatically. Every result lists the changed files.
 
 All limits are in the config file under `limits`.
 
+## Per-agent tools and instructions
+
+Each entry under `agents` can also set code-search tools and instructions, so the team works
+with whatever you use to explore code (a code graph, clangd, a docs RAG, ...):
+
+| Key | What it does |
+|---|---|
+| `skills` | Skills the agent may load; it is told to load them first. |
+| `mcps` | MCP servers, used through Code Mode (`execute`). |
+| `tools` | Tool ids from other plugins, e.g. `docs_search`. |
+| `commands` | Extra shell commands the agent may run, e.g. `graphify *`, `clangd-query *`. |
+| `instructions` | Replaces the agent's editable instructions (inline text, or a `.md`/`.txt` file path). |
+| `append` | Added at the end of the prompt (inline text or file path). |
+
+```jsonc
+"explorer": {
+  "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
+  "mcps": ["codebase-memory"], "skills": ["codebase-memory"],
+  "tools": ["docs_search"], "commands": ["graphify *"],
+  "instructions": "~/team-prompts/explorer.md"
+}
+```
+
+Each agent's prompt has a fixed core: its role, the report statuses, and the safety rules. The
+editable defaults are in `prompts/<role>.instructions.md`; copy one as a starting point. The
+configured tools are listed in the prompt. `commands` never override the ask-first list for
+destructive commands.
+
+The default instructions adapt published agent prompts: OpenCode's plan mode, Claude Code's
+Explore and Plan agents (as collected in Piebald-AI/claude-code-system-prompts), the
+oh-my-opencode(-slim) Explorer, Fixer and Oracle roles, and VoltAgent's debugger,
+error-detective, code-reviewer and architect-reviewer subagents.
+
 ## Task folder
 
 Each task writes to `~/.cache/opencode-multi-agent-team/<task-id>/` (`taskDir`):

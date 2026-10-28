@@ -80,8 +80,8 @@ export function hints(usage: Partial<Record<Role, AgentUsage>>, steps = 1): stri
   }
   const s = usage.senior
   if (s) {
-    const nonGraph = (s.tools.search ?? 0) + (s.tools.shell ?? 0) + (s.tools.edit ?? 0)
-    if (nonGraph) out.push(`senior used ${nonGraph} non-graph search/shell/edit calls (expected only graph queries)`)
+    const other = (s.tools.search ?? 0) + (s.tools.shell ?? 0) + (s.tools.edit ?? 0)
+    if (other) out.push(`senior used ${other} grep/shell/edit calls (expected only code-search tools)`)
     if (s.calls && s.prompts / s.calls > 15) out.push(`senior: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
   }
   for (const role of ["triage", "senior", "explorer", "analyser", "oracle"] as const) {

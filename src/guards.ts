@@ -36,11 +36,13 @@ export function toolKind(tool: string, input: unknown, config: Config): ToolKind
   if (tool === "read") return "read"
   if (tool === "grep" || tool === "glob") return "search"
   if (EDIT_TOOLS.has(tool)) return "edit"
+  const agents = Object.values(config.agents)
   if (tool === "shell") {
     const cmd = String((input as { command?: unknown })?.command ?? "")
-    return matchesAny(cmd, config.buildCommands.patterns) ? "build" : "shell"
+    if (matchesAny(cmd, config.buildCommands.patterns)) return "build"
+    return matchesAny(cmd, agents.flatMap((a) => a?.commands ?? [])) ? "index" : "shell"
   }
-  if (tool === "execute" || tool.includes("_")) return "graph"
+  if (tool === "execute" || tool.includes("_") || agents.some((a) => a?.tools?.includes(tool))) return "index"
   return "other"
 }
 

@@ -1,21 +1,27 @@
 // Copy to ~/.config/opencode/opencode-multi-agent-team.json (or <project>/.opencode/).
 // Every role needs a model. List a backup from a different provider after the main model.
 // "provider/model#variant" or a separate "variant" both work.
+//
+// Optional per agent (see README "Per-agent tools and instructions"):
+//   "skills": [...]        skills the agent loads first
+//   "mcps": [...]          MCP servers (through Code Mode), e.g. a code graph
+//   "tools": [...]         tools from other plugins, e.g. "docs_search"
+//   "commands": [...]      extra shell commands, e.g. "graphify *", "clangd-query *"
+//   "instructions": "..."  replaces prompts/<role>.instructions.md (text or file path)
+//   "append": "..."        added at the end of the prompt (text or file path)
+// Code-search tools help triage, senior, explorer, analyser and oracle most.
 {
   "agents": {
     "polisher": { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"] },
     "triage":   { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"] },
     "senior":   { "model": ["openai/gpt-5", "anthropic/claude-sonnet-4-5"], "variant": "high" },
-    "explorer": { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"], "variant": "low" },
+    "explorer": {
+      "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"], "variant": "low"
+      // , "mcps": ["codebase-memory"], "skills": ["codebase-memory"], "commands": ["graphify *"]
+    },
     "fixer":    { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"] },
     "analyser": { "model": ["openai/gpt-5", "anthropic/claude-sonnet-4-5"] },
     "oracle":   { "model": ["anthropic/claude-opus-4-5", "openai/gpt-5"], "variant": "high" }
-  },
-
-  // Skills and MCP servers per role. Graph search MCPs help triage, senior, explorer and oracle.
-  "addons": {
-    // "triage":   { "mcps": ["codebase-memory"], "skills": ["codebase-memory"] },
-    // "fixer":    { "skills": ["my-shell-skill"] }
   },
 
   // "off": the polisher sends your message as written, without the confirm step.
@@ -45,8 +51,5 @@
   // Extra shell patterns that always ask you first (added to the built-in list).
   "askCommands": [],
 
-  "taskDir": "~/.cache/opencode-multi-agent-team",
-
-  // Extra prompt text per role, appended from a file.
-  "promptAppend": {}
+  "taskDir": "~/.cache/opencode-multi-agent-team"
 }

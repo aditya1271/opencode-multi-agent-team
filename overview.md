@@ -40,6 +40,10 @@ without a plan or review.
 | **Analyser** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | mid |
 | **Oracle** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
 
+Each agent's code-search tools (a code graph, clangd, a docs RAG, …) and working
+instructions are set in the config. Its role, its report outcomes and the safety rules are
+fixed.
+
 ## Flow
 
 ```

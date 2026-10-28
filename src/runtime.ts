@@ -17,7 +17,7 @@ export interface ShellRun {
   log?: string
 }
 
-export type ToolKind = "read" | "search" | "graph" | "edit" | "shell" | "build" | "other"
+export type ToolKind = "read" | "search" | "index" | "edit" | "shell" | "build" | "other"
 
 /** Per worker session; reset for each agent call. */
 export interface SessionRun {

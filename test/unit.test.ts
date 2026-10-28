@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { evaluate, permissionsFor, toolVisible } from "../src/agents.ts"
+import { evaluate, permissionsFor, systemPrompt, toolVisible } from "../src/agents.ts"
 import { DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
 import { commandParts, matchesAny, toolKind, trimLog } from "../src/guards.ts"
 import { allowedStatuses, checkProblem } from "../src/report.ts"
@@ -37,7 +37,7 @@ describe("guards", () => {
     expect(toolKind("grep", {}, DEFAULTS)).toBe("search")
     expect(toolKind("shell", { command: "make all" }, DEFAULTS)).toBe("build")
     expect(toolKind("shell", { command: "ls" }, DEFAULTS)).toBe("shell")
-    expect(toolKind("codebase-memory_search_graph", {}, DEFAULTS)).toBe("graph")
+    expect(toolKind("codebase-memory_search_graph", {}, DEFAULTS)).toBe("index")
   })
   test("trimLog keeps error lines and the tail", () => {
     const lines = Array.from({ length: 200 }, (_, i) => (i === 50 ? "foo.cpp:3: error: bad" : `line ${i}`))
@@ -102,6 +102,43 @@ describe("permissions", () => {
   test("fixer asks before destructive commands", () => {
     const rules = permissionsFor(DEFAULTS, "fixer")
     expect(rules.some((r) => r.action === "shell" && r.resource === "git reset *" && r.effect === "ask")).toBe(true)
+  })
+  test("per-agent search tools, commands and mcps", () => {
+    const config = merge(DEFAULTS, {
+      agents: {
+        senior: { mcps: ["codebase-memory"], tools: ["docs_search"], commands: ["graphify *"] },
+        fixer: { commands: ["rm -rf *"] },
+      },
+    })
+    const senior = permissionsFor(config, "senior")
+    expect(evaluate(senior, "codebase-memory_search_graph", ["*"])).toBe("allow")
+    expect(evaluate(senior, "docs_search", ["*"])).toBe("allow")
+    expect(evaluate(senior, "shell", ["graphify query foo"])).toBe("allow")
+    expect(evaluate(senior, "shell", ["grep foo"])).toBe("deny")
+    expect(evaluate(permissionsFor(config, "fixer"), "shell", ["rm -rf /"])).toBe("ask")
+    expect(toolKind("docs_search", {}, config)).toBe("index")
+    expect(toolKind("shell", { command: "graphify query foo" }, config)).toBe("index")
+  })
+})
+
+describe("prompts", () => {
+  test("default instructions fill the core prompt", () => {
+    const p = systemPrompt(DEFAULTS, "explorer")
+    expect(p).toContain("You are the Explorer")
+    expect(p).toContain("## How to search")
+    expect(p).not.toContain("{{instructions}}")
+    expect(p).not.toContain("## Your tools\n\n-")
+  })
+  test("instructions replace the default; append and tools are added", () => {
+    const config = merge(DEFAULTS, {
+      agents: { explorer: { instructions: "Use the RAG docs first.", append: "Answer in English.", tools: ["docs_search"] } },
+    })
+    const p = systemPrompt(config, "explorer")
+    expect(p).toContain("Use the RAG docs first.")
+    expect(p).not.toContain("## How to search")
+    expect(p).toContain("Report **FOUND**")
+    expect(p).toContain("- Tools: docs_search.")
+    expect(p.trimEnd().endsWith("Answer in English.")).toBe(true)
   })
 })
 

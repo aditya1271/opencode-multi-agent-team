@@ -66,6 +66,15 @@ sandbox project. Where the build differs from the text below, "Built differently
   ("-").
 - Long shell output (over 80 lines, or any build) goes to `logs/log-N.txt`. The agent sees
   the error lines and the tail.
+- Everything per agent sits under `agents.<role>`: model, plus `skills`, `mcps`, `tools`
+  (other plugins' tools), `commands` (extra shell patterns, e.g. `graphify *`),
+  `instructions` and `append`. There are no `addons` or `promptAppend` keys. Prompts don't
+  name any search tool; the configured tools are listed in the prompt. Senior's "graph
+  queries" mean any configured code-search tool.
+- Each prompt is a fixed core (role, report statuses, safety rules) plus an editable section
+  (`prompts/<role>.instructions.md`, replaced by `instructions`). The ask-first list for
+  destructive commands comes after `commands`, so it always wins.
+- Usage tool kind "graph" is now "index" (any configured code-search tool or command).
 
 ---
 
