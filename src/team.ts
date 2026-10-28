@@ -570,7 +570,7 @@ export class Team {
         return join(`Task ${task.id}: sort this request and report.`, f("request.md"), f("answers.md"), p.note, capNote())
       case "triage_fail":
         return join(
-          "MODE: failure. The trivial attempt did not finish. Write the full brief for the planner: findings with path:line, the relevant code excerpts with line ranges, the edits that were kept, and why it is not trivial. Report ESCALATE.",
+          "MODE: failure. The trivial attempt did not finish. Write the full brief for the planner, with code findings only: findings with path:line, the relevant code excerpts with line ranges, the edits that were kept, and why it is not trivial. Don't restate the user's goal or constraints; the planner gets the request itself. Report ESCALATE.",
           edited,
           f("request.md"),
           f("answers.md"),

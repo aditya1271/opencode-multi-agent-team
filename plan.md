@@ -200,10 +200,13 @@ comes from a different provider than its main model.
   - one obvious check command
 
   When in doubt: not trivial.
-- **The brief carries the code it found**, so later agents don't re-read it:
+- **The brief holds code findings only**, so later agents don't re-read the code:
   - findings with `path:line`
   - **the relevant code excerpts with line ranges**
-  - constraints, open points, why it isn't trivial
+  - open points, why it isn't trivial
+
+  It doesn't restate the user's goal or constraints; the senior planner reads `request.md`
+  itself (also in failure mode).
 - **Statuses:**
 
   | Status | Meaning | `content` |
@@ -214,7 +217,10 @@ comes from a different provider than its main model.
 
 ### 5.3 senior
 
-- Reads the brief, and on later calls whatever the hand-off contract lists (section 7).
+- Reads the request and the brief, and on later calls whatever the hand-off contract lists
+  (section 7). The request is the source of truth for the goal, scope and constraints. The
+  brief is the source of truth for code facts. Every constraint in the request is respected
+  in the plan, or raised as a `QUESTION`.
 - **May run graph queries** (codebase-memory: symbol search, callers, outlines, snippets)
   to check facts quickly. No grep, no browsing. Reads files named in the brief or findings.
 - For bigger searches it reports `NEED_INFO`, and Explorer does them.
@@ -368,7 +374,7 @@ loaded by OpenCode automatically.
 | H2b | plugin → **triage** (failure mode) | trivial attempt failed, or its review found issues | `request.md`, `brief.md`, `report-N.md`, `analysis-N.md` if any | `ESCALATE` only → overwrites `brief.md`, H5 |
 | H3 | plugin → **fixer** (trivial) | triage `TRIVIAL` | `request.md`, `brief.md` | `DONE` + exit 0 + 1 file → H-U5 · `DONE` + exit 0 + more files → H10 · otherwise → H2b |
 | H4 | plugin → **explorer** (user mode) | `team(ask)` | the question | answer → H-U5 (no task folder) |
-| H5 | plugin → **senior** | brief ready, or after H6, H7, H11, a plan failure, H-U2, H-U3 Change | `brief.md` + only the **new** files since its last call: `findings-N`, `oracle-N`, `report-N`, `analysis-N`, `answers.md`, user comments | `PLAN` → `plan-N.md` · `NEED_INFO` → H6 · `QUESTIONS` → H-U2 · `ESCALATE` → `escalation-N.md`, H11 |
+| H5 | plugin → **senior** | brief ready, or after H6, H7, H11, a plan failure, H-U2, H-U3 Change | `request.md`, then `brief.md` (and `answers.md`) on every new senior session; in the kept session the request stays in context, so only the **new** files since its last call follow: `findings-N`, `oracle-N`, `report-N`, `analysis-N`, `answers.md`, user comments | `PLAN` → `plan-N.md` · `NEED_INFO` → H6 · `QUESTIONS` → H-U2 · `ESCALATE` → `escalation-N.md`, H11 |
 | H6 | plugin → **explorer** (senior mode) | senior `NEED_INFO` | senior's queries | `findings-N.md` → H5 (same senior session) |
 | H7 | plugin → **oracle** (review) | `PLAN` with `risk: yes` (rules in section 8) | `brief.md`, `plan-N.md` | `APPROVE` → `oracle-N.md`, H-U3 · `CHANGES` → `oracle-N.md`, H5 (one revision), then H-U3 |
 | H8 | plugin → **fixer** (planned) | user approved, or after each `DONE` step, or a `LOCAL`/`ISSUES` round | `plan-N.md`, the step number; on rounds also `analysis-N.md` | `DONE` → next step; after the last step → H10 if review is required, else H-U5 · `FAILED` → H9 · `BLOCKED` → plan failure |

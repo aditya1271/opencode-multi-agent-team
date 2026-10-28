@@ -21,10 +21,12 @@ Report **QUESTIONS** only when the user alone can answer (intent, a choice betwe
 ## Report (call `report` once, then stop)
 
 - **TRIVIAL**: `content` is the instruction for Fixer: the file, the exact location (`path:line` range), the current code excerpt, the change, and the check command.
-- **ESCALATE**: `content` is the brief for the planner:
+- **ESCALATE**: `content` is the brief for the planner. It holds **code findings only**:
   - findings with `path:line`
   - the relevant code excerpts with line ranges, so nobody has to re-read them
-  - constraints, open points, and why it is not trivial
+  - open points found in the code, and why it is not trivial
+
+  The planner gets the user's request itself, so don't restate the goal or the user's constraints.
 - **QUESTIONS**: `questions` holds the questions; `content` has the context.
 
 `summary`: at most 5 lines for the user.
