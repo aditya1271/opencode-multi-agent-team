@@ -72,7 +72,8 @@ export function permissionsFor(config: Config, role: Role): Rule[] {
     case "manager":
       return [deny("*"), allow("team"), allow("question")]
     case "lead":
-      return [...base, ...readSearch, ...readOnly, ...addonRules(config, role), allow("report")]
+      // Read only: every search goes to the Intern (NEED_INFO), so search output never piles up in Lead's long session.
+      return [...base, allow("read"), ...addonRules(config, role), allow("report")]
     case "architect":
     case "principal":
       // No file or code access: they know only what Lead's brief and answers tell them.

@@ -153,8 +153,10 @@ describe("permissions", () => {
     const lead = permissionsFor(DEFAULTS, "lead")
     expect(evaluate(lead, "read", ["src/a.ts"])).toBe("allow")
     expect(evaluate(lead, "edit", ["src/a.ts"])).toBe("deny")
-    expect(evaluate(lead, "shell", ["git status"])).toBe("allow")
-    expect(evaluate(lead, "shell", ["make"])).toBe("deny")
+    // Lead reads only: searching (grep, glob, shell grep) goes to the Intern.
+    for (const tool of ["grep", "glob"]) expect(evaluate(lead, tool, ["*"])).toBe("deny")
+    expect(evaluate(lead, "shell", ["grep -rn foo ."])).toBe("deny")
+    expect(evaluate(permissionsFor(DEFAULTS, "intern"), "grep", ["*"])).toBe("allow")
     const developer = permissionsFor(DEFAULTS, "developer")
     expect(evaluate(developer, "edit", ["a.ts", "b.ts"])).toBe("allow")
     expect(evaluate(developer, "shell", ["git reset --hard"])).toBe("ask")
@@ -163,7 +165,8 @@ describe("permissions", () => {
   test("toolVisible", () => {
     const manager = permissionsFor(DEFAULTS, "manager")
     expect(["team", "question", "read", "shell", "edit"].filter((t) => toolVisible(manager, t))).toEqual(["team", "question"])
-    expect(toolVisible(permissionsFor(DEFAULTS, "lead"), "shell")).toBe(true)
+    expect(toolVisible(permissionsFor(DEFAULTS, "lead"), "shell")).toBe(false)
+    expect(toolVisible(permissionsFor(DEFAULTS, "intern"), "shell")).toBe(true)
     expect(toolVisible(permissionsFor(DEFAULTS, "lead"), "write")).toBe(false)
     expect(toolVisible(permissionsFor(DEFAULTS, "developer"), "write")).toBe(true)
   })
@@ -327,7 +330,7 @@ describe("plan and research workflows", () => {
     try {
       await team.handle({ action: "start", text: "design the cache", workflow: "plan" }, "ses_l", signal)
       const t = team.task("ses_l")
-      for (const round of [1, 2]) {
+      for (const round of [1, 2, 3]) {
         t.pending = undefined
         team.apply(t, { mode: "lead" }, report("NEED_INFO", { content: "1. Where is LWT traversal implemented?" }), {})
         expect([t.pending.mode, t.pending.asker, t.leadSearches]).toEqual(["intern", "lead", round])
@@ -335,7 +338,7 @@ describe("plan and research workflows", () => {
         t.pending = undefined
         team.apply(t, { mode: "intern", asker: "lead" }, report("FOUND", { content: "`lwt.cpp:10` nextLevel()" }), {})
         expect(t.pending.mode).toBe("lead")
-        expect(t.pending.note).toContain(round === 1 ? "1 more round" : "No more search rounds")
+        expect(t.pending.note).toContain(round === 1 ? "2 more rounds" : round === 2 ? "1 more round" : "No more search rounds")
         expect(buildPrompt(DEFAULTS, t, t.pending, false)).toContain("lwt.cpp:10")
         expect(t.architectUnseen).toEqual([])
       }
@@ -344,6 +347,14 @@ describe("plan and research workflows", () => {
       team.apply(t, { mode: "lead" }, report("ESCALATE", { content: "## Concept brief\n\n**Concerns**: speed" }), {})
       expect(t.leadSearches).toBe(0)
       expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("NEED_INFO")
+      // While answering the Architect's questions: the findings return to the same answer.
+      const answer = { mode: "lead_answer", ids: ["Q1"], asker: "architect", note: "Q1: who calls nextLevel?" }
+      team.apply(t, answer, report("NEED_INFO", { content: "1. Callers of nextLevel" }), {})
+      expect([t.pending.mode, t.pending.then.mode]).toEqual(["intern", "lead_answer"])
+      team.apply(t, t.pending, report("FOUND", { content: "`a.cpp:3`" }), {})
+      expect([t.pending.mode, t.pending.ids, t.pending.files.length]).toEqual(["lead_answer", ["Q1"], 1])
+      expect(t.pending.note).toContain("Q1: who calls nextLevel?")
+      expect(buildPrompt(DEFAULTS, t, t.pending, false)).toContain("a.cpp:3")
     } finally {
       cleanup()
     }

@@ -1064,6 +1064,13 @@ export class Team {
         return
       }
       case "lead_answer": {
+        if (r.status === "NEED_INFO") {
+          task.leadSearches = (task.leadSearches ?? 0) + 1
+          this.record(task, p.mode, r)
+          task.pending = { mode: "intern", note: r.content, asker: "lead", then: p }
+          return
+        }
+        task.leadSearches = 0
         const kind = `${briefName(task).slice(0, -3)}-answer`
         const file = writeNumbered(task, kind, `# Lead's answers (${(p.ids ?? []).join(", ")})\n\n${r.content}`)
         this.record(task, p.mode, r, file)
@@ -1168,7 +1175,8 @@ export class Team {
         if (p.asker === "lead") {
           const left = this.config.limits.leadSearchRounds - (task.leadSearches ?? 0)
           const more = left > 0 ? `You may send ${left} more round${left === 1 ? "" : "s"} of queries (NEED_INFO).` : "No more search rounds: report with what you have."
-          task.pending = { mode: "lead", note: `The Intern answered your queries (${r.status}), below. Spot-check what your report relies on, then report. ${more}`, files: [file] }
+          const note = `The Intern answered your queries (${r.status}), below. Spot-check what you rely on by reading the cited lines, then report. ${more}`
+          task.pending = p.then?.mode === "lead_answer" ? { ...p.then, note: join(note, p.then.note), files: [file] } : { mode: "lead", note, files: [file] }
           return
         }
         task.architectUnseen.push(file)

@@ -175,11 +175,11 @@ const LEAD_CODE = [
 ].join("\n")
 
 const HOW_BRIEF = [
-  "Stage: HOW. Brief the Architect for the change plan. The Architect has no file access: your brief and your later answers are all it knows, so search the code until every place the change touches can be shown.",
+  "Stage: HOW. Brief the Architect for the change plan. The Architect has no file access: your brief and your later answers are all it knows, so have the Intern search (NEED_INFO) until every place the change touches can be shown.",
   [
     "Write `content` with:",
     "- `## Code`: each location that will change, as `path:start-end` with the current code excerpt (exact lines), and the patterns or analogous features the change should follow.",
-    "- `## Impact`: for each location, what depends on it: callers, users of the interface, build files, tests, other modules, found with your code-search tools or grep and listed with `path:line`. Say \"no other users\" only after you searched.",
+    "- `## Impact`: for each location, what depends on it: callers, users of the interface, build files, tests, other modules, found by the Intern's searches and listed with `path:line`. Say \"no other users\" only after the Intern searched for them.",
     "- `## Constraints`: code facts that limit the change (language and standard, build system, platform, public interfaces).",
     "Don't restate the request or the what-document; the Architect gets both.",
   ].join("\n"),
@@ -198,12 +198,12 @@ const LEAD_REVISION = [
 
 const LEAD_ANSWER = [
   "MODE: answer. {asker} has no file access and asks you the questions below. Look up what you need.",
-  "Report ANSWER. `content` answers each question under its id (\"### A3\"), with only new facts: exact quotes with `path:line`, or what you searched when something isn't there. Where your brief or an earlier answer already holds it, point to it (\"see brief.md, Excerpts: glossary\") instead of repeating it. When a question is a decision for the user, say so under its id.",
+  "Report ANSWER. `content` answers each question under its id (\"### A3\"), with only new facts: exact quotes with `path:line`, or what was searched when something isn't there (send the Intern queries with NEED_INFO first if you need new facts). Where your brief or an earlier answer already holds it, point to it (\"see brief.md, Excerpts: glossary\") instead of repeating it. When a question is a decision for the user, say so under its id.",
 ].join("\n\n")
 
 const LEAD_RESEARCH = [
   "Workflow: research. The deliverable is a findings report, not code: nobody edits files in this task, and there is no build or test.",
-  "Read every file the request names in full first, then run a few searches to see where the answer lives.",
+  "Read every file the request names in full first, then have the Intern search (NEED_INFO) to see where the answer lives.",
   "Size the research (`depth`):\n- **quick**: one focused question with one direct path to the answer.\n- **breadth**: splits into distinct, independent sub-questions.\n- **depth**: one question that needs several angles or sources.",
   [
     "Write `content` in two parts. First `## Research brief`, phrased from the user's point of view:",
@@ -328,8 +328,8 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     }
     case "lead_answer": {
       const head = LEAD_ANSWER.replace("{asker}", MODE_ROLE[p.asker ?? "architect"] === "architect" ? "The Architect" : "Principal")
-      if (!freshSession) return join(head, p.note)
-      return join(head, f("request.md"), whatDoc(), stageBrief(), answers(), p.note)
+      if (!freshSession) return join(head, p.note, ...delivered(), capNote())
+      return join(head, f("request.md"), whatDoc(), stageBrief(), answers(), p.note, ...delivered(), capNote())
     }
     case "lead_fail":
       return join(
@@ -392,7 +392,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "intern":
       if (task.workflow === "research") return join(INTERN_RESEARCH, `<queries>\n${p.note ?? ""}\n</queries>`)
       return join(
-        `MODE: planner search. Answer these queries for ${p.asker === "lead" ? "Lead" : "the Architect"} with path:line findings and short code excerpts. Report FOUND, or NOT_FOUND with what you searched.`,
+        `MODE: planner search. Answer these queries for ${p.asker === "lead" ? "Lead" : "the Architect"} with path:line findings and short code excerpts. End with what you searched (terms, paths, graph queries), so a missing result can be judged. Report FOUND, or NOT_FOUND.`,
         `<queries>\n${p.note ?? ""}\n</queries>`,
       )
     case "principal_review":

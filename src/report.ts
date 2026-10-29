@@ -32,7 +32,7 @@ const BASE: Record<Mode, string[]> = {
   architect_reply: ["ANSWER"],
   principal_reply: ["ANSWER"],
   principal_doc_review: ["APPROVE", "CHANGES", "ASK"],
-  lead_answer: ["ANSWER"],
+  lead_answer: ["ANSWER", "NEED_INFO"],
   architect_advice: ["ADVICE", "ASK"],
   principal_draft_advice: ["ADVICE", "ASK"],
 }
@@ -83,7 +83,7 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
     if (task.workflow === "research" && mode === "architect") list = list.map((s) => (s === "ASK" ? "NEED_INFO" : s))
     if (draftIsDoc(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
-    if (mode === "lead") {
+    if (mode === "lead" || mode === "lead_answer") {
       if ((task.leadSearches ?? 0) >= config.limits.leadSearchRounds) list = list.filter((s) => s !== "NEED_INFO")
     } else if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
   } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK")
