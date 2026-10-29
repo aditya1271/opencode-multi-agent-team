@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process"
-import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
@@ -34,22 +33,6 @@ function editedPaths(input: unknown, cwd: string): string[] {
   if (typeof direct === "string") return [path.resolve(cwd, direct)]
   const patch = String(i.patchText ?? i.patch ?? i.input ?? "")
   return [...patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((m) => path.resolve(cwd, m[1].trim()))
-}
-
-function p4Edit(file: string): Promise<void> {
-  return new Promise((resolve) => {
-    execFile("p4", ["edit", file], { cwd: path.dirname(file), timeout: 30000 }, () => resolve())
-  })
-}
-
-function isReadOnly(file: string): boolean {
-  if (!existsSync(file)) return false
-  try {
-    accessSync(file, constants.W_OK)
-    return false
-  } catch {
-    return true
-  }
 }
 
 function resultText(result: unknown): string {
@@ -186,7 +169,6 @@ export async function registerGuards(ctx: Context, config: Config) {
       const cwd = run.task?.workspace ?? ctx.location.directory
       for (const file of editedPaths(event.input, cwd)) {
         if (!run.before.has(file)) run.before.set(file, existsSync(file) ? readFileSync(file, "utf8") : undefined)
-        if (run.role === "developer" && isReadOnly(file)) await p4Edit(file)
       }
     }
   })
