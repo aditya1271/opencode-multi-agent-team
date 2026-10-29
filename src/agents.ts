@@ -193,6 +193,10 @@ export function managerPrompt(config: Config, workflow: Workflow): string {
     config.polish === "off"
       ? "Polishing is OFF: send the user's requests and replies to the team as written, without rewriting them and without the [Send] [Edit] [Cancel] step. This overrides the polishing steps above."
       : ""
-  const parts = [body, polishOff, shared.append ? textOrFile(shared.append) : "", own.append ? textOrFile(own.append) : ""]
+  const autoDefault =
+    config.auto !== "off"
+      ? `This project's default mode is **${config.auto} auto**: unless the user asks for another mode, treat every request as ${config.auto} auto (see **Modes**) and call start with auto = "${config.auto}".`
+      : ""
+  const parts = [body, polishOff, autoDefault, shared.append ? textOrFile(shared.append) : "", own.append ? textOrFile(own.append) : ""]
   return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")
 }

@@ -89,7 +89,7 @@ To update later, run `git pull` in the clone and restart OpenCode.
   [Send] [Edit] [Cancel]. Your replies during a task (answers, plan comments, questions) are
   polished and confirmed the same way; the agents get both the polished text and your
   original words. Build/test commands are sent as typed. Set `"polish": "off"` to send
-  everything as written.
+  everything as written, or use an auto [mode](#modes) to skip the confirmation.
 - **The manager never answers you itself.** Everything you write goes to the team: a
   request, a question, a reply, or feedback (on a finished task, as a new request).
 - **Ask about the code:** the Intern answers. No task starts.
@@ -138,15 +138,49 @@ To update later, run `git pull` in the clone and restart OpenCode.
   shown to you as "also changed S9 (…)". Each version says what changed ("revised S5, S6 ·
   fine-tuned S8 · new S12"). A round of fine-tunes only goes straight to the writer (no
   revision brief from the Lead) and doesn't count toward the escalation rounds.
-- **Auto mode (no questions):** say "just do it" or "don't ask me" for **safe auto**, or "full
-  auto". The team takes the recommended answer to every question, approves every brief,
-  document and plan, and skips build/test when none is configured. Each decision shows as one
-  "AUTO" line, is logged in the task's answers file, and is listed under "Decided on auto" at
-  the end. Safe auto still stops at a plan with destructive or irreversible steps and after a
-  finished plan document (you choose [Implement it]); full auto approves those and implements
-  the plan. Both stop when the team is stuck or the attempt budget runs out. Switch during a
-  task with "go auto", "full auto" or "stop auto". `"auto": "safe"` or `"full"` in the config
-  makes it the default for new tasks (default `"off"`).
+- **Modes:** from fully interactive to hands-off; see [Modes](#modes).
+
+### Modes
+
+Four modes decide how often the team stops for you. Each one adds to the one before it.
+
+| Mode | Say | Polished text sent without [Send] [Edit] [Cancel] | Team answers questions and approves briefs, documents and plans | Team approves destructive plans and implements finished plans |
+|---|---|---|---|---|
+| **default** | (nothing) | no | no | no |
+| **polished auto** | "send without asking", "no confirmations" | yes | no | no |
+| **safe auto** | "just do it", "don't ask me", "decide yourself" | yes | yes | no |
+| **full auto** | "full auto", "do everything" | yes | yes | yes |
+
+- **default:** the manager shows every polished request and reply and waits for [Send]
+  [Edit] [Cancel]. You answer the team's questions and approve or comment on every brief,
+  document and plan.
+- **polished auto:** for when you trust the polishing but want to keep the decisions. The
+  manager still polishes your request and replies and shows the polished text, then sends it
+  right away. Questions, briefs, documents and plans still wait for you.
+- **safe auto:** for tasks where you don't mind what gets chosen. The team also takes the
+  recommended answer to every question (each logged as an assumption), approves every brief,
+  document and plan, and skips build and test when none are configured. It still stops at:
+  - a plan with destructive or irreversible steps (`risk: yes`), which says
+    "Safe auto stopped here";
+  - a finished plan document: you choose [Implement it].
+- **full auto:** also approves destructive plans and implements a finished plan document
+  right away, in a code task that keeps full auto.
+
+Safe and full auto still stop when the team is STUCK with no adviser left, or when the attempt
+budget runs out; they never raise the budget. Each automatic decision shows as one line
+("AUTO (safe): approved the concept brief"), is written to the task's answers file, and is
+listed under **Decided on auto** when the task ends or stops.
+
+**Choosing a mode:**
+- **Per request:** say it with the request ("full auto: add a --upper flag"). The polished
+  request ends with a `Mode: …` line.
+- **During a task:** "polished auto", "go auto", "full auto", or "stop auto" (back to default).
+  It takes effect right away, including while the team waits on you.
+- **Default for new tasks:** `"auto"` in the team's config: `"off"` (default), `"polished"`,
+  `"safe"` or `"full"`.
+
+`"polish": "off"` is separate: the manager doesn't rewrite your text at all and sends it as
+written, with no confirmation, in any mode.
 
 ### Plan documents (`plan-manager`)
 

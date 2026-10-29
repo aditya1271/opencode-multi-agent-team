@@ -31,6 +31,10 @@
 
   // "off": the front agents send your message as written, without the confirm step.
   "polish": "on",
+  // Mode for new tasks: "off" (confirm everything), "polished" (send polished replies without
+  // confirming), "safe" (also let the team decide questions and approvals; stops at destructive
+  // plans and before implementing), "full" (also those). The user can switch per request.
+  "auto": "off",
 
   // Start new sessions in build-manager.
   "defaultAgent": false,

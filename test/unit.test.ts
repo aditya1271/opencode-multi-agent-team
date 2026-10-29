@@ -303,6 +303,25 @@ describe("plan and research workflows", () => {
   }
   const report = (status: string, extra: object = {}) => ({ status, summary: "Approving this gives you a design.", content: "# Design\n\n## Options\n\nA or B", ...extra })
 
+  test("polished auto: replies are sent without confirmation, the user still decides", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design the cache", workflow: "plan", auto: "polished" }, "ses_p", signal)
+      const t = team.task("ses_p")
+      team.apply(t, { mode: "lead" }, report("QUESTIONS", { questions: ["LRU or LFU?"] }), {})
+      expect(await team.autoStep(t, signal)).toBeUndefined()
+      const shown = render(t)
+      expect(shown).toContain("QUESTIONS from lead")
+      expect(shown).toContain("AUTO-SEND (polished auto)")
+      await team.handle({ action: "auto", auto: "off" }, "ses_p", signal)
+      expect(render(t)).not.toContain("AUTO-SEND")
+      expect(managerPrompt(merge(DEFAULTS, { auto: "polished" }), "code")).toContain("default mode is **polished auto**")
+      expect(managerPrompt(DEFAULTS, "code")).not.toContain("default mode is")
+    } finally {
+      cleanup()
+    }
+  })
+
   test("auto mode: safe auto decides questions and approvals, stops at a risky plan; full auto implements", async () => {
     const switched: string[] = []
     const { team, cleanup } = setup(switched)

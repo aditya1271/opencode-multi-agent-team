@@ -547,7 +547,15 @@ function principalBlock(task: TaskState): string {
   return `${title}\n${readTaskFile(task, task.principalNote)}`
 }
 
+const AUTO_SEND = (level: string) =>
+  `AUTO-SEND (${level} auto): wherever this says to polish and confirm [Send] [Edit] [Cancel], polish the user's text as usual, show it in one block as sent, and send it right away without asking. Build and test commands are still sent as typed.`
+
 export function render(task: TaskState): string {
+  const out = renderPhase(task)
+  return task.auto ? join(out, AUTO_SEND(task.auto)) : out
+}
+
+function renderPhase(task: TaskState): string {
   const last = task.history[task.history.length - 1]
   const lastLine = last ? `${last.role} → ${last.status}: ${last.summary.split("\n")[0].replace(/[.\s]+$/, "")}` : "started"
   const files = task.editedFiles.length ? task.editedFiles.map((f) => `- ${f}`).join("\n") : "(none)"

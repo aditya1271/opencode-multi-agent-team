@@ -61,12 +61,16 @@ export const isDocWorkflow = (task: { workflow?: Workflow }) => task.workflow ==
 export type Stage = "what" | "how"
 
 /** The Architect's next draft is a document (what-document, research report), not a step plan. */
-/** safe: stops at risky plans and doesn't implement a finished plan; full: neither. Both stop when stuck or out of budget. */
-export type AutoLevel = "safe" | "full"
+/**
+ * Each level adds to the one before: polished = the manager sends polished replies without [Send] [Edit] [Cancel];
+ * safe = the team also takes the recommended choice at questions and approvals, but stops at risky plans and doesn't
+ * implement a finished plan; full = neither. Safe and full stop when stuck or out of budget.
+ */
+export type AutoLevel = "polished" | "safe" | "full"
 
 /** Auto mode decides this stop itself: the user isn't asked. */
 export const autoDecides = (task: TaskState) =>
-  !!task.auto &&
+  (task.auto === "safe" || task.auto === "full") &&
   (["checks", "questions", "brief"].includes(task.phase) || (task.phase === "approval" && !(task.auto === "safe" && task.planRisk && !draftIsDoc(task))))
 
 export const draftIsDoc = (task: { workflow?: Workflow; stage?: Stage }) =>
@@ -187,7 +191,7 @@ export interface TaskState {
   scope?: Scope
   /** What the last scoped revision changed, shown to the user. */
   sectionChange?: SectionChange
-  /** Auto mode: the team takes the recommended choice wherever it would wait on the user. */
+  /** Auto mode: replies sent without confirmation (polished), and the team deciding the user's stops (safe, full). */
   auto?: AutoLevel
   /** What auto mode decided, shown to the user at the end. */
   autoLog?: string[]

@@ -18,20 +18,26 @@ If you are unsure which it is, polish it as a question and ask [Send] [Edit] [Ca
 ## A new request
 
 1. Rewrite the user's message as described under **Polished request**. Keep the user's words, names, paths, commands and error text exactly. Don't invent details.
-2. Show it and ask with the question tool: **[Send] [Edit] [Cancel]**.
+2. Show it and ask with the question tool: **[Send] [Edit] [Cancel]** (on any auto mode: show it and send it right away, see **Modes**).
    - Edit: take the user's changes, revise, and ask again.
    - Send: call `team` with action `start` and the polished request as `text`.
    - Cancel: stop.
 3. If the message holds several independent tasks, say so and ask whether to send them one after another.
 
-## Auto mode
+## Modes
 
-The user can let the team decide instead of asking them: the team then takes the recommended answer to every question and approves every brief, document and plan itself. Two levels:
+Each mode adds to the one before it:
 
-- **safe auto** ("just do it", "don't ask me", "auto", "not important, decide yourself"): still stops at plans with destructive or irreversible steps, and doesn't implement a finished plan by itself.
-- **full auto** ("full auto", "do everything, including implementing"): stops only when the team is stuck or out of budget.
+| Mode | The user says | What changes |
+|---|---|---|
+| **default** | (nothing) | You confirm every polished request and reply with [Send] [Edit] [Cancel]; the user makes every decision. |
+| **polished auto** | "send without asking", "no confirmations", "polished auto" | You still polish, but show the polished text and send it right away, without [Send] [Edit] [Cancel]. The user still answers questions and approves or comments on briefs, documents and plans. |
+| **safe auto** | "just do it", "don't ask me", "auto", "not important, decide yourself" | The team also takes the recommended answer to every question and approves every brief, document and plan itself. It still stops at plans with destructive or irreversible steps, and doesn't implement a finished plan by itself. |
+| **full auto** | "full auto", "do everything, including implementing" | The team also approves destructive plans and implements a finished plan. It stops only when stuck or out of budget. |
 
-When the request asks for it, end the polished request with a line `Mode: safe auto` or `Mode: full auto`, and call `start` with `auto` = `safe` or `full`. During a task, "go auto", "full auto" or "stop auto" (ask me again) → call `team` with action `auto` and `auto` = `safe`, `full` or `off`; no confirmation needed. On auto, show each progress and AUTO line in one line and call `continue` right away.
+- **Starting:** when the request asks for an auto mode, end the polished request with a line `Mode: polished auto`, `Mode: safe auto` or `Mode: full auto`, show it, and call `start` right away with `auto` = `polished`, `safe` or `full`.
+- **During a task:** "polished auto", "go auto", "full auto", or "stop auto" / "ask me again" → call `team` with action `auto` and `auto` = `polished`, `safe`, `full` or `off`; no confirmation needed.
+- On an auto mode, team results end with an **AUTO-SEND** line: follow it instead of the [Send] [Edit] [Cancel] step. Show each PROGRESS and AUTO line in one line and call `continue` right away.
 
 ## A code question (nothing to change)
 
@@ -61,7 +67,7 @@ Every reply you send during a task (`answer`, `change`, `ask`, `review`) is poli
 
 1. Rewrite it so the agent can act on it alone: fix typos and grammar, resolve references such as "option B" or "the second one" to what they mean (from the questions or the plan), and keep every choice, fact, name, path and command exactly. Don't add details, opinions or decisions the user didn't make; list anything unclear under **Unclear**.
 2. Comments on a brief, plan or document whose sections show ids (S5): start with the scope line the team result describes (**Fine-tune**, **Revise**, **Final**, **Reopen**, **New**, **Unchanged this round**), so the user confirms what will change and what stays. Decide per section: an exact edit the user stated is a fine-tune; dissatisfaction with the substance is a revision.
-3. Show it and ask with the question tool: **[Send] [Edit] [Cancel]**. Edit: revise and ask again. Cancel: don't send; ask the user what they want instead.
+3. Show it and ask with the question tool: **[Send] [Edit] [Cancel]**. Edit: revise and ask again. Cancel: don't send; ask the user what they want instead. On any auto mode, skip this step: show it and send it.
 4. Send: call `team` with the matching action and the polished reply as `text` (for `change`, also the scope as `finetune`, `revise`, `final`, `reopen`, `add`). The team also keeps the user's original words.
 
 {{instructions}}

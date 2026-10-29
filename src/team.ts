@@ -49,7 +49,7 @@ export interface TeamInput {
   output?: string
   review?: boolean
   /** start and auto: auto mode (off = interactive). */
-  auto?: "off" | "safe" | "full"
+  auto?: "off" | "polished" | "safe" | "full"
   /** change only: the revision scope, by section id (add: titles of new sections). */
   finetune?: string[]
   revise?: string[]
@@ -60,11 +60,11 @@ export interface TeamInput {
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
-  "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document; auto = safe or full when the user wants no questions),",
+  "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document; auto = polished, safe or full when the user asked for an auto mode),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
   "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), review (Principal critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
-  "retry, extend, auto (auto = off, safe or full: switch auto mode for the open task), stats (last = N tasks), status.",
+  "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
 ].join(" ")
 
@@ -79,8 +79,9 @@ export const TEAM_SCHEMA = {
     review: { type: "boolean", description: "start only: the user asked for Principal's review of the plan or document." },
     auto: {
       type: "string",
-      enum: ["off", "safe", "full"],
-      description: "start and auto: safe = take the recommended choice at every question and approval, but stop at destructive plans and before implementing a finished plan; full = also those; off = ask the user.",
+      enum: ["off", "polished", "safe", "full"],
+      description:
+        "start and auto: off = the user confirms every polished reply and makes every decision; polished = polished replies are sent without confirmation; safe = also take the recommended choice at every question and approval, but stop at destructive plans and before implementing a finished plan; full = also those.",
     },
     finetune: { type: "array", items: { type: "string" }, description: "change only: ids of sections that get only an exact edit the user stated (the edit is in text)." },
     revise: { type: "array", items: { type: "string" }, description: "change only: ids of sections whose substance the user wants reworked (S5). Empty with no finetune or add: every section that isn't final." },
@@ -251,7 +252,7 @@ export class Team {
         const level = input.auto ?? "safe"
         task.auto = level === "off" ? undefined : level
         save(task)
-        const line = task.auto ? `Auto mode is ${task.auto} for this task.` : "Auto mode is off: the team asks you again."
+        const line = task.auto ? `This task now runs on ${task.auto} auto.` : "Auto mode is off: you confirm every reply and make every decision again."
         return join(line, TERMINAL.includes(task.phase) ? render(task) : await this.step(task, signal))
       }
       case "change":
@@ -458,7 +459,7 @@ export class Team {
     if (opts.plan === true) task.forcePlan = true
     if (opts.review === true) task.reviewFirst = true
     const auto = opts.auto ?? this.config.auto
-    if (auto === "safe" || auto === "full") task.auto = auto
+    if (auto === "polished" || auto === "safe" || auto === "full") task.auto = auto
     const workflow = WORKFLOWS.includes(opts.workflow as Workflow) ? opts.workflow : "code"
     if (workflow !== "code") {
       task.workflow = workflow
