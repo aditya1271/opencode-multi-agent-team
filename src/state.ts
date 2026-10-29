@@ -109,7 +109,7 @@ export interface Pending {
   afterReview?: string
   /** Lead hand-off of the user's comments on the document (`note`), for a revision brief. */
   revision?: boolean
-  /** lead_answer: the question ids Lead must answer, and the mode that asked. */
+  /** lead_answer: the question ids Lead must answer, and the mode that asked; intern: lead when Lead sent the queries. */
   ids?: string[]
   asker?: Mode
   /** Task files delivered with this hand-off (a continuing session sees them once). */
@@ -209,6 +209,8 @@ export interface TaskState {
   principalAdviceUsed: number
   skipPrincipalReview: boolean
   needInfo: number
+  /** Intern rounds Lead used since its last report (limits.leadSearchRounds). */
+  leadSearches?: number
   questionRounds: number
   developerSeenPlan: boolean
   /** Files the architect hasn't seen yet. */

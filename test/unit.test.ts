@@ -69,10 +69,10 @@ describe("report statuses", () => {
   })
   test("stages pick the Architect's statuses; only the how stage after a what-document may report INFEASIBLE", () => {
     const t = newTask("/tmp/opencode/omat-test", "ses_s", "/tmp", "Goal\nadd a feature", 40)
-    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["TRIVIAL", "ESCALATE", "QUESTIONS"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO"])
     t.stage = "what"
     expect(allowedStatuses(DEFAULTS, "architect", t)).toEqual(["DOC", "ASK", "QUESTIONS", "ESCALATE"])
-    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO"])
     t.stage = "how"
     expect(allowedStatuses(DEFAULTS, "architect", t)).toEqual(["PLAN", "ASK", "QUESTIONS", "ESCALATE"])
     t.doc = 1
@@ -317,6 +317,33 @@ describe("plan and research workflows", () => {
       expect(render(t)).not.toContain("AUTO-SEND")
       expect(managerPrompt(merge(DEFAULTS, { auto: "polished" }), "code")).toContain("default mode is **polished auto**")
       expect(managerPrompt(DEFAULTS, "code")).not.toContain("default mode is")
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("Lead hands searches to the Intern, gets the findings back, and the rounds are capped per report", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design the cache", workflow: "plan" }, "ses_l", signal)
+      const t = team.task("ses_l")
+      for (const round of [1, 2]) {
+        t.pending = undefined
+        team.apply(t, { mode: "lead" }, report("NEED_INFO", { content: "1. Where is LWT traversal implemented?" }), {})
+        expect([t.pending.mode, t.pending.asker, t.leadSearches]).toEqual(["intern", "lead", round])
+        expect(buildPrompt(DEFAULTS, t, t.pending, true)).toContain("Answer these queries for Lead")
+        t.pending = undefined
+        team.apply(t, { mode: "intern", asker: "lead" }, report("FOUND", { content: "`lwt.cpp:10` nextLevel()" }), {})
+        expect(t.pending.mode).toBe("lead")
+        expect(t.pending.note).toContain(round === 1 ? "1 more round" : "No more search rounds")
+        expect(buildPrompt(DEFAULTS, t, t.pending, false)).toContain("lwt.cpp:10")
+        expect(t.architectUnseen).toEqual([])
+      }
+      expect(allowedStatuses(DEFAULTS, "lead", t)).not.toContain("NEED_INFO")
+      t.pending = undefined
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: "## Concept brief\n\n**Concerns**: speed" }), {})
+      expect(t.leadSearches).toBe(0)
+      expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("NEED_INFO")
     } finally {
       cleanup()
     }
@@ -910,7 +937,7 @@ describe("sidebar", () => {
     const t = newTask("/tmp/x", "ses_p", "/w", "x", 40)
     expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("TRIVIAL")
     t.forcePlan = true
-    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO"])
   })
   test("sidebar lists each row's models and the configured models", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "omat-models-"))

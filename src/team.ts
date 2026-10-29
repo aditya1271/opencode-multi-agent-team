@@ -1013,6 +1013,13 @@ export class Team {
       }
       case "lead":
       case "lead_fail": {
+        if (r.status === "NEED_INFO") {
+          task.leadSearches = (task.leadSearches ?? 0) + 1
+          this.record(task, p.mode, r)
+          task.pending = { mode: "intern", note: r.content, asker: "lead" }
+          return
+        }
+        task.leadSearches = 0
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
         if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
         if (task.revising) {
@@ -1158,6 +1165,12 @@ export class Team {
       case "intern": {
         const file = writeNumbered(task, "findings", `# Findings (${r.status})\n\n${r.content}`)
         this.record(task, p.mode, r, file)
+        if (p.asker === "lead") {
+          const left = this.config.limits.leadSearchRounds - (task.leadSearches ?? 0)
+          const more = left > 0 ? `You may send ${left} more round${left === 1 ? "" : "s"} of queries (NEED_INFO).` : "No more search rounds: report with what you have."
+          task.pending = { mode: "lead", note: `The Intern answered your queries (${r.status}), below. Spot-check what your report relies on, then report. ${more}`, files: [file] }
+          return
+        }
         task.architectUnseen.push(file)
         task.pending = { mode: "architect", note: `Intern answered your queries (${r.status}).`, afterReview: p.afterReview }
         return

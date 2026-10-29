@@ -17,9 +17,9 @@ work.
 | `build-manager` | Front agent for code changes: the team plans, edits, builds and tests. |
 | `plan-manager` | Front agent for plan documents: the team writes a plan for you to review. No code changes. |
 | `research-manager` | Front agent for research: the team investigates and writes a findings report. No code changes. |
-| `team-lead` | Searches the code, then decides between a trivial fix and a plan. Writes the brief. |
+| `team-lead` | Searches the code (hands larger searches to the Intern), then decides between a trivial fix and a plan. Writes the brief. |
 | `team-architect` | Writes plans and documents. You approve each one. Advises Lead when you keep sending its brief back. |
-| `team-intern` | Does code searches for the Architect, and answers your code questions. |
+| `team-intern` | Does code searches for Lead and the Architect, and answers your code questions. |
 | `team-developer` | Edits, builds and tests. The only agent that changes files. |
 | `team-reviewer` | Diagnoses failures and reviews finished work. |
 | `team-principal` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
@@ -269,6 +269,7 @@ Edits are never reverted automatically. Every result lists the changed files.
 | Failed plans before Principal advice | 2 (Principal advice: once per task) |
 | Your comment rounds on one draft before advice | 3 (next adviser), 5 (the one above) |
 | Searches / question rounds per task | 6 / 4 |
+| Lead's search rounds (handed to the Intern) before each report | 2 |
 | Tool calls per agent call | lead 40, architect 25, intern 30, developer 150, reviewer 30, principal 20 |
 | Time per agent call | 30 min (developer 240), or 15 min without activity |
 

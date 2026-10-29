@@ -17,7 +17,7 @@ const SECTION_EDIT = {
 }
 
 const BASE: Record<Mode, string[]> = {
-  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "INFEASIBLE", "STUCK"],
+  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "INFEASIBLE", "STUCK"],
   lead_fail: ["ESCALATE"],
   fix_trivial: ["DONE", "FAILED", "BLOCKED"],
   review_trivial: ["PASS", "ISSUES"],
@@ -83,7 +83,9 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
     if (task.workflow === "research" && mode === "architect") list = list.map((s) => (s === "ASK" ? "NEED_INFO" : s))
     if (draftIsDoc(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
-    if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
+    if (mode === "lead") {
+      if ((task.leadSearches ?? 0) >= config.limits.leadSearchRounds) list = list.filter((s) => s !== "NEED_INFO")
+    } else if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
   } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK")
   return list
 }

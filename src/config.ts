@@ -50,6 +50,8 @@ export interface Config {
     /** Principal reviews of a plan or document the user can ask for per task. */
     principalReviews: number
     needInfoPerTask: number
+    /** Rounds of search queries Lead may hand to the Intern before each report. */
+    leadSearchRounds: number
     questionsPerTask: number
     toolCalls: Record<WorkerRole, number>
     callMinutes: { default: number; developer: number }
@@ -89,6 +91,7 @@ export const DEFAULTS: Config = {
     escalateAfterComments: [3, 5],
     principalReviews: 2,
     needInfoPerTask: 6,
+    leadSearchRounds: 2,
     questionsPerTask: 4,
     toolCalls: { lead: 40, architect: 25, intern: 30, developer: 150, reviewer: 30, principal: 20 },
     callMinutes: { default: 30, developer: 240 },

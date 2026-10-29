@@ -23,6 +23,7 @@ Report **QUESTIONS** only when the user alone can answer (intent, a choice betwe
 - **TRIVIAL**: `content` is the instruction for Developer: the file, the exact location (`path:line` range), the current code excerpt, the change, and the check command.
 - **ESCALATE**: `content` is the brief, as the task message describes. The Architect gets the user's request itself, so don't restate the goal or the user's constraints.
 - **QUESTIONS**: `questions` holds the questions; `content` has the context.
+- **NEED_INFO**: hand searching to the Intern instead of reading many files yourself: when the answer needs tracing across the codebase, finding all uses, or reading more than a few files. `content` holds precise queries: for each, the objective, what to return (`path:line`, short code excerpts), where to look and what is out of scope, with no overlap. The findings come back to you in this session; spot-check what your report relies on and read yourself only for that. The rounds are limited; when NEED_INFO is no longer offered, report with what you have.
 - **ANSWER** (answer mode): answers to the Architect's or Principal's questions, each under its id.
 - **INFEASIBLE** (how stage): a decision of the approved what-document can't work in this code; the task message says what to include.
 - **STUCK** (revising your brief after the user's comments): you can't see how to give the user what they keep asking for. `content`: what they ask, what you tried, and where you are stuck. An adviser steps in, and you revise again.

@@ -392,7 +392,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "intern":
       if (task.workflow === "research") return join(INTERN_RESEARCH, `<queries>\n${p.note ?? ""}\n</queries>`)
       return join(
-        "MODE: planner search. Answer these queries for the Architect with path:line findings and short code excerpts. Report FOUND, or NOT_FOUND with what you searched.",
+        `MODE: planner search. Answer these queries for ${p.asker === "lead" ? "Lead" : "the Architect"} with path:line findings and short code excerpts. Report FOUND, or NOT_FOUND with what you searched.`,
         `<queries>\n${p.note ?? ""}\n</queries>`,
       )
     case "principal_review":
