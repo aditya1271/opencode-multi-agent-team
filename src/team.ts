@@ -4,7 +4,8 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, docName, draftFile, howOutput, join, render, SKIP_CHECKS } from "./messages.ts"
+import { buildPrompt, checksText, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS } from "./messages.ts"
+import { idRanges, indexOf, splice, split, type Scope } from "./sections.ts"
 import { EditedFilesTrack, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
 import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
@@ -19,6 +20,7 @@ import {
   loadTask,
   MODE_ROLE,
   newTask,
+  readTaskFile,
   save,
   setOnWrite,
   TERMINAL,
@@ -45,13 +47,18 @@ export interface TeamInput {
   workflow?: Workflow
   output?: string
   review?: boolean
+  /** change only: the revision scope, by section id (add: titles of new sections). */
+  revise?: string[]
+  lock?: string[]
+  unlock?: string[]
+  add?: string[]
 }
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
   "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
-  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments), review (Principal critically reviews the waiting plan or document; text = what to look at),",
+  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; revise, lock, unlock = section ids, add = titles of new sections), review (Principal critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
@@ -66,6 +73,10 @@ export const TEAM_SCHEMA = {
     plan: { type: "boolean", description: "start only: the user wants a plan, not a quick fix." },
     output: { type: "string", description: "start only, plan/research: the document path the user named." },
     review: { type: "boolean", description: "start only: the user asked for Principal's review of the plan or document." },
+    revise: { type: "array", items: { type: "string" }, description: "change only: ids of the sections to revise (S5). Empty with no add: every section that isn't locked." },
+    lock: { type: "array", items: { type: "string" }, description: "change only: ids of sections the user calls good; they stay as they are until unlocked." },
+    unlock: { type: "array", items: { type: "string" }, description: "change only: ids of locked sections the user now wants changed." },
+    add: { type: "array", items: { type: "string" }, description: "change only: short titles of new sections the user asks for." },
   },
   required: ["action"],
   additionalProperties: false,
@@ -254,7 +265,7 @@ export class Team {
         save(task)
         return this.step(task, signal)
       case "change":
-        return this.change(task, input.text ?? "", signal)
+        return this.change(task, input, signal)
       case "review":
         return this.review(task, input.text ?? "", signal)
       case "implement":
@@ -372,7 +383,7 @@ export class Team {
     const active = this.task(managerSession)
     // A confirmed message sent as "start" while the task waits on the user is the user's reply to it.
     if (active?.phase === "questions") return this.answer(active, text, signal)
-    if (active?.phase === "approval" || active?.phase === "brief") return this.change(active, text, signal)
+    if (active?.phase === "approval" || active?.phase === "brief") return this.change(active, { action: "change", text }, signal)
     if (active && active.phase !== "running" && !TERMINAL.includes(active.phase))
       return join("The task waits on the user's choice below; the message was not sent.", render(active))
     if (active && !TERMINAL.includes(active.phase))
@@ -586,20 +597,30 @@ export class Team {
     return this.step(task, signal)
   }
 
-  private async change(task: TaskState, text: string, signal: AbortSignal): Promise<string> {
+  private async change(task: TaskState, input: TeamInput, signal: AbortSignal): Promise<string> {
     if (task.phase !== "approval" && task.phase !== "brief") return this.wrongPhase(task, "change")
-    const { polished, note: comments } = await this.withOriginal(task, text, "comments")
+    const scope = this.scopeOf(task, input)
+    if (typeof scope === "string") return scope
+    const { polished, note: comments } = await this.withOriginal(task, input.text ?? "", "comments")
     if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
     task.commentRounds = (task.commentRounds ?? 0) + 1
     task.lastAdvice = undefined
+    if (scope) {
+      task.sections!.locked = scope.locked
+      task.scope = { draft: scope.draft, revise: scope.revise, add: scope.add, open: scope.open }
+    } else task.scope = undefined
+    const scopeLine = scope ? `\n\nScope: revise ${idRanges(scope.revise) || "none"}${scope.add.length ? `; new: ${scope.add.join("; ")}` : ""}${scope.locked.length ? `; locked: ${idRanges(scope.locked)}` : ""}` : ""
     if (task.phase === "brief") {
       const which = task.workflow === "research" ? "research" : "concept"
-      appendFile(task, answersName(task), `## Comments on the ${which} brief (round ${task.commentRounds})\n\n${comments}\n`)
-      const revise: Pending = { mode: "lead", note: `The user adjusted the ${which} brief. Revise it and report ESCALATE again with the whole brief:\n${comments}` }
+      appendFile(task, answersName(task), `## Comments on the ${which} brief (round ${task.commentRounds})\n\n${comments}${scopeLine}\n`)
+      const revise: Pending = {
+        mode: "lead",
+        note: join(`The user adjusted the ${which} brief. Revise it and ${reviseAs(task, "ESCALATE", "brief")}.`, scopeText(task, true), `The user's comments:\n${comments}`),
+      }
       task.pending = this.withAdvice(task, "lead", revise, comments)
     } else {
       // Comments go through Lead, who briefs the Architect (it has no file access).
-      appendFile(task, answersName(task), `## Comments on the ${docName(task)} (${draftFile(task)})\n\n${comments}\n`)
+      appendFile(task, answersName(task), `## Comments on the ${docName(task)} (${draftFile(task)})\n\n${comments}${scopeLine}\n`)
       if (!draftIsDoc(task)) task.skipPrincipalReview = true
       task.revising = true
       task.pending = { mode: "lead", note: comments, revision: true, files: task.infeasible ? [task.infeasible] : undefined }
@@ -608,6 +629,50 @@ export class Team {
     task.phase = "running"
     save(task)
     return this.step(task, signal)
+  }
+
+  /**
+   * The sections the user's comments may change, from the manager's revise/lock/unlock/add.
+   * Undefined when the draft has no sections; a message for the manager when an id is wrong.
+   */
+  private scopeOf(task: TaskState, input: TeamInput): (Scope & { locked: string[] }) | string | undefined {
+    const draft = task.phase === "brief" ? "brief" : "draft"
+    const idx = sectionIndex(task, draft)
+    if (!idx?.ids.length) return undefined
+    const ids = (xs?: string[]) => [...new Set((xs ?? []).map((x) => x.trim().toUpperCase()).filter(Boolean))]
+    const revise = ids(input.revise)
+    const lock = ids(input.lock)
+    const unlock = ids(input.unlock)
+    const list = idx.ids.map((id, i) => `${id} ${idx.titles[i]}`).join("; ")
+    const unknown = [...revise, ...lock, ...unlock].filter((id) => !idx.ids.includes(id))
+    if (unknown.length) return `Not section ids of this draft: ${unknown.join(", ")}. The sections: ${list}. NEXT ACTION: fix the ids and call team "change" again with the same text.`
+    const locked = new Set(idx.locked)
+    for (const id of unlock) locked.delete(id)
+    for (const id of lock) locked.add(id)
+    const both = revise.filter((id) => locked.has(id))
+    if (both.length)
+      return `${both.join(", ")} ${both.length > 1 ? "are" : "is"} locked. If the user wants ${both.length > 1 ? "them" : "it"} revised, add ${both.length > 1 ? "them" : "it"} to unlock; otherwise drop ${both.length > 1 ? "them" : "it"} from revise. NEXT ACTION: call team "change" again with the same text.`
+    const add = (input.add ?? []).map((x) => x.trim()).filter(Boolean)
+    const open = !revise.length && !add.length
+    const scoped = open ? idx.ids.filter((id) => !locked.has(id)) : revise
+    return { draft, revise: scoped, add, open, locked: idx.ids.filter((id) => locked.has(id)) }
+  }
+
+  /** The text of a new brief, document or plan: a scoped revision put into the previous version, or the whole report. */
+  private draftText(task: TaskState, kind: "brief" | "doc" | "plan", r: Report): string {
+    const key = `${kind}:${task.stageRun ?? 0}`
+    const scope = task.scope
+    task.scope = undefined
+    task.sectionChange = undefined
+    const prevFile = kind === "brief" ? briefName(task) : kind === "doc" ? task.doc && `doc-${task.doc}.md` : task.plan && `plan-${task.plan}.md`
+    if (scope && r.sections?.length && prevFile && task.sections?.key === key) {
+      const out = splice(readTaskFile(task, prevFile), task.sections, r.sections)
+      task.sections = out.index
+      task.sectionChange = out.change
+      return out.text
+    }
+    task.sections = indexOf(r.content, key, task.sections?.key === key ? task.sections : undefined)
+    return r.content
   }
 
   /** The user asks Principal to critically review the waiting plan or document. */
@@ -812,7 +877,10 @@ export class Team {
           const doc = draftIsDoc(task)
           const revise: Pending = {
             mode: "architect",
-            note: `The user asked for changes to the ${docName(task)} (${draftFile(task)}); Lead's revision brief is ${file}. Revise it accordingly and report ${doc ? "DOC" : "PLAN"} with the whole revised ${doc ? "document" : "plan"}${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
+            note: join(
+              `The user asked for changes to the ${docName(task)} (${draftFile(task)}); Lead's revision brief is ${file}. Revise it accordingly and ${reviseAs(task, doc ? "DOC" : "PLAN", doc ? "document" : "plan")}${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
+              scopeText(task, true),
+            ),
           }
           task.pending = this.withAdvice(task, "architect", revise, `Lead's revision brief for the user's latest comments is ${file}.`, [file])
           return
@@ -827,7 +895,7 @@ export class Team {
         // Code: a failed trivial attempt, or behaviour the request already fixes, goes straight to the how stage.
         if (!task.workflow && !task.stage && (p.mode === "lead_fail" || r.what === "settled")) this.setStage(task, "how")
         else if (task.workflow !== "research" && !task.stage) this.setStage(task, "what")
-        writeFile(task, briefName(task), r.content)
+        writeFile(task, briefName(task), this.draftText(task, "brief", r))
         this.record(task, p.mode, r, briefName(task))
         if (task.workflow === "research") task.depth = r.depth ?? task.depth ?? "breadth"
         const confirm =
@@ -892,18 +960,21 @@ export class Team {
         }
         task.principalNote = p.afterReview
         if (r.status === "DOC") {
-          const file = writeNumbered(task, "doc", r.content)
+          const text = this.draftText(task, "doc", r)
+          const file = writeNumbered(task, "doc", text)
           this.record(task, p.mode, r, file)
           task.doc = task.seq.doc
-          const failed = task.output ? this.writeOutput(task, task.output, r.content, file) : undefined
+          const failed = task.output ? this.writeOutput(task, task.output, text, file) : undefined
           task.docSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
           return this.afterDraft(task)
         }
-        const file = writeNumbered(task, "plan", r.content)
+        const scoped = !!(task.scope && r.sections?.length)
+        const text = this.draftText(task, "plan", r)
+        const file = writeNumbered(task, "plan", text)
         this.record(task, p.mode, r, file)
-        const failed = task.workflow === "plan" && task.output ? this.writeOutput(task, howOutput(task.output), r.content, file) : undefined
+        const failed = task.workflow === "plan" && task.output ? this.writeOutput(task, howOutput(task.output), text, file) : undefined
         task.plan = task.seq.plan
-        task.planSteps = r.steps ?? 1
+        task.planSteps = (scoped && split(text).sections.filter((s) => s.step).length) || r.steps || 1
         task.planRisk = r.risk === "yes"
         task.planHadFailure = task.planFailures > 0
         task.step = 1
@@ -924,10 +995,17 @@ export class Team {
         if (r.status === "APPROVE") return this.toApproval(task)
         task.architectUnseen.push(file)
         const doc = draftIsDoc(task)
+        // Principal's review doesn't override the user's locks: every unlocked section is open.
+        const idx = sectionIndex(task, "draft")
+        task.scope = idx?.ids.length ? { draft: "draft", revise: idx.ids.filter((id) => !idx.locked.includes(id)), add: [], open: true } : undefined
+        const ask = reviseAs(task, doc ? "DOC" : "PLAN", doc ? "document" : "plan")
         task.pending = {
           mode: "architect",
           afterReview: file,
-          note: `Principal critically reviewed the ${docName(task)} (${draftFile(task)}) at the user's request (${file}). Revise it: fix every must-fix item, or say in the ${doc ? "document" : "plan"} why not. Report ${doc ? "DOC" : "PLAN"} with the whole revised ${doc ? "document" : "plan"}.`,
+          note: join(
+            `Principal critically reviewed the ${docName(task)} (${draftFile(task)}) at the user's request (${file}). Revise it: fix every must-fix item, or say in the ${doc ? "document" : "plan"} why not. ${ask[0]!.toUpperCase()}${ask.slice(1)}.`,
+            scopeText(task, true),
+          ),
         }
         return
       }

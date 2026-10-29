@@ -3,6 +3,7 @@ import path from "node:path"
 import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
 import { needInfoLimit } from "./report.ts"
+import { annotate, ensureIndex, idRanges, split, type SectionIndex } from "./sections.ts"
 import { answerFiles, answersName, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
 import { report as usageReport } from "./usage.ts"
 
@@ -54,6 +55,75 @@ export const docName = (task: TaskState) =>
 
 /** The Architect's latest draft file in this task. */
 export const draftFile = (task: TaskState) => (draftIsDoc(task) ? `doc-${task.doc}.md` : `plan-${task.plan}.md`)
+
+/** Section ids of Lead's brief or the Architect's latest draft, kept in the task (a new draft starts over). */
+export function sectionIndex(task: TaskState, draft: "brief" | "draft"): SectionIndex | undefined {
+  const kind = draft === "brief" ? "brief" : draftIsDoc(task) ? "doc" : "plan"
+  if (kind !== "brief" && !(kind === "doc" ? task.doc : task.plan)) return undefined
+  const text = readTaskFile(task, kind === "brief" ? briefName(task) : draftFile(task))
+  if (!text) return undefined
+  task.sections = ensureIndex(text, `${kind}:${task.stageRun ?? 0}`, task.sections)
+  return task.sections
+}
+
+const WRITER_SCOPE = [
+  "Report `sections`, not the whole draft: one entry per section you return, with `id` and `content` (the whole section, from its heading line, or for a plan step from its numbered bold line; the plugin renumbers steps). The plugin puts them into the previous version; every other section stays byte for byte.",
+  "- {revise} Empty content removes a section. Several headings in one content split the section.",
+  '- A new section: id "new", `after` = the id it follows.',
+  "- A section marked unchanged may change only when a revised section makes it wrong; give `reason` (the user sees it). LOCKED sections are rejected.",
+  "- `content` of the report: a few lines on what you changed.",
+].join("\n")
+
+/** The sections a revision may change, for the writer (and for Lead's revision brief). */
+export function scopeText(task: TaskState, writer: boolean): string {
+  const idx = task.sections
+  const s = task.scope
+  if (!idx || !s) return ""
+  const what = (id: string) => (idx.locked.includes(id) ? "LOCKED by the user (good enough; never change it)" : s.revise.includes(id) ? "REVISE" : "unchanged this round")
+  return join(
+    "Scope of this revision (set from the user's comments; the plugin enforces it). Sections of the current draft:",
+    idx.ids.map((id, i) => `- ${id} ${idx.titles[i]}: ${what(id)}`).join("\n"),
+    s.add.length > 0 && `New sections the user asked for: ${s.add.join("; ")}.`,
+    writer && WRITER_SCOPE.replace("{revise}", s.open ? "Return only the REVISE sections you change." : "Return every REVISE section."),
+    writer && s.open && !idx.locked.length && "Nothing is locked: you may report the whole revised draft in `content` instead.",
+  )
+}
+
+/** How a writer reports its revision: the whole draft, or only the sections in scope. */
+export const reviseAs = (task: TaskState, status: string, what: string) =>
+  task.scope && task.sections ? `report ${status} with the revised sections only (see the scope)` : `report ${status} with the whole revised ${what}`
+
+/** The draft's sections (or only its plan steps) with their ids, one per line; "" when it has none. */
+function idList(task: TaskState, text: string, steps: boolean): string {
+  const idx = sectionIndex(task, "draft")
+  if (!idx) return ""
+  const lines = split(text)
+    .sections.map((s, i) => ({ s, id: idx.ids[i]! }))
+    .filter(({ s }) => s.step === steps)
+    .map(({ s, id }) => `- ${id} ${s.title}${idx.locked.includes(id) ? " 🔒" : ""}`)
+  return clip(lines.join("\n"), 40)
+}
+
+/** What the last revision changed and which sections are locked, for the user. */
+function changeLine(task: TaskState): string {
+  const c = task.sectionChange
+  const locked = task.sections?.locked ?? []
+  return join(
+    c &&
+      `**This version:** ${[
+        c.revised.length && `revised ${idRanges(c.revised)}`,
+        c.added.length && `new ${idRanges(c.added)}`,
+        c.removed.length && `removed ${idRanges(c.removed)}`,
+        ...c.also.map((a) => `also changed ${a.id} (${a.reason})`),
+      ]
+        .filter(Boolean)
+        .join(" · ") || "no section changed"}`,
+    locked.length > 0 && `**Locked:** ${idRanges(locked)} (kept as they are until you unlock them)`,
+  )
+}
+
+const SCOPE_RULE =
+  'Every section shows its id (S5; 🔒 = locked). When you polish comments for "change", start with a scope line from those ids: **Revise:** sections the user criticises or wants changed · **Lock:** sections they call good or fine (a locked section stays as it is until the user unlocks it) · **Unlock:** locked sections they now want changed · **New:** sections they ask to add · **Unchanged this round:** the rest. Comments on the whole draft: Revise every section that isn\'t locked. Then call team "change" with the polished comments as text and revise, lock, unlock (ids) and add (short titles).'
 
 const FEASIBILITY =
   "Feasibility: note it only for a concept that could kill the idea or force a different one, and that isn't plainly known (work nobody here has done before, an assumption about how parts fit, a solution assumed to exist). Swappable mechanics (how a model or service is connected, which parser or file format, storage, configuration) get no feasibility note and no options: one line, \"left to the how stage\". In a code project, code facts count: what language, standard, build system, interface or platform the code where the feature goes supports, quoted with `path:line`."
@@ -188,6 +258,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
           f(draftFile(task)),
           ...delivered(),
           `The user's comments:\n${p.note ?? ""}`,
+          task.scope && join(scopeText(task, false), "Brief only the REVISE sections and the new ones; the Architect returns only those."),
           capNote(),
         )
       if (!freshSession && p.note) return join(p.note, ...delivered(), capNote())
@@ -237,6 +308,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         ...earlier,
         ...delivered(),
         p.note && `Latest:\n${p.note}`,
+        task.scope && join(scopeText(task, false), "Advise on the REVISE and new sections; locked ones stay as they are."),
       )
     }
     case "lead_answer": {
@@ -485,13 +557,16 @@ export function render(task: TaskState): string {
       )
     case "brief": {
       const research = task.workflow === "research"
-      const brief = readTaskFile(task, "brief.md")
+      const raw = readTaskFile(task, "brief.md")
+      const idx = sectionIndex(task, "brief")
+      const brief = idx ? annotate(raw, idx) : raw
       const title = research ? `**Research brief** (${task.depth ?? "?"} research)` : "**Concept brief**"
       const shown = research ? researchBrief(brief) : section(brief, "Concept brief") || brief
       return join(
         `${research ? "RESEARCH" : "CONCEPT"} BRIEF ready. Show this block to the user exactly as written:`,
-        `<show>\n${join(title, shown, adviceLine(task))}\n</show>`,
+        `<show>\n${join(title, shown, changeLine(task), adviceLine(task))}\n</show>`,
         `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask".`,
+        idx && SCOPE_RULE,
       )
     }
     case "approval": {
@@ -510,7 +585,8 @@ export function render(task: TaskState): string {
           decisions ? `**Decisions**\n${clip(decisions)}` : "",
           findings ? `**Key findings**\n${clip(findings)}` : "",
           conflicts ? `**Conflicts between sources**\n${clip(conflicts, 20)}` : "",
-          `**Sections**\n${sectionTitles(doc).map((t) => `- ${t}`).join("\n") || "(none)"}`,
+          `**Sections**\n${idList(task, doc, false) || sectionTitles(doc).map((t) => `- ${t}`).join("\n") || "(none)"}`,
+          changeLine(task),
           principalBlock(task),
           adviceLine(task),
           `**File:** ${task.output ?? path.join(task.dir, `doc-${task.doc}.md`)}`,
@@ -525,18 +601,23 @@ export function render(task: TaskState): string {
           `${name.toUpperCase()} ready for the user. Show this block to the user exactly as written, without rewording or shortening it:`,
           `<show>\n${block}\n</show>`,
           `NEXT ACTION: show the block above and end with one line: "${reply}" No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+          task.sections && SCOPE_RULE,
         )
       }
       const planText = readTaskFile(task, `plan-${task.plan}.md`)
       const howDoc = task.workflow === "plan" && task.output ? howOutput(task.output) : undefined
-      const titles = stepTitles(planText)
+      const steps = idList(task, planText, true)
+      const titles = steps ? [steps] : stepTitles(planText)
+      const others = idList(task, planText, false)
       const behaviour = section(planText, "Behaviour")
       const block = join(
         `**${howDoc ? `${Name} (plan ${task.plan})` : `Plan ${task.plan}`}**`,
         `**What you get**\n${task.planSummary ?? "(no summary)"}`,
         behaviour ? `**Behaviour**\n${clip(behaviour, 20)}` : "",
         `**Steps**\n${titles.length ? titles.join("\n") : `${task.planSteps} step(s); see the plan file.`}`,
+        others && `**Other sections**\n${others}`,
         `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}`,
+        changeLine(task),
         principalBlock(task),
         adviceLine(task),
         `**Plan file:** ${howDoc ?? path.join(task.dir, `plan-${task.plan}.md`)}`,
@@ -545,6 +626,7 @@ export function render(task: TaskState): string {
         `PLAN ${task.plan} ready for approval. Show this block to the user exactly as written, without rewording or shortening it:`,
         `<show>\n${block}\n</show>`,
         `NEXT ACTION: show the block above and end with one line: "${howDoc ? "Reply to approve (then you can implement it)" : "Reply to approve"}, change or stop the plan, ask about it, or have Principal review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+        task.sections && SCOPE_RULE,
       )
     }
     case "stuck":

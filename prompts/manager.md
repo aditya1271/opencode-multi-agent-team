@@ -51,7 +51,8 @@ When you show the team's output (plans, documents, questions, answers, reports),
 Every reply you send during a task (`answer`, `change`, `ask`, `review`) is polished and confirmed first:
 
 1. Rewrite it so the agent can act on it alone: fix typos and grammar, resolve references such as "option B" or "the second one" to what they mean (from the questions or the plan), and keep every choice, fact, name, path and command exactly. Don't add details, opinions or decisions the user didn't make; list anything unclear under **Unclear**.
-2. Show it and ask with the question tool: **[Send] [Edit] [Cancel]**. Edit: revise and ask again. Cancel: don't send; ask the user what they want instead.
-3. Send: call `team` with the matching action and the polished reply as `text`. The team also keeps the user's original words.
+2. Comments on a brief, plan or document whose sections show ids (S5): start with the scope line the team result describes (**Revise**, **Lock**, **Unlock**, **New**, **Unchanged this round**), so the user confirms what will change and what stays.
+3. Show it and ask with the question tool: **[Send] [Edit] [Cancel]**. Edit: revise and ask again. Cancel: don't send; ask the user what they want instead.
+4. Send: call `team` with the matching action and the polished reply as `text` (for `change`, also the scope as `revise`, `lock`, `unlock`, `add`). The team also keeps the user's original words.
 
 {{instructions}}

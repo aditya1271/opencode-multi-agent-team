@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Role, WorkerRole } from "./config.ts"
+import type { Scope, SectionChange, SectionIndex } from "./sections.ts"
 import type { AgentUsage } from "./usage.ts"
 
 export type Mode =
@@ -62,6 +63,14 @@ export type Stage = "what" | "how"
 /** The Architect's next draft is a document (what-document, research report), not a step plan. */
 export const draftIsDoc = (task: { workflow?: Workflow; stage?: Stage }) =>
   task.workflow === "research" || task.stage === "what" || (task.workflow === "plan" && task.stage !== "how")
+
+/** The draft a scoped revision changes: Lead's brief, or the Architect's latest document or plan. */
+export const scopedFile = (task: TaskState) =>
+  task.scope?.draft === "brief" ? briefName(task) : draftIsDoc(task) ? `doc-${task.doc}.md` : `plan-${task.plan}.md`
+
+/** This agent writes a scoped revision: it returns sections, not the whole draft. */
+export const isScopedWriter = (mode: Mode, task: TaskState | undefined) =>
+  !!task?.scope && !!task.sections && ((mode === "lead" && task.scope.draft === "brief" && !task.revising) || (mode === "architect" && task.scope.draft === "draft"))
 
 /** Lead's brief for the current stage. */
 export const briefName = (task: { stage?: Stage }) => (task.stage === "how" ? "how-brief.md" : "brief.md")
@@ -164,6 +173,12 @@ export interface TaskState {
   lastAdvice?: { role: string; file: string }
   /** Advice items given so far (ids ADV1, ADV2, …). */
   adviceSeq?: number
+  /** Section ids of the current brief or draft, and the ones the user locked. */
+  sections?: SectionIndex
+  /** The sections the pending revision may change (from the user's comments). */
+  scope?: Scope
+  /** What the last scoped revision changed, shown to the user. */
+  sectionChange?: SectionChange
   /** The user asked for a plan: lead can't pick TRIVIAL. */
   forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */

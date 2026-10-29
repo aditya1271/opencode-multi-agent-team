@@ -9,6 +9,7 @@ import { appendFile, migrateNames, newTask, save, taskId, WORKFLOWS } from "../s
 import { Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, render, stepTitles } from "../src/messages.ts"
+import { annotate, checkEdits, idRanges, indexOf, splice, split } from "../src/sections.ts"
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -240,6 +241,49 @@ describe("front agents", () => {
   })
 })
 
+describe("sections", () => {
+  const doc = "# T\n\nintro\n\n## A\n\na body\n\n```\n# not a heading\n```\n\n## Steps\n\n1. **One** — x\n   detail\n2. **Two** — y\n\n## After\n\nz"
+  test("split: headings and plan steps start sections; code blocks don't; nothing is lost", () => {
+    const { head, sections } = split(doc)
+    expect(head).toBe("")
+    expect(sections.map((s) => [s.title, s.step])).toEqual([["T", false], ["A", false], ["Steps", false], ["1. One", true], ["2. Two", true], ["After", false]])
+    const idx = indexOf(doc, "doc:1")
+    expect(idx.ids).toEqual(["S1", "S2", "S3", "S4", "S5", "S6"])
+    expect(splice(doc, idx, []).text).toBe(doc + "\n")
+  })
+  test("splice keeps every other section byte for byte, renumbers steps and reports the change", () => {
+    const idx = { ...indexOf(doc, "doc:1"), locked: ["S6"] }
+    const out = splice(doc, idx, [
+      { id: "S2", content: "## A\n\nnew body" },
+      { id: "S5", content: "", reason: "merged into One" },
+      { id: "new", after: "S4", content: "1. **Half** — h" },
+      { id: "new", content: "## Risks\n\nr" },
+    ])
+    expect(out.text).toBe("# T\n\nintro\n\n## A\n\nnew body\n\n## Steps\n\n1. **One** — x\n   detail\n2. **Half** — h\n\n## After\n\nz\n\n## Risks\n\nr\n")
+    expect(out.index.ids).toEqual(["S1", "S2", "S3", "S4", "S7", "S6", "S8"])
+    expect(out.index.locked).toEqual(["S6"])
+    expect(out.change).toEqual({ revised: ["S2"], added: ["S7", "S8"], removed: ["S5"], also: [] })
+    expect(annotate(out.text, out.index)).toContain("## After [S6 🔒]")
+  })
+  test("checkEdits enforces the scope", () => {
+    const idx = { ...indexOf(doc, "doc:1"), locked: ["S6"] }
+    const scope = { draft: "draft" as const, revise: ["S2"], add: [] }
+    expect(checkEdits(idx, scope, [{ id: "S2", content: "## A\n\nok" }], doc)).toEqual([])
+    const errors = checkEdits(idx, scope, [{ id: "S6", content: "## After\n\nx" }, { id: "S1", content: "# T\n\ny" }, { id: "S4", content: "no step line" }], doc).join("\n")
+    expect(errors).toContain("S6 is locked")
+    expect(errors).toContain("S1 is outside the revision scope")
+    expect(errors).toContain("S4: content must start with the section's numbered bold step line")
+    expect(errors).toContain("missing: S2")
+    expect(checkEdits(idx, { ...scope, open: true }, [{ id: "S1", content: "# T\n\ny", reason: "title" }], doc)).toEqual([])
+  })
+  test("a whole new version keeps ids by title; idRanges", () => {
+    const idx = { ...indexOf(doc, "doc:1"), locked: ["S2"] }
+    const next = indexOf("## A\n\nx\n\n## New\n\ny\n\n## After\n\nz", "doc:1", idx)
+    expect([next.ids, next.locked]).toEqual([["S2", "S7", "S6"], ["S2"]])
+    expect(idRanges(["S1", "S2", "S3", "S5", "S7", "S8"])).toBe("S1–S3, S5, S7, S8")
+  })
+})
+
 describe("plan and research workflows", () => {
   const signal = new AbortController().signal
   const setup = (switched: string[] = []) => {
@@ -283,7 +327,7 @@ describe("plan and research workflows", () => {
       expect(t.phase).toBe("approval")
       expect(readFileSync(t.output, "utf8")).toContain("## Options")
       expect(render(t)).toContain("**Decisions**\n- A (yours)")
-      expect(render(t)).toContain("**Sections**\n- Options")
+      expect(render(t)).toContain("**Sections**\n- S1 Design\n- S2 Options")
       t.sessions.lead = "ses_lead_what"
       save(t)
 
@@ -394,6 +438,60 @@ describe("plan and research workflows", () => {
       expect(tracked.some((x) => x.path.endsWith("state.json"))).toBe(false)
     } finally {
       rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("scoped comments: only the chosen sections change, locked ones stay byte for byte", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_s", signal)
+      const t = team.task("ses_s")
+      const brief = "## Concept brief\n\n### Concerns\n\n#### 1. Scope\n\npost-edit only\n\n#### 2. Glossary\n\ntwo passes\n\n## Excerpts\n\nE"
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: brief }), {})
+      save(t)
+      expect(render(t)).toContain("#### 1. Scope [S3]")
+      expect(render(t)).toContain("revise, lock, unlock (ids)")
+      expect(await team.handle({ action: "change", text: "x", revise: ["S9"] }, "ses_s", signal)).toContain("Not section ids of this draft: S9")
+      const p = await team.handle({ action: "change", text: "glossary needs entity linking", lock: ["S3"], revise: ["S4"] }, "ses_s", signal)
+      expect([t.scope, t.sections.locked]).toEqual([{ draft: "brief", revise: ["S4"], add: [], open: false }, ["S3"]])
+      expect(p.note).toContain("- S3 1. Scope: LOCKED")
+      expect(p.note).toContain("- S4 2. Glossary: REVISE")
+      expect(p.note).toContain("report ESCALATE with the revised sections only")
+      beginRun("ses_sc", { role: "lead", mode: "lead", task: t, toolLimit: 10 })
+      expect(() => acceptReport(DEFAULTS, "ses_sc", { status: "ESCALATE", summary: "s", content: "whole brief" })).toThrow("Report `sections`")
+      expect(() => acceptReport(DEFAULTS, "ses_sc", { status: "ESCALATE", summary: "s", content: "c", sections: [{ id: "S3", content: "#### 1. Scope\n\nx" }] } as any)).toThrow("S3 is locked")
+      runs.delete("ses_sc")
+      t.pending = undefined
+      team.apply(t, p, report("ESCALATE", { content: "added linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then entity linking" }] }), {})
+      expect(readFileSync(path.join(t.dir, "brief.md"), "utf8")).toBe(brief.replace("two passes", "two passes, then entity linking") + "\n")
+      save(t)
+      const shown = render(t)
+      expect(shown).toContain("#### 1. Scope [S3 🔒]")
+      expect(shown).toContain("**This version:** revised S4")
+      expect(shown).toContain("**Locked:** S3")
+      expect(await team.handle({ action: "change", text: "redo scope", revise: ["S3"] }, "ses_s", signal)).toContain("S3 is locked")
+
+      // The what-document: a new draft with its own ids and locks; Lead's revision brief and the Architect see the scope.
+      t.phase = "brief"
+      await team.handle({ action: "approve" }, "ses_s", signal)
+      t.pending = undefined
+      const doc = "# Design\n\n## Glossary\n\nA\n\n## Review\n\nB"
+      team.apply(t, { mode: "architect" }, report("DOC", { content: doc }), {})
+      save(t)
+      expect(render(t)).toContain("- S2 Glossary\n- S3 Review")
+      const rev = await team.handle({ action: "change", text: "review needs a UI", lock: ["S2"], revise: ["S3"] }, "ses_s", signal)
+      expect(buildPrompt(DEFAULTS, t, rev, false)).toContain("Brief only the REVISE sections")
+      t.pending = undefined
+      team.apply(t, rev, report("ESCALATE", { content: "S3: add a UI" }), {})
+      expect(t.pending.note).toContain("report DOC with the revised sections only")
+      const arch = t.pending
+      t.pending = undefined
+      team.apply(t, arch, report("DOC", { content: "UI added", sections: [{ id: "S3", content: "## Review\n\nB, with a UI" }] }), {})
+      expect(readFileSync(path.join(t.dir, "doc-2.md"), "utf8")).toBe("# Design\n\n## Glossary\n\nA\n\n## Review\n\nB, with a UI\n")
+      expect(readFileSync(t.output, "utf8")).toContain("B, with a UI")
+      expect(t.scope).toBeUndefined()
+    } finally {
+      cleanup()
     }
   })
 

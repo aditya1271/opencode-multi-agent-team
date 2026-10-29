@@ -125,6 +125,15 @@ To update later, run `git pull` in the clone and restart OpenCode.
   still writes the next version and must say how it handled each item; you see "Revised
   following …'s advice" on it. A writer that reports STUCK gets the next adviser right away,
   and when none is left the task comes to you. Set the rounds in `limits.escalateAfterComments`.
+- **Revise some sections, keep the rest:** every brief, document and plan shows its sections
+  with ids (S1, S2, …; a plan step is a section). When you comment, the manager's polished text
+  starts with the scope: **Revise** (what you criticised), **Lock** (what you called good),
+  **Unlock**, **New**, and **Unchanged this round**. You confirm it with the rest. The writer
+  returns only the sections in scope and the plugin puts them into the previous version, so
+  every other section stays byte for byte. Locked sections stay locked until you unlock them;
+  a section left unchanged this round may change only with a reason, shown to you as "also
+  changed S9 (…)". Each version says what changed ("revised S5, S6 · new S12"). Comments on the
+  whole draft open every section that isn't locked.
 
 ### Plan documents (`plan-manager`)
 

@@ -1,7 +1,20 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { runs, type Report, type ShellRun } from "./runtime.ts"
-import { draftIsDoc, isDocWorkflow, type Mode, type TaskState } from "./state.ts"
+import { checkEdits } from "./sections.ts"
+import { draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
+
+const SECTION_EDIT = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    content: { type: "string" },
+    reason: { type: "string" },
+    after: { type: "string" },
+  },
+  required: ["id", "content"],
+  additionalProperties: false,
+}
 
 const BASE: Record<Mode, string[]> = {
   lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "INFEASIBLE", "STUCK"],
@@ -99,6 +112,12 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     properties.items = { type: "array", items: { type: "string" }, description: "Required for ADVICE: one concrete instruction per item, unnumbered." }
   if ((mode === "lead" || mode === "architect") && task?.pending?.adviceIds?.length)
     properties.addressed = { type: "string", description: `Required for your draft: how you handled each advice item, one line per id (${task.pending.adviceIds.join(", ")}).` }
+  if (isScopedWriter(mode, task))
+    properties.sections = {
+      type: "array",
+      items: SECTION_EDIT,
+      description: "Required for your revised draft: only the sections that change (id, the whole section from its heading line; reason for one outside the scope; id \"new\" with after for a new one).",
+    }
   if (mode === "fix" || mode === "fix_trivial")
     properties.checkCommand = { type: "string", description: "Required for DONE: the exact check command you ran last." }
   return { type: "object", properties, required: ["status", "summary", "content"], additionalProperties: false }
@@ -119,6 +138,7 @@ export const REPORT_INPUT = {
     what: { type: "string" },
     items: { type: "array", items: { type: "string" } },
     addressed: { type: "string" },
+    sections: { type: "array", items: SECTION_EDIT },
   },
   required: ["status", "summary", "content"],
 }
@@ -144,6 +164,13 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (adviceIds.length && ["ESCALATE", "DOC", "PLAN"].includes(input.status)) {
     const missing = adviceIds.filter((id) => !new RegExp(`\\b${id}\\b`).test(input.addressed ?? ""))
     if (missing.length) throw new Error(`addressed must say how you handled every advice item by id; missing: ${missing.join(", ")}.`)
+  }
+  const task = run.task
+  // With every section open and none locked, the whole draft is as good as sections.
+  const whole = task?.scope?.open && !task.sections?.locked.length && !input.sections?.length
+  if (["ESCALATE", "DOC", "PLAN"].includes(input.status) && isScopedWriter(run.mode, task) && !whole && task) {
+    const errors = checkEdits(task.sections!, task.scope!, input.sections, readTaskFile(task, scopedFile(task)))
+    if (errors.length) throw new Error(`This revision is scoped:\n- ${errors.join("\n- ")}`)
   }
   if (run.mode === "lead_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))

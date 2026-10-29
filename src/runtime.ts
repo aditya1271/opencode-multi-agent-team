@@ -1,4 +1,5 @@
 import type { WorkerRole } from "./config.ts"
+import type { SectionEdit } from "./sections.ts"
 import type { Mode, TaskState } from "./state.ts"
 
 export interface Report {
@@ -16,6 +17,8 @@ export interface Report {
   items?: string[]
   /** A revision after advice: how each advice item (by id) was handled. */
   addressed?: string
+  /** A scoped revision: only the sections that change. */
+  sections?: SectionEdit[]
 }
 
 export interface ShellRun {
