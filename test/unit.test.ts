@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
 import { buildPatterns, DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
-import { toolKind, trimLog } from "../src/guards.ts"
+import { leadReadProblem, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, runs } from "../src/runtime.ts"
@@ -355,6 +355,26 @@ describe("plan and research workflows", () => {
       expect([t.pending.mode, t.pending.ids, t.pending.files.length]).toEqual(["lead_answer", ["Q1"], 1])
       expect(t.pending.note).toContain("Q1: who calls nextLevel?")
       expect(buildPrompt(DEFAULTS, t, t.pending, false)).toContain("a.cpp:3")
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("Lead reads only files named in the task folder; folders and other files are refused", async () => {
+    const { team, workspace, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "extend the bindings in `nl.i`", workflow: "plan" }, "ses_r", signal)
+      const t = team.task("ses_r")
+      mkdirSync(path.join(workspace, "src/lwt"), { recursive: true })
+      for (const f of ["src/nl.i", "src/lwt/traverse.cpp", "src/other.cpp"]) writeFileSync(path.join(workspace, f), "x")
+      expect(leadReadProblem(t, { filePath: "src/nl.i" })).toBeUndefined()
+      expect(leadReadProblem(t, { filePath: "src" })).toContain("Listing folders is searching")
+      expect(leadReadProblem(t, { filePath: "src/lwt/traverse.cpp" })).toContain("isn't named")
+      expect(leadReadProblem(t, { filePath: "request.md" })).toBe("request.md is a task file: its content is already in your prompt.")
+      expect(leadReadProblem(t, { filePath: path.join(t.dir, "request.md") })).toBeUndefined()
+      writeFileSync(path.join(t.dir, "findings-1.md"), "# Findings\n\n- `src/lwt/traverse.cpp:42` nextLevel()")
+      expect(leadReadProblem(t, { filePath: path.join(workspace, "src/lwt/traverse.cpp") })).toBeUndefined()
+      expect(leadReadProblem(t, { filePath: "src/other.cpp" })).toContain("NEED_INFO")
     } finally {
       cleanup()
     }

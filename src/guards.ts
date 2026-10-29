@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { accessSync, constants, existsSync, readFileSync, writeFileSync } from "node:fs"
+import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
@@ -8,7 +8,7 @@ import { matchesAny } from "./match.ts"
 import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
 import { allowedStatuses, reportSchema } from "./report.ts"
 import { counter, runs, touch, type ToolKind } from "./runtime.ts"
-import { nextLogPath, save } from "./state.ts"
+import { nextLogPath, save, type TaskState } from "./state.ts"
 
 const EDIT_TOOLS = new Set(["edit", "write", "patch"])
 const TRIM_LINES = 80
@@ -56,6 +56,32 @@ function resultText(result: unknown): string {
   const r = result as { output?: { output?: unknown }; content?: Array<{ type?: string; text?: string }> }
   if (typeof r?.output?.output === "string") return r.output.output
   return (r?.content ?? []).map((c) => (c.type === "text" ? c.text ?? "" : "")).join("\n")
+}
+
+const ASK_INTERN = "Send the Intern a NEED_INFO with precise queries; its findings come back to you, and then you can read the files they cite."
+
+/**
+ * Lead doesn't search: it reads only files whose path appears in what it was given (the request, the user's answers
+ * and material, the Intern's findings, briefs and drafts: the task folder). Why a read is refused, or undefined.
+ */
+export function leadReadProblem(task: TaskState, input: unknown): string | undefined {
+  const i = (input ?? {}) as Record<string, unknown>
+  const given = i.filePath ?? i.path ?? i.file_path
+  if (typeof given !== "string") return undefined
+  const file = path.resolve(task.workspace, given)
+  const inTask = (p: string) => !path.relative(task.dir, p).startsWith("..")
+  if (inTask(file)) return undefined
+  if (!existsSync(file))
+    return existsSync(path.join(task.dir, path.basename(file)))
+      ? `${path.basename(file)} is a task file: its content is already in your prompt.`
+      : undefined
+  if (statSync(file).isDirectory()) return `Listing folders is searching, which the Intern does for you. ${ASK_INTERN}`
+  let text = ""
+  for (const name of readdirSync(task.dir)) if (name.endsWith(".md")) text += readFileSync(path.join(task.dir, name), "utf8") + "\n"
+  const mentioned = (p: string) => new RegExp(`(^|[^\\w.-])${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\w-])`).test(text)
+  const rel = path.relative(task.workspace, file)
+  if (mentioned(file) || mentioned(rel) || mentioned(path.basename(file))) return undefined
+  return `${rel} isn't named in the request, the user's material or the Intern's findings, so reading it would be searching. ${ASK_INTERN}`
 }
 
 function resultExit(result: unknown): number | undefined {
@@ -147,6 +173,10 @@ export async function registerGuards(ctx: Context, config: Config) {
       throw new Error("Build and test are skipped for this task (the user chose this). Don't build or test; finish the edits and report.")
     run.toolCalls++
     run.tools[kind] = (run.tools[kind] ?? 0) + 1
+    if (run.role === "lead" && event.tool === "read" && run.task) {
+      const problem = leadReadProblem(run.task, event.input)
+      if (problem) throw new Error(problem)
+    }
     run.inFlight++
     if (EDIT_TOOLS.has(event.tool)) {
       const cwd = run.task?.workspace ?? ctx.location.directory
