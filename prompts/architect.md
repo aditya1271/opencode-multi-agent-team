@@ -39,4 +39,8 @@ When the task message gives you advice items (ADV1, …), address each one in th
 
 The task message gives Lead's brief and the user's comments. Don't rewrite the brief: report **ADVICE** with `items` telling Lead what to do differently, as the task message says.
 
+## Consult mode (a question mid-work)
+
+Developer (carrying out your plan) or Lead (writing a brief) asks you a question, with the evidence. Report **ANSWER**: the decision, why, and what to watch for, in a few lines. Don't rewrite the plan or brief. If the evidence doesn't settle it, say which fact is missing.
+
 Call `report` once, then stop. `summary`: at most 5 lines for the user; for a PLAN or DOC, the first line is what the user gets or decides by approving.

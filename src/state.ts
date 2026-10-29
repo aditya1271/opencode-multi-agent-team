@@ -46,6 +46,26 @@ export type Mode =
   | "lead_answer"
   | "architect_advice"
   | "principal_draft_advice"
+  | "architect_consult"
+
+/** Who asks the Architect a question mid-work (status CONSULT); each has its own pair session with the Architect. */
+export type ConsultSide = "developer" | "lead"
+export const consultSide = (mode: Mode): ConsultSide | undefined => (mode === "fix" ? "developer" : mode === "lead" ? "lead" : undefined)
+
+/**
+ * What a pair session is about: when it changes, the next question starts a fresh Architect session. Developer: the
+ * approved plan. Lead: the stage, the brief it writes, and each round of the user's comments.
+ */
+export const pairKey = (task: TaskState, side: ConsultSide) =>
+  side === "developer" ? `plan-${task.plan}` : `stage-${task.stageRun ?? 0}-comments-${task.commentRounds ?? 0}-doc-${task.doc ?? 0}-plan-${task.plan}${task.revising ? "-revising" : ""}`
+
+/** What the question limit counts over: one plan step for Developer (limits.consultsPerStep), one brief for Lead (limits.consultsPerBrief). */
+export const consultKey = (task: TaskState, side: ConsultSide) => (side === "developer" ? `plan-${task.plan}-step-${task.step}` : pairKey(task, "lead"))
+
+export const consultsUsed = (task: TaskState, side: ConsultSide) => {
+  const c = task.consults?.[side]
+  return c?.key === consultKey(task, side) ? c.n : 0
+}
 
 /** Who advises a writer the user keeps sending back, in order (see limits.escalateAfterComments). */
 export const LADDER: Record<"lead" | "architect", Mode[]> = {
@@ -72,6 +92,7 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   lead_answer: "lead",
   architect_advice: "architect",
   principal_draft_advice: "principal",
+  architect_consult: "architect",
 }
 
 /** code: change files (the default). plan: write a plan document. research: write a findings report. */
@@ -214,6 +235,10 @@ export interface TaskState {
   lastAdvice?: { role: string; file: string }
   /** Advice items given so far (ids ADV1, ADV2, …). */
   adviceSeq?: number
+  /** Questions Developer and Lead asked the Architect mid-work, counted per step or brief (see consultKey). */
+  consults?: Partial<Record<ConsultSide, { key: string; n: number }>>
+  /** Their pair sessions with the Architect, apart from its planning session; `asked` caps the size (limits.consultsPerSession). */
+  pairs?: Partial<Record<ConsultSide, { key: string; session?: string; asked: number }>>
   /** Section ids of the current brief or draft, and the ones the user marked final. */
   sections?: SectionIndex
   /** The sections the pending revision may change (from the user's comments). */

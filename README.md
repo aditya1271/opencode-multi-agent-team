@@ -253,12 +253,23 @@ Architect writes to it and Principal reviews against it. Code tasks use the same
 standards; `workflows.code.confirmBrief` (default off) shows the concept brief there too.
 - **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
   Your answer goes back to the agent that asked, in its own session, so it keeps its context.
+- **Asking the Architect mid-work:** before failing or reporting blocked, Developer can ask
+  the Architect a question (status CONSULT), and Lead can too while writing a brief. The
+  Architect has no file access, so the question must carry the evidence (`path:line` and
+  the code, or the exact output); the plugin refuses one without it. The answer goes back to
+  the asker's session, which carries on; it isn't a failed attempt. Each pair (Developer ↔
+  Architect, Lead ↔ Architect) has its own session, apart from the Architect's planning
+  session. Developer's starts fresh with each new plan, Lead's with each stage, brief and
+  round of your comments, and either after `limits.consultsPerSession` (6) questions.
+  Limits: `consultsPerStep` (2) per plan step, `consultsPerBrief` (3) per brief. Principal
+  never answers these.
 - **Attempts** are failed tries: the team's own work failed and has to be redone. That
   means a Developer step that fails its check or is blocked, a review that sends the work
   back, Principal requesting changes to a plan, or an agent call that crashed, timed out or
-  never reported. Info requests, Intern searches, your questions and answers, and revisions
-  from your comments aren't attempts; their own limits bound them (`needInfoPerTask`,
-  `leadSearchRounds`, `questionsPerTask`, `escalateAfterComments`). `limits.taskAttempts`
+  never reported. Info requests, Intern searches, questions to the Architect, your questions
+  and answers, and revisions from your comments aren't attempts; their own limits bound them
+  (`needInfoPerTask`, `leadSearchRounds`, `consultsPerStep`, `consultsPerBrief`,
+  `questionsPerTask`, `escalateAfterComments`). `limits.taskAttempts`
   (default 10) caps failed attempts per task. `limits.taskAgentCalls` (default 100) caps all
   agent calls as a silent runaway guard.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the

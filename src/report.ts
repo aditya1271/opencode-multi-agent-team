@@ -2,7 +2,7 @@ import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { runs, type Report, type ShellRun } from "./runtime.ts"
 import { checkEdits, missingRecommendations, missingSummaries, shownTitle, splice, split } from "./sections.ts"
-import { draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
+import { consultSide, consultsUsed, draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
 
 const SECTION_EDIT = {
   type: "object",
@@ -17,14 +17,14 @@ const SECTION_EDIT = {
 }
 
 const BASE: Record<Mode, string[]> = {
-  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "INFEASIBLE", "STUCK"],
+  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "INFEASIBLE", "STUCK"],
   lead_fail: ["ESCALATE"],
   fix_trivial: ["DONE", "FAILED", "BLOCKED"],
   review_trivial: ["PASS", "ISSUES"],
   architect: ["PLAN", "ASK", "QUESTIONS", "ESCALATE", "INFEASIBLE", "STUCK"],
   intern: ["FOUND", "NOT_FOUND"],
   principal_review: ["APPROVE", "CHANGES", "ASK"],
-  fix: ["DONE", "FAILED", "BLOCKED"],
+  fix: ["DONE", "FAILED", "BLOCKED", "CONSULT"],
   diagnose: ["LOCAL", "REPLAN", "ESCALATE"],
   review: ["PASS", "ISSUES"],
   principal_advice: ["ADVICE", "QUESTIONS", "ASK"],
@@ -35,7 +35,11 @@ const BASE: Record<Mode, string[]> = {
   lead_answer: ["ANSWER", "NEED_INFO"],
   architect_advice: ["ADVICE", "ASK"],
   principal_draft_advice: ["ADVICE", "ASK"],
+  architect_consult: ["ANSWER"],
 }
+
+/** CONSULT needs the facts the question rests on: the Architect can't look them up. */
+const EVIDENCE = /```|\S+:\d+/
 
 const ADVICE_MODES: Mode[] = ["architect_advice", "principal_draft_advice"]
 
@@ -83,10 +87,13 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
     if (task.workflow === "research" && mode === "architect") list = list.map((s) => (s === "ASK" ? "NEED_INFO" : s))
     if (draftIsDoc(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
+    const side = consultSide(mode)
+    if (side && consultsUsed(task, side) >= (side === "developer" ? config.limits.consultsPerStep : config.limits.consultsPerBrief))
+      list = list.filter((s) => s !== "CONSULT")
     if (mode === "lead" || mode === "lead_answer") {
       if ((task.leadSearches ?? 0) >= config.limits.leadSearchRounds) list = list.filter((s) => s !== "NEED_INFO")
     } else if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
-  } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK")
+  } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK" && s !== "CONSULT")
   return list
 }
 
@@ -96,12 +103,9 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     summary: { type: "string", description: "At most 5 lines, shown to the user." },
     content: { type: "string", description: "Markdown. The plugin writes it to the task folder." },
   }
-  if (statuses.includes("QUESTIONS") || statuses.includes("ASK"))
-    properties.questions = {
-      type: "array",
-      items: { type: "string" },
-      description: statuses.includes("ASK") ? "Required for QUESTIONS (to the user) and ASK (to Lead): one question per item." : "Required for QUESTIONS.",
-    }
+  const asks = [statuses.includes("QUESTIONS") && "QUESTIONS (to the user)", statuses.includes("ASK") && "ASK (to Lead)", statuses.includes("CONSULT") && "CONSULT (to the Architect)"].filter(Boolean)
+  if (asks.length)
+    properties.questions = { type: "array", items: { type: "string" }, description: `Required for ${asks.join(" and ")}: one question per item.` }
   if (needsWhat(mode, task) && statuses.includes("ESCALATE"))
     properties.what = { type: "string", enum: ["settled", "open"], description: "Required for ESCALATE: settled when the request already fixes the behaviour, else open." }
   if (mode === "lead" && task?.workflow === "research")
@@ -192,7 +196,9 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   const statuses = allowedStatuses(config, run.mode, run.task)
   if (!statuses.includes(input.status)) throw new Error(`Invalid status "${input.status}". Allowed now: ${statuses.join(", ")}.`)
   if (typeof input.summary !== "string" || typeof input.content !== "string") throw new Error("summary and content are required.")
-  if ((input.status === "QUESTIONS" || input.status === "ASK") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
+  if ((input.status === "QUESTIONS" || input.status === "ASK" || input.status === "CONSULT") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
+  if (input.status === "CONSULT" && !EVIDENCE.test(input.content))
+    throw new Error("CONSULT needs the evidence in content: the Architect has no file access. Quote the code (`path:line` and the lines, in a code block) and the exact output or facts the question rests on.")
   if (input.status === "ESCALATE" && needsWhat(run.mode, run.task)) {
     if (input.what !== "settled" && input.what !== "open") throw new Error('ESCALATE needs what: "settled" or "open".')
     if (input.what === "settled" && !/^#+\s*Why the behaviour is settled/im.test(input.content))

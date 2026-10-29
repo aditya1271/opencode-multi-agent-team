@@ -2,9 +2,9 @@
 import path from "node:path"
 import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
-import { needInfoLimit } from "./report.ts"
+import { allowedStatuses, needInfoLimit } from "./report.ts"
 import { annotate, ensureIndex, idRanges, missingSummaries, oneLine, sectionBody, shortView, shownTitle, split, userView, walkIds, type Section, type SectionIndex } from "./sections.ts"
-import { answerFiles, answersName, autoDecides, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
+import { answerFiles, answersName, autoDecides, briefName, consultsUsed, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
 import { report as usageReport } from "./usage.ts"
 
 export const fileBlock = (task: TaskState, name: string) => {
@@ -330,6 +330,22 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         task.scope && join(scopeText(task, false), "Advise on the REVISE and new sections; final ones stay as they are."),
       )
     }
+    case "architect_consult": {
+      const dev = p.asker === "fix"
+      const question = join(...delivered(), "Report ANSWER.")
+      const where = dev ? `Developer is on step ${task.step} of ${task.planSteps} of plan ${task.plan}` : `Lead is writing the ${briefName(task) === "how-brief.md" ? "how brief" : "brief"}`
+      if (!freshSession) return join(`Another question. ${where}.`, question)
+      return join(
+        `MODE: consult. ${where} and asks you a question mid-work, below. Answer it so they can carry on: the decision, why, and what to watch for, in a few lines. Don't rewrite the ${dev ? "plan" : "brief"} and don't start new work.`,
+        "You have no file access: rely on the evidence in the question, and on the files below. If they don't settle it, say which fact is missing and what to do meanwhile.",
+        dev ? "The plan's intent is binding: if the step can't work as written, say so plainly; Developer then reports BLOCKED." : "Facts about the code come from Lead's evidence and the Intern's findings; decisions that belong to the user stay with the user (Lead asks them as QUESTIONS).",
+        f("request.md"),
+        dev && f("checks.md"),
+        whatDoc(),
+        dev ? f(`plan-${task.plan}.md`) : answers(),
+        question,
+      )
+    }
     case "lead_answer": {
       const head = LEAD_ANSWER.replace("{asker}", MODE_ROLE[p.asker ?? "architect"] === "architect" ? "The Architect" : "Principal")
       if (!freshSession) return join(head, p.note, ...delivered(), capNote())
@@ -432,11 +448,14 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       const rules = task.skipChecks
         ? "Do only this step. Build and test are skipped: don't run them. Report DONE when the step's edits are made, FAILED when stuck, or BLOCKED when the step can't work as written."
         : "Do only this step. Iterate freely until its check command passes. Report DONE with checkCommand, FAILED when stuck, or BLOCKED when the step can't work as written."
+      const consult = allowedStatuses(config, "fix", task).includes("CONSULT")
+        ? ` Unsure which way fits the plan? Report CONSULT with your question and the evidence before you fail or block (${config.limits.consultsPerStep - consultsUsed(task, "developer")} left for this step).`
+        : ""
       if (!task.developerSeenPlan) {
         task.developerSeenPlan = true
-        return join(`Carry out this plan one step at a time. ${head}`, rules, f(`plan-${task.plan}.md`), f("checks.md"), p.note)
+        return join(`Carry out this plan one step at a time. ${head}`, rules + consult, f(`plan-${task.plan}.md`), f("checks.md"), p.note)
       }
-      return join(head, p.note, rules)
+      return join(head, p.note, rules + consult)
     }
     case "diagnose": {
       const stepFiles = task.history.filter((h) => h.plan === task.plan && h.step === task.step && h.file).map((h) => f(h.file!))
@@ -450,7 +469,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       )
     }
     case "review": {
-      const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.file).map((h) => f(h.file!))
+      const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.status !== "CONSULT" && h.file).map((h) => f(h.file!))
       return join(
         `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Developer.`,
         f("request.md"),

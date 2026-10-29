@@ -58,6 +58,11 @@ export interface Config {
     /** Rounds of search queries Lead may hand to the Intern before each report. */
     leadSearchRounds: number
     questionsPerTask: number
+    /** Questions Developer may ask the Architect per plan step, and Lead per brief (status CONSULT). */
+    consultsPerStep: number
+    consultsPerBrief: number
+    /** Questions one pair session with the Architect takes before the next starts fresh. */
+    consultsPerSession: number
     toolCalls: Record<WorkerRole, number>
     callMinutes: { default: number; developer: number }
     stallMinutes: number
@@ -100,6 +105,9 @@ export const DEFAULTS: Config = {
     needInfoPerTask: 6,
     leadSearchRounds: 3,
     questionsPerTask: 4,
+    consultsPerStep: 2,
+    consultsPerBrief: 3,
+    consultsPerSession: 6,
     toolCalls: { lead: 15, architect: 25, intern: 100, developer: 150, reviewer: 30, principal: 20 },
     callMinutes: { default: 30, developer: 240 },
     stallMinutes: 15,

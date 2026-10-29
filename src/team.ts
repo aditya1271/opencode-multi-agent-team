@@ -15,6 +15,9 @@ import {
   autoDecides,
   type AutoLevel,
   briefName,
+  consultKey,
+  consultSide,
+  consultsUsed,
   draftIsDoc,
   findTask,
   isDocWorkflow,
@@ -22,6 +25,7 @@ import {
   loadTask,
   MODE_ROLE,
   newTask,
+  pairKey,
   readTaskFile,
   save,
   setOnWrite,
@@ -1111,7 +1115,8 @@ export class Team {
     const pending = task.pending
     const role = MODE_ROLE[pending.mode]
     const keep = SESSION_MODES[pending.mode]
-    const sessionID = keep && !pending.fresh ? task.sessions[keep] : undefined
+    const pair = pending.mode === "architect_consult" ? this.pairSession(task, pending) : undefined
+    const sessionID = pair ? pair.session : keep && !pending.fresh ? task.sessions[keep] : undefined
     if (pending.mode === "fix" && !sessionID) task.developerSeenPlan = false
     const prompt = buildPrompt(this.config, task, pending, !sessionID)
     task.agentCalls = calls + 1
@@ -1135,6 +1140,7 @@ export class Team {
     )
     add(task.usage, role, res.usage)
     if (keep && res.sessionID) task.sessions[keep] = res.sessionID
+    if (pair && res.sessionID) pair.session = res.sessionID
     for (const file of res.run?.edited ?? []) {
       const rel = path.relative(task.workspace, file) || file
       if (!task.editedFiles.includes(rel)) task.editedFiles.push(rel)
@@ -1211,8 +1217,20 @@ export class Team {
         task.pending = { ...then, adviceIds: ids, note: join(then.note, follow), files: then.mode === "architect" ? then.files : [...(then.files ?? []), file] }
         return
       }
+      case "architect_consult": {
+        const asker = p.asker === "fix" ? "Developer" : "Lead"
+        const file = writeNumbered(task, "consult-answer", `# The Architect's answer to ${asker} (${(p.files ?? []).join(", ")})\n\n${r.content}`)
+        this.record(task, p.mode, r, file)
+        const back = p.then ?? { mode: p.asker ?? "fix" }
+        task.pending = {
+          ...back,
+          note: join(`The Architect answered your question (${file}):`, `<answer>\n${r.content}\n</answer>`, "Carry on with your work; report as usual when done."),
+        }
+        return
+      }
       case "lead":
       case "lead_fail": {
+        if (r.status === "CONSULT") return this.consult(task, p, r)
         if (r.status === "NEED_INFO") {
           task.leadSearches = (task.leadSearches ?? 0) + 1
           this.record(task, p.mode, r)
@@ -1398,6 +1416,7 @@ export class Team {
         return
       }
       case "fix": {
+        if (r.status === "CONSULT") return this.consult(task, p, r)
         const file = this.reportFile(task, "report", p.mode, r)
         this.record(task, p.mode, r, file)
         task.architectUnseen.push(file)
@@ -1563,6 +1582,30 @@ export class Team {
       adviceIds: p.adviceIds,
       note: join(`Questions from ${MODE_ROLE[p.mode] === "architect" ? "the Architect" : "Principal"}:`, text, r.content.trim() && `Context:\n${r.content}`),
     }
+  }
+
+  /** Developer or Lead asks the Architect mid-work: not a failed attempt; the answer comes back to the same session. */
+  private consult(task: TaskState, p: Pending, r: Report) {
+    const side = consultSide(p.mode)!
+    const key = consultKey(task, side)
+    task.consults = { ...task.consults, [side]: { key, n: consultsUsed(task, side) + 1 } }
+    const asker = side === "developer" ? `Developer (plan ${task.plan}, step ${task.step})` : "Lead"
+    const questions = (r.questions ?? []).map((q, i) => `- **Q${i + 1}**: ${q}`).join("\n")
+    const file = writeNumbered(task, "consult", join(`# ${asker} asks the Architect`, questions, `## Evidence\n\n${r.content}`))
+    this.record(task, p.mode, r, file)
+    const back: Pending = side === "developer" ? { mode: "fix" } : { mode: p.mode, adviceIds: p.adviceIds }
+    task.pending = { mode: "architect_consult", asker: p.mode, files: [file], then: back }
+  }
+
+  /** The pair session for a question: kept while its key holds and it has room, else a fresh one. */
+  private pairSession(task: TaskState, p: Pending) {
+    const side = consultSide(p.asker ?? "fix")!
+    const key = pairKey(task, side)
+    let pair = task.pairs?.[side]
+    if (!pair || pair.key !== key || pair.asked >= this.config.limits.consultsPerSession) pair = { key, asked: 0 }
+    pair.asked++
+    task.pairs = { ...task.pairs, [side]: pair }
+    return pair
   }
 
   /** The how stage found an approved what-decision unworkable: back to the what-document, and the user decides. */

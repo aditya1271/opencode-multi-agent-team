@@ -69,10 +69,10 @@ describe("report statuses", () => {
   })
   test("stages pick the Architect's statuses; only the how stage after a what-document may report INFEASIBLE", () => {
     const t = newTask("/tmp/opencode/omat-test", "ses_s", "/tmp", "Goal\nadd a feature", 40)
-    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT"])
     t.stage = "what"
     expect(allowedStatuses(DEFAULTS, "architect", t)).toEqual(["DOC", "ASK", "QUESTIONS", "ESCALATE"])
-    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT"])
     t.stage = "how"
     expect(allowedStatuses(DEFAULTS, "architect", t)).toEqual(["PLAN", "ASK", "QUESTIONS", "ESCALATE"])
     t.doc = 1
@@ -98,6 +98,16 @@ describe("report statuses", () => {
     expect(() => acceptReport(DEFAULTS, "ses_ans", { status: "ANSWER", summary: "s", content: "### A1\nyes" })).toThrow("missing: A2")
     expect(acceptReport(DEFAULTS, "ses_ans", { status: "ANSWER", summary: "s", content: "### A1\nyes\n### A2\nno" })).toContain("Report received")
     runs.delete("ses_ans")
+  })
+  test("CONSULT needs questions and the evidence, since the Architect can't read files", () => {
+    const t = newTask("/tmp/opencode/omat-test", "ses_cs", "/tmp", "Goal\nx", 40)
+    Object.assign(t, { plan: 1, planSteps: 2, step: 1 })
+    beginRun("ses_dev", { role: "developer", mode: "fix", task: t, toolLimit: 10 })
+    const ask = { status: "CONSULT", summary: "s", content: "The files may not be in the depot." }
+    expect(() => acceptReport(DEFAULTS, "ses_dev", ask)).toThrow("non-empty questions")
+    expect(() => acceptReport(DEFAULTS, "ses_dev", { ...ask, questions: ["rm or p4 delete?"] })).toThrow("evidence")
+    expect(acceptReport(DEFAULTS, "ses_dev", { ...ask, questions: ["rm or p4 delete?"], content: "src/a.c:3 is new:\n```\n$ p4 files src/a.c\nno such file\n```" })).toContain("Report received")
+    runs.delete("ses_dev")
   })
   test("lead after a failed trivial attempt may only escalate", () => {
     task.trivialFailed = true
@@ -1052,6 +1062,71 @@ describe("plan and research workflows", () => {
     }
   })
 
+  test("Developer and Lead ask the Architect mid-work: no failed attempt, the answer comes back, limited per step and brief, pair sessions reset", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "remove the old files" }, "ses_c", signal)
+      const t = team.task("ses_c")
+      writeFileSync(path.join(t.dir, "plan-1.md"), "# Plan\n\n1. **Remove**: delete the old files\n2. **Check**: build\n")
+      Object.assign(t, { phase: "running", plan: 1, planSteps: 2, step: 1, rounds: 0 })
+      const ask = report("CONSULT", { questions: ["rm or p4 delete?"], content: "```\n$ p4 files old.c\nno such file\n```" })
+
+      // Developer asks: not an attempt; the Architect gets the plan and the question in a fresh pair session.
+      team.apply(t, { mode: "fix" }, ask, {})
+      expect(t.attempts).toBe(0)
+      expect(t.pending).toMatchObject({ mode: "architect_consult", asker: "fix", then: { mode: "fix" } })
+      expect(readFileSync(path.join(t.dir, t.pending.files[0]), "utf8")).toContain("**Q1**: rm or p4 delete?")
+      const pair = team.pairSession(t, t.pending)
+      expect(pair).toEqual({ key: "plan-1", asked: 1 })
+      const fresh = buildPrompt(DEFAULTS, t, t.pending, true)
+      expect(fresh).toContain("MODE: consult. Developer is on step 1 of 2 of plan 1")
+      expect(fresh).toContain('<file name="plan-1.md">')
+      expect(fresh).toContain("no such file")
+      pair.session = "ses_pair1"
+
+      // The answer goes back to Developer's session, which carries on.
+      team.apply(t, t.pending, report("ANSWER", { content: "Use rm: the files were never added." }), {})
+      expect(t.pending.mode).toBe("fix")
+      expect(t.pending.note).toContain("Use rm: the files were never added.")
+      expect(t.attempts).toBe(0)
+
+      // A second question on the step reuses the pair session; then the step's limit (2) takes CONSULT away.
+      expect(allowedStatuses(DEFAULTS, "fix", t)).toContain("CONSULT")
+      team.apply(t, { mode: "fix" }, ask, {})
+      expect(team.pairSession(t, t.pending)).toEqual({ key: "plan-1", session: "ses_pair1", asked: 2 })
+      expect(buildPrompt(DEFAULTS, t, t.pending, false)).toContain("Another question. Developer is on step 1")
+      expect(allowedStatuses(DEFAULTS, "fix", t)).not.toContain("CONSULT")
+      t.step = 2
+      expect(allowedStatuses(DEFAULTS, "fix", t)).toContain("CONSULT")
+
+      // A new plan, or a full session, starts a fresh pair session.
+      t.plan = 2
+      expect(team.pairSession(t, { mode: "architect_consult", asker: "fix" })).toEqual({ key: "plan-2", asked: 1 })
+      t.pairs.developer = { key: "plan-2", session: "ses_pair2", asked: DEFAULTS.limits.consultsPerSession }
+      expect(team.pairSession(t, { mode: "architect_consult", asker: "fix" })).toEqual({ key: "plan-2", asked: 1 })
+
+      // Lead has its own pair and count; the answer resumes its hand-off with the advice ids.
+      team.apply(t, { mode: "lead", adviceIds: ["ADV1"] }, ask, {})
+      expect(t.pending.then).toEqual({ mode: "lead", adviceIds: ["ADV1"] })
+      expect(team.pairSession(t, t.pending).key).toMatch(/^stage-/)
+      expect(t.pairs.developer.key).toBe("plan-2")
+      expect(buildPrompt(DEFAULTS, t, t.pending, true)).toContain("MODE: consult. Lead is writing the brief")
+      team.apply(t, t.pending, report("ANSWER", { content: "Option B." }), {})
+      expect(t.pending).toMatchObject({ mode: "lead", adviceIds: ["ADV1"] })
+      expect(t.pending.note).toContain("Option B.")
+      team.apply(t, { mode: "lead" }, ask, {})
+      team.apply(t, { mode: "lead" }, ask, {})
+      expect(allowedStatuses(DEFAULTS, "lead", t)).not.toContain("CONSULT")
+      // The user sends the brief back: a new count and a fresh pair session.
+      t.commentRounds = 1
+      expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("CONSULT")
+      expect(team.pairSession(t, { mode: "architect_consult", asker: "lead" }).asked).toBe(1)
+      expect(t.attempts).toBe(0)
+    } finally {
+      cleanup()
+    }
+  })
+
   test("research: Lead's brief waits for the user unless the research is quick", async () => {
     const { team, cleanup } = setup()
     try {
@@ -1261,7 +1336,7 @@ describe("sidebar", () => {
     const t = newTask("/tmp/x", "ses_p", "/w", "x", 40)
     expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("TRIVIAL")
     t.forcePlan = true
-    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO"])
+    expect(allowedStatuses(DEFAULTS, "lead", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT"])
   })
   test("sidebar lists each row's models and the configured models", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "omat-models-"))
