@@ -147,6 +147,8 @@ const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = {
   principal_doc_review: "principal",
   architect_advice: "architect",
   principal_draft_advice: "principal",
+  // The step fix runs in the Architect's planning session: it wrote the plan.
+  architect_stepfix: "architect",
 }
 
 export class Team {
@@ -460,10 +462,17 @@ export class Team {
       return render(task)
     }
     task.phase = "running"
-    task.step = 1
     task.rounds = 0
     task.developerSeenPlan = false
-    task.pending = { mode: "fix", fresh: true }
+    const sf = task.stepFix
+    if (sf?.waiting && sf.plan === task.plan) {
+      // A step fix: Developer carries on at the changed step, in its session, with the new plan.
+      sf.waiting = false
+      task.pending = { mode: "fix", note: `Step ${sf.from} was changed after you were blocked: ${sf.summary}. The plan above is the new version; steps before ${sf.from} are done.` }
+    } else {
+      task.step = 1
+      task.pending = { mode: "fix", fresh: true }
+    }
     save(task)
     return this.step(task, signal)
   }
@@ -500,7 +509,11 @@ export class Team {
       case "brief":
         return tell(`approved the ${task.workflow === "research" ? "research" : "concept"} brief`, this.approve(task, signal))
       case "approval": {
-        const what = draftIsDoc(task) ? docName(task) : `plan ${task.plan}${task.planRisk ? " (destructive or irreversible steps)" : ""}`
+        const what = task.stepFix?.waiting
+          ? `the change to step ${task.stepFix.from} (${task.stepFix.summary})`
+          : draftIsDoc(task)
+            ? docName(task)
+            : `plan ${task.plan}${task.planRisk ? " (destructive or irreversible steps)" : ""}`
         if (task.auto === "full" && task.workflow === "plan" && task.stage === "how")
           return tell(`approved the ${what} and started implementing it`, this.implement(task, signal))
         return tell(`approved the ${what}`, this.approve(task, signal))
@@ -1228,6 +1241,12 @@ export class Team {
         }
         return
       }
+      case "architect_stepfix": {
+        if (r.status === "STEP" && this.fixStep(task, r)) return
+        const file = this.reportFile(task, "analysis", p.mode, r)
+        this.record(task, p.mode, r, file)
+        return this.planFailure(task, `${p.note ?? `Developer is blocked on step ${task.step}`}; the Architect found the plan can't be patched: ${r.summary}`)
+      }
       case "lead":
       case "lead_fail": {
         if (r.status === "CONSULT") return this.consult(task, p, r)
@@ -1354,6 +1373,7 @@ export class Team {
         this.record(task, p.mode, r, file)
         const failed = task.workflow === "plan" && task.output ? this.writeOutput(task, howOutput(task.output), text, file) : undefined
         task.plan = task.seq.plan
+        task.stepFix = undefined
         task.planSteps = (scoped && split(text).sections.filter((s) => s.step).length) || r.steps || 1
         task.planRisk = r.risk === "yes"
         task.planHadFailure = task.planFailures > 0
@@ -1421,7 +1441,15 @@ export class Team {
         this.record(task, p.mode, r, file)
         task.architectUnseen.push(file)
         if (r.status !== "DONE") task.attempts++
-        if (r.status === "BLOCKED") return this.planFailure(task, `Developer is blocked on step ${task.step}: ${r.summary}`)
+        if (r.status === "BLOCKED") {
+          const reason = `Developer is blocked on step ${task.step}: ${r.summary}`
+          const sf = task.stepFix
+          // One step fix per step: a fixed step that blocks again fails the plan.
+          if (sf?.plan === task.plan && task.step >= sf.from && task.step <= sf.to) return this.planFailure(task, `${reason} (after the step fix)`)
+          task.planHadFailure = true
+          task.pending = { mode: "architect_stepfix", note: reason }
+          return
+        }
         if (r.status === "DONE") {
           if (task.step < task.planSteps) {
             task.step++
@@ -1595,6 +1623,37 @@ export class Team {
     this.record(task, p.mode, r, file)
     const back: Pending = side === "developer" ? { mode: "fix" } : { mode: p.mode, adviceIds: p.adviceIds }
     task.pending = { mode: "architect_consult", asker: p.mode, files: [file], then: back }
+  }
+
+  /**
+   * The Architect's step fix: its step(s) replace the blocked one in a copy of the plan (the next plan-N.md); finished
+   * steps and the rest stay byte for byte. Developer carries on at the same step once it is approved. False when the
+   * blocked step can't be found in the plan.
+   */
+  private fixStep(task: TaskState, r: Report): boolean {
+    const old = `plan-${task.plan}.md`
+    const text = readTaskFile(task, old)
+    const idx = sectionIndex(task, "draft")
+    if (!text || !idx) return false
+    const stepIds = split(text).sections.flatMap((s, i) => (s.step ? [idx.ids[i]!] : []))
+    const id = stepIds[task.step - 1]
+    if (!id) return false
+    const content = r.content.trim()
+    const added = split(content, true).sections.length
+    const out = splice(text, idx, [{ id, content }])
+    const from = task.step
+    const file = writeNumbered(task, "plan", out.text)
+    this.record(task, "architect_stepfix", r, file)
+    task.plan = task.seq.plan!
+    task.sections = out.index
+    task.planSteps = split(out.text).sections.filter((s) => s.step).length
+    task.rounds = 0
+    task.stepFix = { plan: task.plan, from, to: from + added - 1, risk: r.risk === "yes", summary: r.summary.split("\n")[0]!, waiting: true }
+    task.planSummary = join(task.planSummary, `Step ${from} changed after Developer was blocked: ${task.stepFix.summary}`)
+    // Like a destructive plan, a destructive step fix gets Principal's review first.
+    if (task.stepFix.risk) task.pending = { mode: "principal_review", fresh: true }
+    else this.toApproval(task)
+    return true
   }
 
   /** The pair session for a question: kept while its key holds and it has room, else a fresh one. */

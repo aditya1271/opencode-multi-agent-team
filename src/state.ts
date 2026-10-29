@@ -47,6 +47,7 @@ export type Mode =
   | "architect_advice"
   | "principal_draft_advice"
   | "architect_consult"
+  | "architect_stepfix"
 
 /** Who asks the Architect a question mid-work (status CONSULT); each has its own pair session with the Architect. */
 export type ConsultSide = "developer" | "lead"
@@ -93,6 +94,7 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   architect_advice: "architect",
   principal_draft_advice: "principal",
   architect_consult: "architect",
+  architect_stepfix: "architect",
 }
 
 /** code: change files (the default). plan: write a plan document. research: write a findings report. */
@@ -115,7 +117,8 @@ export type AutoLevel = "polished" | "safe" | "full"
 /** Auto mode decides this stop itself: the user isn't asked. */
 export const autoDecides = (task: TaskState) =>
   (task.auto === "safe" || task.auto === "full") &&
-  (["checks", "questions", "brief"].includes(task.phase) || (task.phase === "approval" && !(task.auto === "safe" && task.planRisk && !draftIsDoc(task))))
+  (["checks", "questions", "brief"].includes(task.phase) ||
+    (task.phase === "approval" && !(task.auto === "safe" && (task.stepFix?.waiting ? task.stepFix.risk : task.planRisk) && !draftIsDoc(task))))
 
 export const draftIsDoc = (task: { workflow?: Workflow; stage?: Stage }) =>
   task.workflow === "research" || task.stage === "what" || (task.workflow === "plan" && task.stage !== "how")
@@ -237,6 +240,11 @@ export interface TaskState {
   adviceSeq?: number
   /** Questions Developer and Lead asked the Architect mid-work, counted per step or brief (see consultKey). */
   consults?: Partial<Record<ConsultSide, { key: string; n: number }>>
+  /**
+   * The Architect's latest step fix: in plan `plan` (the spliced copy), steps `from`..`to` replace the blocked one.
+   * A fixed step that blocks again fails the plan. `waiting`: the user approves it (approval phase).
+   */
+  stepFix?: { plan: number; from: number; to: number; risk: boolean; summary: string; waiting?: boolean }
   /** Their pair sessions with the Architect, apart from its planning session; `asked` caps the size (limits.consultsPerSession). */
   pairs?: Partial<Record<ConsultSide, { key: string; session?: string; asked: number }>>
   /** Section ids of the current brief or draft, and the ones the user marked final. */

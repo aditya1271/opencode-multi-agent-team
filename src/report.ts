@@ -36,7 +36,11 @@ const BASE: Record<Mode, string[]> = {
   architect_advice: ["ADVICE", "ASK"],
   principal_draft_advice: ["ADVICE", "ASK"],
   architect_consult: ["ANSWER"],
+  architect_stepfix: ["STEP", "REPLAN"],
 }
+
+/** A plan step's first line: `N. **Title**: <what the step achieves>`. */
+const STEP_LINE = /^\d+\.\s+\*\*.+?\*\*:?\s*\S/
 
 /** CONSULT needs the facts the question rests on: the Architect can't look them up. */
 const EVIDENCE = /```|\S+:\d+/
@@ -114,6 +118,8 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     properties.risk = { type: "string", enum: ["yes", "no"], description: "Required for PLAN: yes only for destructive or irreversible steps." }
     properties.steps = { type: "integer", minimum: 1, description: "Required for PLAN: number of plan steps." }
   }
+  if (statuses.includes("STEP"))
+    properties.risk = { type: "string", enum: ["yes", "no"], description: "Required for STEP: yes only if the new step(s) are destructive or irreversible." }
   if (ADVICE_MODES.includes(mode))
     properties.items = { type: "array", items: { type: "string" }, description: "Required for ADVICE: one concrete instruction per item, unnumbered." }
   if ((mode === "lead" || mode === "architect") && task?.pending?.adviceIds?.length)
@@ -222,6 +228,14 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (run.mode === "lead_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))
     if (missing.length) throw new Error(`Answer every question by its id; missing: ${missing.join(", ")}.`)
+  }
+  if (input.status === "STEP") {
+    if (input.risk !== "yes" && input.risk !== "no") throw new Error('STEP needs risk: "yes" or "no".')
+    const { head, sections } = split(input.content.trim(), true)
+    if (head.trim() || !sections.length || sections.length > 2 || sections.some((s) => !s.step || !STEP_LINE.test(s.text.split("\n")[0]!)))
+      throw new Error(
+        "STEP content is only the step(s) that replace the blocked one: one step, or two when a new step must come first. Each starts with `N. **Title**: <what the step achieves>`, the details on the next lines. Nothing before the first step.",
+      )
   }
   if (input.status === "PLAN") {
     if (input.risk !== "yes" && input.risk !== "no") throw new Error('PLAN needs risk: "yes" or "no".')

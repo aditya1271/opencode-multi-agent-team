@@ -263,6 +263,14 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
   round of your comments, and either after `limits.consultsPerSession` (6) questions.
   Limits: `consultsPerStep` (2) per plan step, `consultsPerBrief` (3) per brief. Principal
   never answers these.
+- **Step fix:** when Developer reports a step blocked, the Architect first tries to fix just
+  that step: it returns a replacement step, or two (a new step first, then the revised one).
+  The plugin swaps them into a copy of the plan; finished steps and the rest stay as they
+  are. You approve a one-line "Step N changed: …" (destructive or irreversible changes show
+  the full step text, and Principal reviews them first, as for a risky plan); safe and full
+  auto approve it themselves (safe still stops at a risky one). Developer then carries on at
+  that step. One fix per step: if the fixed step blocks again, the plan counts as failed.
+  When one step can't be patched, the Architect says so and writes a new plan as before.
 - **Attempts** are failed tries: the team's own work failed and has to be redone. That
   means a Developer step that fails its check or is blocked, a review that sends the work
   back, Principal requesting changes to a plan, or an agent call that crashed, timed out or

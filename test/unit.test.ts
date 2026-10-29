@@ -109,6 +109,17 @@ describe("report statuses", () => {
     expect(acceptReport(DEFAULTS, "ses_dev", { ...ask, questions: ["rm or p4 delete?"], content: "src/a.c:3 is new:\n```\n$ p4 files src/a.c\nno such file\n```" })).toContain("Report received")
     runs.delete("ses_dev")
   })
+  test("STEP holds only the replacement step(s), with risk", () => {
+    const t = newTask("/tmp/opencode/omat-test", "ses_sf", "/tmp", "Goal\nx", 40)
+    beginRun("ses_arch", { role: "architect", mode: "architect_stepfix", task: t, toolLimit: 10 })
+    const step = { status: "STEP", summary: "s", content: "2. **Delete**: remove the files\n   rm old.c" }
+    expect(() => acceptReport(DEFAULTS, "ses_arch", step)).toThrow("risk")
+    expect(() => acceptReport(DEFAULTS, "ses_arch", { ...step, risk: "no", content: "Use rm instead.\n\n2. **Delete**: x" })).toThrow("Nothing before the first step")
+    expect(() => acceptReport(DEFAULTS, "ses_arch", { ...step, risk: "no", content: "2. **Delete**\n   rm old.c" })).toThrow("N. **Title**")
+    expect(() => acceptReport(DEFAULTS, "ses_arch", { ...step, risk: "no", content: "1. **A**: a\n2. **B**: b\n3. **C**: c" })).toThrow("one step, or two")
+    expect(acceptReport(DEFAULTS, "ses_arch", { ...step, risk: "no" })).toContain("Report received")
+    runs.delete("ses_arch")
+  })
   test("lead after a failed trivial attempt may only escalate", () => {
     task.trivialFailed = true
     expect(allowedStatuses(DEFAULTS, "lead", task)).toEqual(["ESCALATE"])
@@ -1122,6 +1133,73 @@ describe("plan and research workflows", () => {
       expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("CONSULT")
       expect(team.pairSession(t, { mode: "architect_consult", asker: "lead" }).asked).toBe(1)
       expect(t.attempts).toBe(0)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("a blocked step: the Architect fixes that step, the user approves one line, Developer carries on; a fixed step blocking again fails the plan", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "remove the old files" }, "ses_f", signal)
+      const t = team.task("ses_f")
+      const plan = "# Plan\n\n## Steps\n\n1. **Back up**: keep a copy\n   cp a a.bak\n2. **Delete**: remove the old files\n   p4 delete old.c\n3. **Check**: build\n   make\n"
+      writeFileSync(path.join(t.dir, "plan-1.md"), plan)
+      t.seq.plan = 1
+      Object.assign(t, { phase: "running", plan: 1, planSteps: 3, step: 2, rounds: 0, stage: "how", stageRun: 1 })
+
+      // Blocked: a failed attempt, but not yet a failed plan; the Architect gets the step and the report.
+      team.apply(t, { mode: "fix" }, report("BLOCKED", { summary: "old.c is not in the depot", content: "p4: no such file" }), {})
+      expect([t.attempts, t.planFailures, t.pending.mode]).toEqual([1, 0, "architect_stepfix"])
+      const ask = buildPrompt(DEFAULTS, t, t.pending, false)
+      expect(ask).toContain("MODE: step fix. Developer is blocked on step 2: old.c is not in the depot")
+      expect(ask).toContain("p4: no such file")
+
+      // Two steps replace step 2; the rest stays and is renumbered.
+      const fix = "2. **Check the depot**: see which files p4 knows\n   p4 files old.c\n3. **Delete**: remove the old files, with rm for files p4 doesn't know\n   rm old.c"
+      team.apply(t, t.pending, report("STEP", { summary: "Use rm for files that were never added", content: fix, risk: "no" }), {})
+      expect([t.plan, t.planSteps, t.step, t.phase]).toEqual([2, 4, 2, "approval"])
+      const text = readFileSync(path.join(t.dir, "plan-2.md"), "utf8")
+      expect(text).toContain("1. **Back up**: keep a copy\n   cp a a.bak\n2. **Check the depot**")
+      expect(text).toContain("3. **Delete**: remove the old files, with rm")
+      expect(text).toContain("4. **Check**: build")
+      expect(text).not.toContain("p4 delete")
+      const view = render(t)
+      expect(view).toContain("**Steps 2-3 replace step 2** (plan 2): Use rm for files that were never added")
+      expect(view).not.toContain("rm old.c")
+
+      // Approved: Developer carries on at step 2 in its own session, with the new plan.
+      team.step = async (x: any) => x.pending
+      await team.handle({ action: "approve" }, "ses_f", signal)
+      expect([t.phase, t.step, t.pending.mode, t.pending.fresh, t.developerSeenPlan]).toEqual(["running", 2, "fix", undefined, false])
+      const dev = buildPrompt(DEFAULTS, t, t.pending, false)
+      expect(dev).toContain('<file name="plan-2.md">')
+      expect(dev).toContain("Step 2 was changed after you were blocked")
+
+      // A fixed step that blocks again fails the plan; another step of it may get its own fix.
+      t.step = 3
+      team.apply(t, { mode: "fix" }, report("BLOCKED", { content: "rm denied" }), {})
+      expect([t.pending.mode, t.planFailures]).toEqual(["architect", 1])
+      t.step = 4
+      team.apply(t, { mode: "fix" }, report("BLOCKED", { content: "make missing" }), {})
+      expect(t.pending.mode).toBe("architect_stepfix")
+      // The Architect can't patch it: today's path, a failed plan.
+      team.apply(t, t.pending, report("REPLAN", { content: "the build setup is wrong" }), {})
+      expect(t.planFailures).toBe(2)
+
+      // A destructive step fix: Principal reviews it first; safe auto stops at it and shows the step.
+      Object.assign(t, { phase: "running", plan: 1, planSteps: 3, step: 2, planFailures: 0, principalAdviceUsed: 0, stepFix: undefined, auto: "safe" })
+      t.pending = { mode: "architect_stepfix" }
+      team.apply(t, t.pending, report("STEP", { summary: "Delete with rm", content: "2. **Delete**: remove the old files with rm\n   rm -f old.c", risk: "yes" }), {})
+      expect(t.pending.mode).toBe("principal_review")
+      team.apply(t, t.pending, report("APPROVE", { content: "fine" }), {})
+      expect(t.phase).toBe("approval")
+      const risky = render(t)
+      expect(risky).toContain("**Step 2 changed** (plan 3): Delete with rm")
+      expect(risky).toContain("rm -f old.c")
+      expect(risky).toContain("Safe auto stopped here")
+      t.stepFix.risk = false
+      expect(render(t)).toContain("AUTO")
     } finally {
       cleanup()
     }

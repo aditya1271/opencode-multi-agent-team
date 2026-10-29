@@ -409,6 +409,18 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       }
       return join("New information since your last call:", ...unseen.map(f), p.note, capNote(), "Report again.")
     }
+    case "architect_stepfix": {
+      const unseen = [...new Set(task.architectUnseen)]
+      task.architectUnseen = []
+      const report = task.history.filter((h) => h.mode === "fix" && h.plan === task.plan && h.step === task.step && h.file).at(-1)?.file
+      const ask = join(
+        `MODE: step fix. ${p.note ?? `Developer is blocked on step ${task.step}`}. Developer's report is ${report ?? "below"}. Fix that step instead of writing a new plan, if you can:`,
+        `- **STEP**: \`content\` holds only the step(s) that replace step ${task.step}, in the plan's step format: one step, or two when a new step must come first. Each starts with \`N. **Title**: <what the step achieves>\`, the details on the next lines. The finished steps and the rest of the plan stay as they are. \`summary\`: one line for the user on what changed and why. \`risk\`: yes only if the new step(s) are destructive or irreversible.`,
+        "- **REPLAN**: the plan is wrong beyond this step, so patching it won't do. `content`: why. You then write the next plan as usual.",
+      )
+      if (!freshSession) return join(unseen.length > 0 && join("New information since your last call:", ...unseen.map(f)), ask)
+      return join(ask, f("request.md"), f("checks.md"), whatDoc(), stageBrief(), answers(), f(`plan-${task.plan}.md`), ...unseen.map(f))
+    }
     case "intern":
       if (task.workflow === "research") return join(INTERN_RESEARCH, `<queries>\n${p.note ?? ""}\n</queries>`)
       return join(
@@ -577,8 +589,26 @@ const AUTO_SEND = (level: string) =>
 
 export function render(task: TaskState): string {
   const review = (task.phase === "brief" || task.phase === "approval") && !autoDecides(task)
-  const out = review ? reviewView(task) : renderPhase(task)
+  const out = review && task.phase === "approval" && task.stepFix?.waiting ? stepFixView(task, task.stepFix) : review ? reviewView(task) : renderPhase(task)
   return task.auto ? join(out, AUTO_SEND(task.auto)) : out
+}
+
+/** A step fix waiting on the user: one line, and the new step text when it is destructive or irreversible. */
+function stepFixView(task: TaskState, sf: NonNullable<TaskState["stepFix"]>): string {
+  const steps = split(readTaskFile(task, `plan-${task.plan}.md`)).sections.filter((s) => s.step)
+  const changed = steps.slice(sf.from - 1, sf.to)
+  const which = sf.to > sf.from ? `Steps ${sf.from}-${sf.to} replace step ${sf.from}` : `Step ${sf.from} changed`
+  const block = join(
+    `**${which}** (plan ${task.plan}): ${sf.summary}`,
+    sf.risk && join("**Risk: yes** (destructive or irreversible). The new step text:", changed.map((s) => s.text.trim()).join("\n\n")),
+    task.auto === "safe" && sf.risk && "**Safe auto stopped here:** the change is destructive or irreversible, so it needs your approval.",
+    `**Plan file:** ${path.join(task.dir, `plan-${task.plan}.md`)}`,
+  )
+  return join(
+    `STEP FIX ready for approval: Developer was blocked on step ${sf.from}, and the Architect changed that step instead of writing a new plan. Show this block to the user exactly as written, without rewording or shortening it:`,
+    `<show>\n${block}\n</show>`,
+    `NEXT ACTION: show the block above and end with one line: "Reply to approve (Developer carries on at step ${sf.from}), change or stop it, or ask about it or for details." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+  )
 }
 
 const SECTION_ROUTES =
