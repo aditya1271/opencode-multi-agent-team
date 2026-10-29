@@ -127,13 +127,17 @@ To update later, run `git pull` in the clone and restart OpenCode.
   and when none is left the task comes to you. Set the rounds in `limits.escalateAfterComments`.
 - **Revise some sections, keep the rest:** every brief, document and plan shows its sections
   with ids (S1, S2, …; a plan step is a section). When you comment, the manager's polished text
-  starts with the scope: **Revise** (what you criticised), **Lock** (what you called good),
-  **Unlock**, **New**, and **Unchanged this round**. You confirm it with the rest. The writer
-  returns only the sections in scope and the plugin puts them into the previous version, so
-  every other section stays byte for byte. Locked sections stay locked until you unlock them;
-  a section left unchanged this round may change only with a reason, shown to you as "also
-  changed S9 (…)". Each version says what changed ("revised S5, S6 · new S12"). Comments on the
-  whole draft open every section that isn't locked.
+  starts with the scope, decided per section: **Fine-tune** (an exact edit you stated; the
+  writer makes only that edit), **Revise** (you're unhappy with the substance; the writer
+  reworks it), **Final** (what you called good or done), **Reopen**, **New**, and **Unchanged
+  this round**. You confirm it with the rest. The writer returns only the sections in scope
+  and the plugin puts them into the previous version, so every other section stays byte for
+  byte. Each draft reminds you that you can mark sections **final** ("S3–S6 are final"); final
+  sections (✅) stay exactly as they are until you **reopen** them, and a reply with only final
+  marks just saves them. A section left unchanged this round may change only with a reason,
+  shown to you as "also changed S9 (…)". Each version says what changed ("revised S5, S6 ·
+  fine-tuned S8 · new S12"). A round of fine-tunes only goes straight to the writer (no
+  revision brief from the Lead) and doesn't count toward the escalation rounds.
 
 ### Plan documents (`plan-manager`)
 

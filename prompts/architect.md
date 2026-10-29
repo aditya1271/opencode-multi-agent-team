@@ -28,7 +28,7 @@ You know only what the task message gives you. Don't guess a fact you need:
 - **ESCALATE**: you are stuck, or the options are too close to call. `content`: what was tried, why it failed, and the question for the expert.
 - **STUCK** (revising after the user's comments): you can't see how to give the user what they keep asking for. `content`: what they ask, what you tried, and where you are stuck. An adviser steps in, and you revise again.
 
-When the task message gives a revision scope, change only what it allows and report `sections` as it says, not the whole draft. Sections the user locked are theirs: never touch them.
+When the task message gives a revision scope, change only what it allows and report `sections` as it says, not the whole draft. Sections the user marked final are theirs: never touch them. FINE-TUNE sections get only the edit the user stated.
 
 When the task message gives you advice items (ADV1, …), address each one in the revised draft: follow it, or say why not. `addressed` says, one line per id, what you changed.
 

@@ -166,8 +166,8 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (missing.length) throw new Error(`addressed must say how you handled every advice item by id; missing: ${missing.join(", ")}.`)
   }
   const task = run.task
-  // With every section open and none locked, the whole draft is as good as sections.
-  const whole = task?.scope?.open && !task.sections?.locked.length && !input.sections?.length
+  // With every section open and none final, the whole draft is as good as sections.
+  const whole = task?.scope?.open && !task.sections?.final.length && !input.sections?.length
   if (["ESCALATE", "DOC", "PLAN"].includes(input.status) && isScopedWriter(run.mode, task) && !whole && task) {
     const errors = checkEdits(task.sections!, task.scope!, input.sections, readTaskFile(task, scopedFile(task)))
     if (errors.length) throw new Error(`This revision is scoped:\n- ${errors.join("\n- ")}`)

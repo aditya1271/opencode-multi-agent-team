@@ -173,7 +173,7 @@ export interface TaskState {
   lastAdvice?: { role: string; file: string }
   /** Advice items given so far (ids ADV1, ADV2, …). */
   adviceSeq?: number
-  /** Section ids of the current brief or draft, and the ones the user locked. */
+  /** Section ids of the current brief or draft, and the ones the user marked final. */
   sections?: SectionIndex
   /** The sections the pending revision may change (from the user's comments). */
   scope?: Scope

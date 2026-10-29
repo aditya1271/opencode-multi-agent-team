@@ -48,9 +48,10 @@ export interface TeamInput {
   output?: string
   review?: boolean
   /** change only: the revision scope, by section id (add: titles of new sections). */
+  finetune?: string[]
   revise?: string[]
-  lock?: string[]
-  unlock?: string[]
+  final?: string[]
+  reopen?: string[]
   add?: string[]
 }
 
@@ -58,7 +59,7 @@ export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
   "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
-  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; revise, lock, unlock = section ids, add = titles of new sections), review (Principal critically reviews the waiting plan or document; text = what to look at),",
+  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), review (Principal critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
@@ -73,9 +74,10 @@ export const TEAM_SCHEMA = {
     plan: { type: "boolean", description: "start only: the user wants a plan, not a quick fix." },
     output: { type: "string", description: "start only, plan/research: the document path the user named." },
     review: { type: "boolean", description: "start only: the user asked for Principal's review of the plan or document." },
-    revise: { type: "array", items: { type: "string" }, description: "change only: ids of the sections to revise (S5). Empty with no add: every section that isn't locked." },
-    lock: { type: "array", items: { type: "string" }, description: "change only: ids of sections the user calls good; they stay as they are until unlocked." },
-    unlock: { type: "array", items: { type: "string" }, description: "change only: ids of locked sections the user now wants changed." },
+    finetune: { type: "array", items: { type: "string" }, description: "change only: ids of sections that get only an exact edit the user stated (the edit is in text)." },
+    revise: { type: "array", items: { type: "string" }, description: "change only: ids of sections whose substance the user wants reworked (S5). Empty with no finetune or add: every section that isn't final." },
+    final: { type: "array", items: { type: "string" }, description: "change only: ids of sections the user calls good or done; they stay as they are until reopened." },
+    reopen: { type: "array", items: { type: "string" }, description: "change only: ids of final sections the user now wants changed." },
     add: { type: "array", items: { type: "string" }, description: "change only: short titles of new sections the user asks for." },
   },
   required: ["action"],
@@ -601,23 +603,51 @@ export class Team {
     if (task.phase !== "approval" && task.phase !== "brief") return this.wrongPhase(task, "change")
     const scope = this.scopeOf(task, input)
     if (typeof scope === "string") return scope
+    if (scope?.marksOnly) {
+      // Only final/reopen marks: nothing to revise, show the draft again.
+      task.sections!.final = scope.final
+      save(task)
+      return join(`Saved: final ${idRanges(scope.final) || "none"}.`, render(task))
+    }
     const { polished, note: comments } = await this.withOriginal(task, input.text ?? "", "comments")
     if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
-    task.commentRounds = (task.commentRounds ?? 0) + 1
+    // Exact edits alone aren't the team failing: no comment round (ladder), no advice, no revision brief.
+    const tuneOnly = !!scope && scope.finetune.length > 0 && !scope.revise.length && !scope.add.length
+    if (!tuneOnly) task.commentRounds = (task.commentRounds ?? 0) + 1
     task.lastAdvice = undefined
     if (scope) {
-      task.sections!.locked = scope.locked
-      task.scope = { draft: scope.draft, revise: scope.revise, add: scope.add, open: scope.open }
+      task.sections!.final = scope.final
+      task.scope = { draft: scope.draft, revise: scope.revise, finetune: scope.finetune, add: scope.add, open: scope.open }
     } else task.scope = undefined
-    const scopeLine = scope ? `\n\nScope: revise ${idRanges(scope.revise) || "none"}${scope.add.length ? `; new: ${scope.add.join("; ")}` : ""}${scope.locked.length ? `; locked: ${idRanges(scope.locked)}` : ""}` : ""
+    const scopeLine = scope
+      ? `\n\nScope: ${[
+          scope.finetune.length && `fine-tune ${idRanges(scope.finetune)}`,
+          `revise ${idRanges(scope.revise) || "none"}`,
+          scope.add.length && `new: ${scope.add.join("; ")}`,
+          scope.final.length && `final: ${idRanges(scope.final)}`,
+        ]
+          .filter(Boolean)
+          .join("; ")}`
+      : ""
+    const adjust = (what: string, status: string) =>
+      tuneOnly ? `The user fine-tuned the ${what}: make exactly the edits their comments state and ${reviseAs(task, status, what)}.` : `Revise it and ${reviseAs(task, status, what)}.`
     if (task.phase === "brief") {
       const which = task.workflow === "research" ? "research" : "concept"
-      appendFile(task, answersName(task), `## Comments on the ${which} brief (round ${task.commentRounds})\n\n${comments}${scopeLine}\n`)
+      appendFile(task, answersName(task), `## Comments on the ${which} brief (${tuneOnly ? "fine-tune" : `round ${task.commentRounds}`})\n\n${comments}${scopeLine}\n`)
       const revise: Pending = {
         mode: "lead",
-        note: join(`The user adjusted the ${which} brief. Revise it and ${reviseAs(task, "ESCALATE", "brief")}.`, scopeText(task, true), `The user's comments:\n${comments}`),
+        note: join(tuneOnly ? adjust(`${which} brief`, "ESCALATE") : `The user adjusted the ${which} brief. ${adjust("brief", "ESCALATE")}`, scopeText(task, true), `The user's comments:\n${comments}`),
       }
-      task.pending = this.withAdvice(task, "lead", revise, comments)
+      task.pending = tuneOnly ? revise : this.withAdvice(task, "lead", revise, comments)
+    } else if (tuneOnly && !task.infeasible) {
+      // Exact edits go straight to the Architect.
+      appendFile(task, answersName(task), `## Fine-tuning the ${docName(task)} (${draftFile(task)})\n\n${comments}${scopeLine}\n`)
+      if (!draftIsDoc(task)) task.skipPrincipalReview = true
+      const doc = draftIsDoc(task)
+      task.pending = {
+        mode: "architect",
+        note: join(adjust(`${docName(task)} (${draftFile(task)})`, doc ? "DOC" : "PLAN"), scopeText(task, true), `The user's comments:\n${comments}`),
+      }
     } else {
       // Comments go through Lead, who briefs the Architect (it has no file access).
       appendFile(task, answersName(task), `## Comments on the ${docName(task)} (${draftFile(task)})\n\n${comments}${scopeLine}\n`)
@@ -632,30 +662,33 @@ export class Team {
   }
 
   /**
-   * The sections the user's comments may change, from the manager's revise/lock/unlock/add.
+   * The sections the user's comments may change, from the manager's finetune/revise/final/reopen/add.
    * Undefined when the draft has no sections; a message for the manager when an id is wrong.
    */
-  private scopeOf(task: TaskState, input: TeamInput): (Scope & { locked: string[] }) | string | undefined {
+  private scopeOf(task: TaskState, input: TeamInput): (Scope & { final: string[]; marksOnly: boolean }) | string | undefined {
     const draft = task.phase === "brief" ? "brief" : "draft"
     const idx = sectionIndex(task, draft)
     if (!idx?.ids.length) return undefined
     const ids = (xs?: string[]) => [...new Set((xs ?? []).map((x) => x.trim().toUpperCase()).filter(Boolean))]
     const revise = ids(input.revise)
-    const lock = ids(input.lock)
-    const unlock = ids(input.unlock)
+    const finetune = ids(input.finetune).filter((id) => !revise.includes(id))
+    const mark = ids(input.final)
+    const reopen = ids(input.reopen)
     const list = idx.ids.map((id, i) => `${id} ${idx.titles[i]}`).join("; ")
-    const unknown = [...revise, ...lock, ...unlock].filter((id) => !idx.ids.includes(id))
+    const unknown = [...finetune, ...revise, ...mark, ...reopen].filter((id) => !idx.ids.includes(id))
     if (unknown.length) return `Not section ids of this draft: ${unknown.join(", ")}. The sections: ${list}. NEXT ACTION: fix the ids and call team "change" again with the same text.`
-    const locked = new Set(idx.locked)
-    for (const id of unlock) locked.delete(id)
-    for (const id of lock) locked.add(id)
-    const both = revise.filter((id) => locked.has(id))
-    if (both.length)
-      return `${both.join(", ")} ${both.length > 1 ? "are" : "is"} locked. If the user wants ${both.length > 1 ? "them" : "it"} revised, add ${both.length > 1 ? "them" : "it"} to unlock; otherwise drop ${both.length > 1 ? "them" : "it"} from revise. NEXT ACTION: call team "change" again with the same text.`
+    const final = new Set(idx.final)
+    for (const id of reopen) final.delete(id)
+    for (const id of mark) final.add(id)
+    const both = [...finetune, ...revise].filter((id) => final.has(id))
+    if (both.length) {
+      const [are, them] = both.length > 1 ? ["are", "them"] : ["is", "it"]
+      return `${both.join(", ")} ${are} final. If the user wants ${them} changed, add ${them} to reopen; otherwise drop ${them} from finetune and revise. NEXT ACTION: call team "change" again with the same text.`
+    }
     const add = (input.add ?? []).map((x) => x.trim()).filter(Boolean)
-    const open = !revise.length && !add.length
-    const scoped = open ? idx.ids.filter((id) => !locked.has(id)) : revise
-    return { draft, revise: scoped, add, open, locked: idx.ids.filter((id) => locked.has(id)) }
+    const open = !revise.length && !finetune.length && !add.length
+    const scoped = open ? idx.ids.filter((id) => !final.has(id)) : revise
+    return { draft, revise: scoped, finetune, add, open, final: idx.ids.filter((id) => final.has(id)), marksOnly: open && !!(mark.length || reopen.length) }
   }
 
   /** The text of a new brief, document or plan: a scoped revision put into the previous version, or the whole report. */
@@ -666,7 +699,7 @@ export class Team {
     task.sectionChange = undefined
     const prevFile = kind === "brief" ? briefName(task) : kind === "doc" ? task.doc && `doc-${task.doc}.md` : task.plan && `plan-${task.plan}.md`
     if (scope && r.sections?.length && prevFile && task.sections?.key === key) {
-      const out = splice(readTaskFile(task, prevFile), task.sections, r.sections)
+      const out = splice(readTaskFile(task, prevFile), task.sections, r.sections, scope.finetune ?? [])
       task.sections = out.index
       task.sectionChange = out.change
       return out.text
@@ -995,9 +1028,9 @@ export class Team {
         if (r.status === "APPROVE") return this.toApproval(task)
         task.architectUnseen.push(file)
         const doc = draftIsDoc(task)
-        // Principal's review doesn't override the user's locks: every unlocked section is open.
+        // Principal's review doesn't override the user's final sections: every other section is open.
         const idx = sectionIndex(task, "draft")
-        task.scope = idx?.ids.length ? { draft: "draft", revise: idx.ids.filter((id) => !idx.locked.includes(id)), add: [], open: true } : undefined
+        task.scope = idx?.ids.length ? { draft: "draft", revise: idx.ids.filter((id) => !idx.final.includes(id)), finetune: [], add: [], open: true } : undefined
         const ask = reviseAs(task, doc ? "DOC" : "PLAN", doc ? "document" : "plan")
         task.pending = {
           mode: "architect",

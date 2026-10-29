@@ -69,8 +69,9 @@ export function sectionIndex(task: TaskState, draft: "brief" | "draft"): Section
 const WRITER_SCOPE = [
   "Report `sections`, not the whole draft: one entry per section you return, with `id` and `content` (the whole section, from its heading line, or for a plan step from its numbered bold line; the plugin renumbers steps). The plugin puts them into the previous version; every other section stays byte for byte.",
   "- {revise} Empty content removes a section. Several headings in one content split the section.",
+  "- Return every FINE-TUNE section with only the edit the user's comments state for it; keep the rest of its text word for word.",
   '- A new section: id "new", `after` = the id it follows.',
-  "- A section marked unchanged may change only when a revised section makes it wrong; give `reason` (the user sees it). LOCKED sections are rejected.",
+  "- A section marked unchanged may change only when a revised section makes it wrong; give `reason` (the user sees it). FINAL sections are rejected.",
   "- `content` of the report: a few lines on what you changed.",
 ].join("\n")
 
@@ -79,13 +80,20 @@ export function scopeText(task: TaskState, writer: boolean): string {
   const idx = task.sections
   const s = task.scope
   if (!idx || !s) return ""
-  const what = (id: string) => (idx.locked.includes(id) ? "LOCKED by the user (good enough; never change it)" : s.revise.includes(id) ? "REVISE" : "unchanged this round")
+  const what = (id: string) =>
+    idx.final.includes(id)
+      ? "FINAL (signed off by the user; never change it)"
+      : s.finetune.includes(id)
+        ? "FINE-TUNE (only the exact edit the user stated)"
+        : s.revise.includes(id)
+          ? "REVISE (rework the substance)"
+          : "unchanged this round"
   return join(
     "Scope of this revision (set from the user's comments; the plugin enforces it). Sections of the current draft:",
     idx.ids.map((id, i) => `- ${id} ${idx.titles[i]}: ${what(id)}`).join("\n"),
     s.add.length > 0 && `New sections the user asked for: ${s.add.join("; ")}.`,
     writer && WRITER_SCOPE.replace("{revise}", s.open ? "Return only the REVISE sections you change." : "Return every REVISE section."),
-    writer && s.open && !idx.locked.length && "Nothing is locked: you may report the whole revised draft in `content` instead.",
+    writer && s.open && !idx.final.length && "Nothing is final: you may report the whole revised draft in `content` instead.",
   )
 }
 
@@ -100,30 +108,37 @@ function idList(task: TaskState, text: string, steps: boolean): string {
   const lines = split(text)
     .sections.map((s, i) => ({ s, id: idx.ids[i]! }))
     .filter(({ s }) => s.step === steps)
-    .map(({ s, id }) => `- ${id} ${s.title}${idx.locked.includes(id) ? " 🔒" : ""}`)
+    .map(({ s, id }) => `- ${id} ${s.title}${idx.final.includes(id) ? " ✅" : ""}`)
   return clip(lines.join("\n"), 40)
 }
 
-/** What the last revision changed and which sections are locked, for the user. */
+/** What the last revision changed and which sections are final, with how to mark them, for the user. */
 function changeLine(task: TaskState): string {
   const c = task.sectionChange
-  const locked = task.sections?.locked ?? []
+  const final = task.sections?.final ?? []
   return join(
     c &&
       `**This version:** ${[
         c.revised.length && `revised ${idRanges(c.revised)}`,
+        c.tuned?.length && `fine-tuned ${idRanges(c.tuned)}`,
         c.added.length && `new ${idRanges(c.added)}`,
         c.removed.length && `removed ${idRanges(c.removed)}`,
         ...c.also.map((a) => `also changed ${a.id} (${a.reason})`),
       ]
         .filter(Boolean)
         .join(" · ") || "no section changed"}`,
-    locked.length > 0 && `**Locked:** ${idRanges(locked)} (kept as they are until you unlock them)`,
+    final.length > 0 && `**Final:** ${idRanges(final)}`,
+    !!task.sections?.ids.length &&
+      `Mark sections you're happy with as **final** (e.g. "S3–S6 are final"). Final sections stay exactly as they are until you **reopen** them.`,
   )
 }
 
-const SCOPE_RULE =
-  'Every section shows its id (S5; 🔒 = locked). When you polish comments for "change", start with a scope line from those ids: **Revise:** sections the user criticises or wants changed · **Lock:** sections they call good or fine (a locked section stays as it is until the user unlocks it) · **Unlock:** locked sections they now want changed · **New:** sections they ask to add · **Unchanged this round:** the rest. Comments on the whole draft: Revise every section that isn\'t locked. Then call team "change" with the polished comments as text and revise, lock, unlock (ids) and add (short titles).'
+const SCOPE_RULE = [
+  'Every section shows its id (S5; ✅ = final). When you polish comments for "change", start with a scope line from those ids, deciding per section:',
+  '**Fine-tune:** the user states the exact edit (reword, rename, add or drop a named point, fix a value); give the edit in brackets, e.g. "S4 (rename glossary to lexicon)" · **Revise:** they are unhappy with the substance (coverage, approach, "think more about this", a vague complaint) · **Final:** sections they call good, done or fine · **Reopen:** final sections they now want changed · **New:** sections they ask to add · **Unchanged this round:** the rest.',
+  'When unsure whether a comment is a fine-tune, make it Revise. Comments on the whole draft: list every section that isn\'t final under Revise. Then call team "change" with the polished comments as text and finetune, revise, final, reopen (ids) and add (short titles).',
+  'A reply that only marks sections final or reopens them (no other comments) needs no confirmation: call team "change" with only final and reopen.',
+].join(" ")
 
 const FEASIBILITY =
   "Feasibility: note it only for a concept that could kill the idea or force a different one, and that isn't plainly known (work nobody here has done before, an assumption about how parts fit, a solution assumed to exist). Swappable mechanics (how a model or service is connected, which parser or file format, storage, configuration) get no feasibility note and no options: one line, \"left to the how stage\". In a code project, code facts count: what language, standard, build system, interface or platform the code where the feature goes supports, quoted with `path:line`."
@@ -258,7 +273,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
           f(draftFile(task)),
           ...delivered(),
           `The user's comments:\n${p.note ?? ""}`,
-          task.scope && join(scopeText(task, false), "Brief only the REVISE sections and the new ones; the Architect returns only those."),
+          task.scope && join(scopeText(task, false), "Brief only the REVISE, FINE-TUNE and new sections; the Architect returns only those. For FINE-TUNE, pass on the user's exact edit and nothing more."),
           capNote(),
         )
       if (!freshSession && p.note) return join(p.note, ...delivered(), capNote())
@@ -308,7 +323,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         ...earlier,
         ...delivered(),
         p.note && `Latest:\n${p.note}`,
-        task.scope && join(scopeText(task, false), "Advise on the REVISE and new sections; locked ones stay as they are."),
+        task.scope && join(scopeText(task, false), "Advise on the REVISE and new sections; final ones stay as they are."),
       )
     }
     case "lead_answer": {

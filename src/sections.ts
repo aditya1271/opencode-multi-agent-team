@@ -7,14 +7,14 @@ export interface Section {
   step: boolean
 }
 
-/** The section ids of the current draft, and the ones the user locked. */
+/** The section ids of the current draft, and the ones the user marked final. */
 export interface SectionIndex {
   /** Which draft these ids belong to (kind and stage run); a new draft starts over. */
   key: string
   ids: string[]
   titles: string[]
   next: number
-  locked: string[]
+  final: string[]
 }
 
 /** One section a writer returns in a scoped revision. */
@@ -33,13 +33,16 @@ export interface SectionEdit {
 export interface Scope {
   draft: "brief" | "draft"
   revise: string[]
+  /** Sections that get only the exact edit the user stated. */
+  finetune: string[]
   add: string[]
-  /** Revise sections may be left out (every unlocked section is open, not all must change). */
+  /** Revise sections may be left out (every section not final is open, not all must change). */
   open?: boolean
 }
 
 export interface SectionChange {
   revised: string[]
+  tuned: string[]
   added: string[]
   removed: string[]
   also: { id: string; reason: string }[]
@@ -52,7 +55,7 @@ const FENCE = /^\s*(```|~~~)/
 /** A title without numbering, emphasis or id tag, for matching sections across versions. */
 const plain = (title: string) =>
   title
-    .replace(/\s*\[S\d+(?: 🔒)?\]\s*$/, "")
+    .replace(/\s*\[S\d+(?: ✅)?\]\s*$/, "")
     .replace(/^\d+\.\s*/, "")
     .replace(/\*\*/g, "")
     .trim()
@@ -78,7 +81,7 @@ export function split(text: string, inSteps = false): { head: string; sections: 
 
 const assemble = (head: string, texts: string[]) => [...(head ? [head] : []), ...texts].join("\n")
 
-/** Ids for a whole new version: a section with the title of an earlier one keeps its id (and lock). */
+/** Ids for a whole new version: a section with the title of an earlier one keeps its id (and final mark). */
 export function indexOf(text: string, key: string, prev?: SectionIndex): SectionIndex {
   const { sections } = split(text)
   const old = new Map<string, string>()
@@ -93,11 +96,13 @@ export function indexOf(text: string, key: string, prev?: SectionIndex): Section
     }
     return `S${next++}`
   })
-  return { key, ids, titles: sections.map((s) => s.title), next, locked: (prev?.locked ?? []).filter((id) => used.has(id)) }
+  return { key, ids, titles: sections.map((s) => s.title), next, final: (prev?.final ?? []).filter((id) => used.has(id)) }
 }
 
 /** The index for this text, reusing `prev` while it still matches the text's sections. */
 export function ensureIndex(text: string, key: string, prev?: SectionIndex): SectionIndex {
+  // State saved before "final" replaced "locked".
+  if (prev && !prev.final) prev.final = (prev as { locked?: string[] }).locked ?? []
   const same = prev?.key === key ? prev : undefined
   if (same && split(text).sections.length === same.ids.length) return same
   return indexOf(text, key, same)
@@ -116,8 +121,8 @@ export function checkEdits(index: SectionIndex, scope: Scope, edits: SectionEdit
     }
     const at = index.ids.indexOf(e.id)
     if (e.id !== "new" && at < 0) errors.push(`${e.id} is not a section of the draft.`)
-    else if (index.locked.includes(e.id)) errors.push(`${e.id} is locked by the user; leave it out.`)
-    else if (e.id !== "new" && !scope.revise.includes(e.id) && !e.reason?.trim())
+    else if (index.final.includes(e.id)) errors.push(`${e.id} is final (the user signed it off); leave it out.`)
+    else if (e.id !== "new" && !scope.revise.includes(e.id) && !scope.finetune.includes(e.id) && !e.reason?.trim())
       errors.push(`${e.id} is outside the revision scope: leave it out, or give a reason (the user sees it).`)
     if (e.id === "new" && e.after && !index.ids.includes(e.after)) errors.push(`after: ${e.after} is not a section of the draft.`)
     if (e.id === "new" && !e.content.trim()) errors.push(`A new section needs content.`)
@@ -128,19 +133,19 @@ export function checkEdits(index: SectionIndex, scope: Scope, edits: SectionEdit
         errors.push(`${e.id}: content must start with the section's ${step ? "numbered bold step line" : "heading line"}.`)
     }
   }
-  const missing = scope.open ? [] : scope.revise.filter((id) => !seen.has(id))
+  const missing = [...(scope.open ? [] : scope.revise), ...scope.finetune].filter((id) => !seen.has(id))
   if (missing.length) errors.push(`Return every section in the revision scope (empty content removes one); missing: ${missing.join(", ")}.`)
   if (scope.add.length && !edits.some((e) => e.id === "new")) errors.push(`The user asked for new sections (${scope.add.join("; ")}): add them with id "new".`)
   return errors
 }
 
 /** Applies a checked scoped revision to the previous version. */
-export function splice(text: string, index: SectionIndex, edits: SectionEdit[]): { text: string; index: SectionIndex; change: SectionChange } {
+export function splice(text: string, index: SectionIndex, edits: SectionEdit[], finetune: string[] = []): { text: string; index: SectionIndex; change: SectionChange } {
   const { head, sections } = split(text)
   let next = index.next
   type Chunk = { id: string; text: string; step: boolean }
   const chunks: Chunk[] = sections.map((s, i) => ({ id: index.ids[i]!, text: s.text, step: s.step }))
-  const change: SectionChange = { revised: [], added: [], removed: [], also: [] }
+  const change: SectionChange = { revised: [], tuned: [], added: [], removed: [], also: [] }
   const trailing = (t: string) => /\n*$/.exec(t)![0]
   const parts = (content: string, step: boolean, keepId: string | undefined, end: string): Chunk[] =>
     split(content.trim(), step).sections.map((s, i) => {
@@ -159,7 +164,7 @@ export function splice(text: string, index: SectionIndex, edits: SectionEdit[]):
     }
     chunks.splice(at, 1, ...parts(e.content, old.step, e.id, trailing(old.text)))
     if (e.reason?.trim()) change.also.push({ id: e.id, reason: e.reason.trim() })
-    else change.revised.push(e.id)
+    else (finetune.includes(e.id) ? change.tuned : change.revised).push(e.id)
   }
   for (const e of edits.filter((x) => x.id === "new")) {
     const at = e.after ? chunks.findIndex((c) => c.id === e.after) : -1
@@ -178,7 +183,7 @@ export function splice(text: string, index: SectionIndex, edits: SectionEdit[]):
     else c.text = c.text.replace(/^\d+\./, `${++n}.`)
   }
   // A heading after a changed section gets a blank line before it.
-  const touched = new Set([...change.revised, ...change.added, ...change.also.map((a) => a.id)])
+  const touched = new Set([...change.revised, ...change.tuned, ...change.added, ...change.also.map((a) => a.id)])
   chunks.forEach((c, i) => {
     const prev = chunks[i - 1]
     if (i > 0 && !c.step && prev && touched.has(prev.id) && !/\n$/.test(prev.text)) prev.text += "\n"
@@ -188,12 +193,12 @@ export function splice(text: string, index: SectionIndex, edits: SectionEdit[]):
   const ids = chunks.map((c) => c.id)
   const result: SectionIndex =
     check.length === ids.length
-      ? { key: index.key, ids, titles: check.map((s) => s.title), next, locked: index.locked.filter((id) => ids.includes(id)) }
+      ? { key: index.key, ids, titles: check.map((s) => s.title), next, final: index.final.filter((id) => ids.includes(id)) }
       : indexOf(out, index.key, { ...index, next })
   return { text: out, index: result, change }
 }
 
-/** The text with each section's id at the end of its first line ("[S5]", "[S5 🔒]" when locked). */
+/** The text with each section's id at the end of its first line ("[S5]", "[S5 ✅]" when final). */
 export function annotate(text: string, index: SectionIndex): string {
   const { head, sections } = split(text)
   if (sections.length !== index.ids.length) return text
@@ -202,7 +207,7 @@ export function annotate(text: string, index: SectionIndex): string {
     sections.map((s, i) => {
       const id = index.ids[i]!
       const [first, ...rest] = s.text.split("\n")
-      return [`${first} [${id}${index.locked.includes(id) ? " 🔒" : ""}]`, ...rest].join("\n")
+      return [`${first} [${id}${index.final.includes(id) ? " ✅" : ""}]`, ...rest].join("\n")
     }),
   )
 }

@@ -27,7 +27,7 @@ Report **QUESTIONS** only when the user alone can answer (intent, a choice betwe
 - **INFEASIBLE** (how stage): a decision of the approved what-document can't work in this code; the task message says what to include.
 - **STUCK** (revising your brief after the user's comments): you can't see how to give the user what they keep asking for. `content`: what they ask, what you tried, and where you are stuck. An adviser steps in, and you revise again.
 
-When the task message gives a revision scope, change only what it allows and report `sections` as it says, not the whole brief. Sections the user locked are theirs: never touch them.
+When the task message gives a revision scope, change only what it allows and report `sections` as it says, not the whole brief. Sections the user marked final are theirs: never touch them. FINE-TUNE sections get only the edit the user stated.
 
 When the task message gives you advice items (ADV1, …), address each one in the revised brief: follow it, or say why not. `addressed` says, one line per id, what you changed.
 

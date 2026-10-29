@@ -252,7 +252,7 @@ describe("sections", () => {
     expect(splice(doc, idx, []).text).toBe(doc + "\n")
   })
   test("splice keeps every other section byte for byte, renumbers steps and reports the change", () => {
-    const idx = { ...indexOf(doc, "doc:1"), locked: ["S6"] }
+    const idx = { ...indexOf(doc, "doc:1"), final: ["S6"] }
     const out = splice(doc, idx, [
       { id: "S2", content: "## A\n\nnew body" },
       { id: "S5", content: "", reason: "merged into One" },
@@ -261,25 +261,25 @@ describe("sections", () => {
     ])
     expect(out.text).toBe("# T\n\nintro\n\n## A\n\nnew body\n\n## Steps\n\n1. **One** — x\n   detail\n2. **Half** — h\n\n## After\n\nz\n\n## Risks\n\nr\n")
     expect(out.index.ids).toEqual(["S1", "S2", "S3", "S4", "S7", "S6", "S8"])
-    expect(out.index.locked).toEqual(["S6"])
-    expect(out.change).toEqual({ revised: ["S2"], added: ["S7", "S8"], removed: ["S5"], also: [] })
-    expect(annotate(out.text, out.index)).toContain("## After [S6 🔒]")
+    expect(out.index.final).toEqual(["S6"])
+    expect(out.change).toEqual({ revised: ["S2"], tuned: [], added: ["S7", "S8"], removed: ["S5"], also: [] })
+    expect(annotate(out.text, out.index)).toContain("## After [S6 ✅]")
   })
   test("checkEdits enforces the scope", () => {
-    const idx = { ...indexOf(doc, "doc:1"), locked: ["S6"] }
-    const scope = { draft: "draft" as const, revise: ["S2"], add: [] }
+    const idx = { ...indexOf(doc, "doc:1"), final: ["S6"] }
+    const scope = { draft: "draft" as const, revise: ["S2"], finetune: [], add: [] }
     expect(checkEdits(idx, scope, [{ id: "S2", content: "## A\n\nok" }], doc)).toEqual([])
     const errors = checkEdits(idx, scope, [{ id: "S6", content: "## After\n\nx" }, { id: "S1", content: "# T\n\ny" }, { id: "S4", content: "no step line" }], doc).join("\n")
-    expect(errors).toContain("S6 is locked")
+    expect(errors).toContain("S6 is final")
     expect(errors).toContain("S1 is outside the revision scope")
     expect(errors).toContain("S4: content must start with the section's numbered bold step line")
     expect(errors).toContain("missing: S2")
     expect(checkEdits(idx, { ...scope, open: true }, [{ id: "S1", content: "# T\n\ny", reason: "title" }], doc)).toEqual([])
   })
   test("a whole new version keeps ids by title; idRanges", () => {
-    const idx = { ...indexOf(doc, "doc:1"), locked: ["S2"] }
+    const idx = { ...indexOf(doc, "doc:1"), final: ["S2"] }
     const next = indexOf("## A\n\nx\n\n## New\n\ny\n\n## After\n\nz", "doc:1", idx)
-    expect([next.ids, next.locked]).toEqual([["S2", "S7", "S6"], ["S2"]])
+    expect([next.ids, next.final]).toEqual([["S2", "S7", "S6"], ["S2"]])
     expect(idRanges(["S1", "S2", "S3", "S5", "S7", "S8"])).toBe("S1–S3, S5, S7, S8")
   })
 })
@@ -441,7 +441,7 @@ describe("plan and research workflows", () => {
     }
   })
 
-  test("scoped comments: only the chosen sections change, locked ones stay byte for byte", async () => {
+  test("scoped comments: only the chosen sections change, final ones stay byte for byte", async () => {
     const { team, cleanup } = setup()
     try {
       await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_s", signal)
@@ -450,28 +450,28 @@ describe("plan and research workflows", () => {
       team.apply(t, { mode: "lead" }, report("ESCALATE", { content: brief }), {})
       save(t)
       expect(render(t)).toContain("#### 1. Scope [S3]")
-      expect(render(t)).toContain("revise, lock, unlock (ids)")
+      expect(render(t)).toContain("finetune, revise, final, reopen (ids)")
       expect(await team.handle({ action: "change", text: "x", revise: ["S9"] }, "ses_s", signal)).toContain("Not section ids of this draft: S9")
-      const p = await team.handle({ action: "change", text: "glossary needs entity linking", lock: ["S3"], revise: ["S4"] }, "ses_s", signal)
-      expect([t.scope, t.sections.locked]).toEqual([{ draft: "brief", revise: ["S4"], add: [], open: false }, ["S3"]])
-      expect(p.note).toContain("- S3 1. Scope: LOCKED")
+      const p = await team.handle({ action: "change", text: "glossary needs entity linking", final: ["S3"], revise: ["S4"] }, "ses_s", signal)
+      expect([t.scope, t.sections.final]).toEqual([{ draft: "brief", revise: ["S4"], finetune: [], add: [], open: false }, ["S3"]])
+      expect(p.note).toContain("- S3 1. Scope: FINAL")
       expect(p.note).toContain("- S4 2. Glossary: REVISE")
       expect(p.note).toContain("report ESCALATE with the revised sections only")
       beginRun("ses_sc", { role: "lead", mode: "lead", task: t, toolLimit: 10 })
       expect(() => acceptReport(DEFAULTS, "ses_sc", { status: "ESCALATE", summary: "s", content: "whole brief" })).toThrow("Report `sections`")
-      expect(() => acceptReport(DEFAULTS, "ses_sc", { status: "ESCALATE", summary: "s", content: "c", sections: [{ id: "S3", content: "#### 1. Scope\n\nx" }] } as any)).toThrow("S3 is locked")
+      expect(() => acceptReport(DEFAULTS, "ses_sc", { status: "ESCALATE", summary: "s", content: "c", sections: [{ id: "S3", content: "#### 1. Scope\n\nx" }] } as any)).toThrow("S3 is final")
       runs.delete("ses_sc")
       t.pending = undefined
       team.apply(t, p, report("ESCALATE", { content: "added linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then entity linking" }] }), {})
       expect(readFileSync(path.join(t.dir, "brief.md"), "utf8")).toBe(brief.replace("two passes", "two passes, then entity linking") + "\n")
       save(t)
       const shown = render(t)
-      expect(shown).toContain("#### 1. Scope [S3 🔒]")
+      expect(shown).toContain("#### 1. Scope [S3 ✅]")
       expect(shown).toContain("**This version:** revised S4")
-      expect(shown).toContain("**Locked:** S3")
-      expect(await team.handle({ action: "change", text: "redo scope", revise: ["S3"] }, "ses_s", signal)).toContain("S3 is locked")
+      expect(shown).toContain("**Final:** S3")
+      expect(await team.handle({ action: "change", text: "redo scope", revise: ["S3"] }, "ses_s", signal)).toContain("S3 is final")
 
-      // The what-document: a new draft with its own ids and locks; Lead's revision brief and the Architect see the scope.
+      // The what-document: a new draft with its own ids and final marks; Lead's revision brief and the Architect see the scope.
       t.phase = "brief"
       await team.handle({ action: "approve" }, "ses_s", signal)
       t.pending = undefined
@@ -479,8 +479,8 @@ describe("plan and research workflows", () => {
       team.apply(t, { mode: "architect" }, report("DOC", { content: doc }), {})
       save(t)
       expect(render(t)).toContain("- S2 Glossary\n- S3 Review")
-      const rev = await team.handle({ action: "change", text: "review needs a UI", lock: ["S2"], revise: ["S3"] }, "ses_s", signal)
-      expect(buildPrompt(DEFAULTS, t, rev, false)).toContain("Brief only the REVISE sections")
+      const rev = await team.handle({ action: "change", text: "review needs a UI", final: ["S2"], revise: ["S3"] }, "ses_s", signal)
+      expect(buildPrompt(DEFAULTS, t, rev, false)).toContain("Brief only the REVISE, FINE-TUNE and new sections")
       t.pending = undefined
       team.apply(t, rev, report("ESCALATE", { content: "S3: add a UI" }), {})
       expect(t.pending.note).toContain("report DOC with the revised sections only")
@@ -490,6 +490,26 @@ describe("plan and research workflows", () => {
       expect(readFileSync(path.join(t.dir, "doc-2.md"), "utf8")).toBe("# Design\n\n## Glossary\n\nA\n\n## Review\n\nB, with a UI\n")
       expect(readFileSync(t.output, "utf8")).toContain("B, with a UI")
       expect(t.scope).toBeUndefined()
+      expect(render(t)).toContain("Mark sections you're happy with as **final**")
+
+      // A fine-tune-only round: straight to the Architect, no comment round, the edit only.
+      t.phase = "approval"
+      const rounds = t.commentRounds
+      const tune = await team.handle({ action: "change", text: "S3: say \"web UI\"", finetune: ["S3"] }, "ses_s", signal)
+      expect([tune.mode, t.commentRounds]).toEqual(["architect", rounds])
+      expect(tune.note).toContain("- S3 Review: FINE-TUNE")
+      expect(tune.note).toContain("The user fine-tuned the what-document")
+      expect(tune.adviceIds).toBeUndefined()
+      t.pending = undefined
+      team.apply(t, tune, report("DOC", { content: "web UI", sections: [{ id: "S3", content: "## Review\n\nB, with a web UI" }] }), {})
+      expect(render(t)).toContain("**This version:** fine-tuned S3")
+
+      // Only final marks: saved and shown again, no agent run.
+      t.phase = "approval"
+      const marks = await team.handle({ action: "change", final: ["S3"] }, "ses_s", signal)
+      expect(marks).toContain("Saved: final S2, S3.")
+      expect([t.phase, t.sections.final]).toEqual(["approval", ["S2", "S3"]])
+      expect(await team.handle({ action: "change", text: "x", finetune: ["S3"] }, "ses_s", signal)).toContain("S3 is final")
     } finally {
       cleanup()
     }
