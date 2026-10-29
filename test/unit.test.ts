@@ -770,21 +770,36 @@ describe("plan and research workflows", () => {
       save(t)
       const style = render(t)
 
-      // No TUI: the chat question stays.
-      expect(await team.withDialog("ses_d", style)).toBe(style)
-      team.offerDialog = async () => false
+      // No TUI plugin: the chat question stays.
       expect(await team.withDialog("ses_d", style)).toBe(style)
       expect(t.walk).toBeUndefined()
 
-      // A TUI takes it: the manager only says so; the dialog gets the sections and the intro.
-      team.offerDialog = async () => true
+      // The review goes to the dialog whether or not a TUI shows the session now: the manager only points to it.
+      let offered = 0
+      team.offerDialog = () => void offered++
       const open = await team.withDialog("ses_d", join("Saved.", style))
+      expect(offered).toBe(1)
       expect(open).toContain("Saved.")
-      expect(open).toContain("REVIEW OPEN IN THE TERMINAL")
+      expect(open).toContain("REVIEW READY IN THE DIALOG: Concept brief, 2 sections.")
+      expect(open).toContain("/team-review")
       expect(open).not.toContain("[All at once]")
-      expect(render(t)).toContain("REVIEW OPEN IN THE TERMINAL")
+      expect(render(t)).toContain("REVIEW READY IN THE DIALOG")
+      expect((await team.sidebar("ses_d")).review).toEqual({ title: "Concept brief", done: 0, total: 2 })
+      const first = team.dialog("ses_d")!
+      expect(first.ask).toBe(true)
+      expect(first.progress).toEqual({ at: 0, replies: [], comments: [], questions: [] })
+
+      // Closed partway: the progress is kept, the style isn't asked again, and a stale draft is refused.
+      const progress = { at: 1, replies: [{ id: "S3", verdict: "ok" as const }], comments: [], questions: [{ id: "S3", text: "why post-edit?" }] }
+      expect(team.dialogSave("ses_d", { key: "old", progress })).toBe(false)
+      expect(team.dialogSave("ses_d", { key: first.key, progress: { ...progress, at: 9 } })).toBe(true)
+      expect(t.walk.at).toBe(2)
+      expect(team.dialogSave("ses_d", { key: first.key, progress })).toBe(true)
+      expect(render(t)).toContain("REVIEW READY IN THE DIALOG")
+      expect((await team.sidebar("ses_d")).review).toEqual({ title: "Concept brief", done: 1, total: 2 })
       const draft = team.dialog("ses_d")!
-      expect(draft.ask).toBe(true)
+      expect(draft.ask).toBe(false)
+      expect(draft.progress).toEqual(progress)
       expect(draft.title).toBe("Concept brief")
       expect(draft.sections.map((s) => [s.id, s.title])).toEqual([["S3", "1. Scope"], ["S4", "2. Glossary"]])
       expect(draft.sections[0].summary).toBe("**Summary:** Edit only after parsing.\n\n**Recommended:** as written")

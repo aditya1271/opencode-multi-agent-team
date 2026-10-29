@@ -4,9 +4,9 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, detailsView, dialogData, DIALOG_OPEN, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
+import { buildPrompt, checksText, detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
 import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
-import { EditedFilesTrack, type SidebarStats } from "./rpc.ts"
+import { EditedFilesTrack, type ReviewProgress, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
 import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
 import {
@@ -156,8 +156,8 @@ export class Team {
   private questions = new Map<string, { count: number; usage: Partial<Record<Role, AgentUsage>> }>()
   /** Called when a session's numbers change (the sidebar refreshes). */
   onChange: (managerSession: string) => void = () => {}
-  /** Asks a TUI showing the session to open the review dialog; true when one took it. Unset: chat only. */
-  offerDialog?: (managerSession: string) => Promise<boolean>
+  /** Tells the TUIs a review waits in this session; one showing it opens the dialog. Unset: chat only. */
+  offerDialog?: (managerSession: string) => void
 
   constructor(
     private ctx: Context,
@@ -170,26 +170,56 @@ export class Team {
 
   // ---- review dialog (TUI) ----
 
-  /** When a result asks for the review style, offers the draft to a TUI dialog instead; the chat walk-through stays the fallback. */
+  /**
+   * When a result asks for the review style, the review goes to the TUI dialog instead: it opens on its own in a
+   * TUI showing the session, and the user opens or reopens it from the sidebar or /team-review. The chat
+   * walk-through runs only when the user asks for it.
+   */
   async withDialog(managerSession: string, content: string): Promise<string> {
     const task = this.task(managerSession)
     if (!task || !this.offerDialog || !task.sections || (task.phase !== "brief" && task.phase !== "approval") || autoDecides(task)) return content
     if (task.walk?.key === task.sections.key) return content
     const style = styleView(task)
     if (!style || !content.includes(style)) return content
-    if (!(await this.offerDialog(managerSession))) return content
     task.walk = { key: task.sections.key, ids: walkable(task), at: 0, replies: [], dialog: { comments: [], questions: [] } }
     task.askedAt = Date.now()
     save(task)
-    return content.replace(style, DIALOG_OPEN)
+    this.offerDialog(managerSession)
+    return content.replace(style, dialogOpen(task))
   }
 
-  /** The draft for the dialog that took the review. */
-  dialog(managerSession: string): ({ key: string } & ReturnType<typeof dialogData>) | undefined {
-    const task = this.task(managerSession)
+  /** The walk waiting in the dialog, if any. */
+  private openDialog(task: TaskState | undefined) {
     const w = task?.walk
-    if (!task || !w?.dialog || w.dialog.end || w.key !== task.sections?.key) return undefined
-    return { key: w.key, ...dialogData(task) }
+    return task && w?.dialog && !w.dialog.end && w.key === task.sections?.key ? w : undefined
+  }
+
+  /** The draft for the dialog, with the progress kept from an earlier open. */
+  dialog(managerSession: string): ({ key: string } & ReturnType<typeof dialogData> & { progress: ReviewProgress }) | undefined {
+    const task = this.task(managerSession)
+    const w = this.openDialog(task)
+    if (!task || !w?.dialog) return undefined
+    const replies = w.replies.flatMap((r) => (r.verdict === "ok" || r.verdict === "skip" ? [{ id: r.id, verdict: r.verdict }] : []))
+    const progress = { at: w.at, replies, comments: w.dialog.comments, questions: w.dialog.questions }
+    const data = dialogData(task)
+    return { key: w.key, ...data, ask: data.ask && !w.at && !replies.length && !progress.comments.length && !progress.questions.length, progress }
+  }
+
+  /** The user closed the dialog partway: keeps where they are; the manager isn't woken. */
+  dialogSave(managerSession: string, input: { key: string; progress: ReviewProgress }): boolean {
+    const task = this.task(managerSession)
+    const w = this.openDialog(task)
+    if (!task || !w?.dialog || w.key !== input.key) return false
+    const known = new Set(w.ids)
+    const keep = <T extends { id: string }>(list: T[]) => list.filter((r) => known.has(r.id))
+    const p = input.progress
+    w.replies = keep(p.replies)
+    w.dialog.comments = keep(p.comments).filter((c) => c.text.trim())
+    w.dialog.questions = keep(p.questions).filter((q) => q.text.trim())
+    w.at = Math.max(0, Math.min(w.ids.length, Math.floor(p.at)))
+    save(task)
+    this.onChange(managerSession)
+    return true
   }
 
   /** The user's replies from the dialog: stored on the walk, then the manager is woken once to act on them. */
@@ -249,8 +279,14 @@ export class Team {
       session.tasks++
     }
     const models = ROLES.map((role) => ({ role, models: modelsFor(this.config, role).map(modelLabel) }))
-    // The RPC output check rejects `task: undefined`; leave the key out instead.
-    return current ? { task: current, models, session } : { models, session }
+    const w = this.openDialog(task)
+    // The RPC output check rejects `task: undefined`; leave the keys out instead.
+    return {
+      ...(current && { task: current }),
+      ...(w && { review: { title: draftTitle(task!), done: w.at, total: w.ids.length } }),
+      models,
+      session,
+    }
   }
 
   /** The call running for this task right now, with its usage so far. */

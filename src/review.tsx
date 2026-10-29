@@ -2,13 +2,13 @@
 import type { Plugin } from "@opencode/plugin/tui"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { createSignal, For } from "solid-js"
-import { TeamStats, type ReviewDraft, type ReviewReply } from "./rpc.ts"
+import { TeamStats, type ReviewDraft, type ReviewProgress, type ReviewReply } from "./rpc.ts"
 
 type Context = Plugin.Context
 const client = (context: Context) => context.client.rpc(TeamStats)
 type Rpc = ReturnType<typeof client>
 type CallOptions = Parameters<Rpc["stats"]>[1]
-type Choice = "ok" | "skip" | "comment" | "question" | "rest" | "stop"
+type Choice = "ok" | "skip" | "comment" | "question" | "rest" | "stop" | "pause"
 
 const KEYS: { key: string; choice: Choice; title: string }[] = [
   { key: "o", choice: "ok", title: "OK" },
@@ -29,7 +29,7 @@ export function setupReview(
   const dialog = context.ui.dialog
   let active = false
 
-  /** Shows one section; resolves with the user's choice (Esc: show the rest). */
+  /** Shows one section; resolves with the user's choice (Esc: pause). */
   const showSection = (draft: ReviewDraft, i: number, notes: string[]) =>
     new Promise<Choice>((resolve) => {
       let settled = false
@@ -80,16 +80,21 @@ export function setupReview(
                 )}
               </For>
             </box>
-            <text fg={color.muted()}>{`${s.summary ? `[d] ${full() ? "Summary" : "Details"} · ` : ""}↑↓ PgUp PgDn scroll · Esc: show the rest`}</text>
+            <text fg={color.muted()}>{`${s.summary ? `[d] ${full() ? "Summary" : "Details"} · ` : ""}↑↓ PgUp PgDn scroll · Esc: close (progress kept)`}</text>
           </box>
         )
-      }, () => finish("rest"))
+      }, () => finish("pause"))
       dialog.set({ size: "xlarge" })
     })
 
-  const walk = async (sessionID: string, draft: ReviewDraft): Promise<Omit<ReviewReply, "sessionID" | "key">> => {
-    const out: Omit<ReviewReply, "sessionID" | "key"> = { end: "done", replies: [], comments: [], questions: [] }
+  /** Closed partway: where the user is. Ended: how, with their replies. */
+  type Outcome = { progress: ReviewProgress; end?: ReviewReply["end"] }
+
+  const walk = async (draft: ReviewDraft): Promise<Outcome> => {
+    const out: ReviewProgress = structuredClone(draft.progress)
     const n = draft.sections.length
+    const ended = (end: ReviewReply["end"]): Outcome => ({ progress: out, end })
+    const paused = (): Outcome => ({ progress: out })
     if (draft.ask) {
       const style = await dialog.select({
         title: `${draft.title} ready: ${n} section${n > 1 ? "s" : ""} to review`,
@@ -98,18 +103,20 @@ export function setupReview(
           { title: "All at once", value: "rest", description: "The whole draft shows in the chat." },
         ],
       })
-      if (style !== "walk") return { ...out, end: "rest" }
+      if (!style) return paused()
+      if (style !== "walk") return ended("rest")
     }
-    for (let i = 0; i < n; ) {
-      const s = draft.sections[i]!
+    while (out.at < n) {
+      const s = draft.sections[out.at]!
       const notes = [
         ...out.questions.filter((q) => q.id === s.id).map((q) => `(Your question, answered at the end: ${q.text})`),
       ]
-      const choice = await showSection(draft, i, notes)
-      if (choice === "rest" || choice === "stop") return { ...out, end: choice }
+      const choice = await showSection(draft, out.at, notes)
+      if (choice === "pause") return paused()
+      if (choice === "rest" || choice === "stop") return ended(choice)
       if (choice === "ok" || choice === "skip") {
         out.replies.push({ id: s.id, verdict: choice })
-        i++
+        out.at++
         continue
       }
       const text = await dialog.prompt(
@@ -120,10 +127,10 @@ export function setupReview(
       if (!text?.trim()) continue
       if (choice === "comment") {
         out.comments.push({ id: s.id, text: text.trim() })
-        i++
+        out.at++
       } else out.questions.push({ id: s.id, text: text.trim() })
     }
-    if (out.comments.length || out.questions.length) return out
+    if (out.comments.length || out.questions.length) return ended("done")
     const last = await dialog.select({
       title: `All ${n} section${n > 1 ? "s" : ""} reviewed, no comments`,
       options: [
@@ -131,21 +138,30 @@ export function setupReview(
         { title: "Show it all at once", value: "rest" as const, description: "The whole draft shows in the chat." },
       ],
     })
-    return { ...out, end: last ?? "rest" }
+    return last ? ended(last) : paused()
   }
 
-  const open = async (sessionID: string) => {
+  /** Opens the waiting review: on its own (only in a TUI showing the session), or from the sidebar or /team-review. */
+  const open = async (sessionID: string, byUser = false) => {
     if (active) return
     const route = context.ui.router.current()
-    if (route.type !== "session" || rootOf(route.sessionID) !== sessionID) return
+    if (!byUser && (route.type !== "session" || rootOf(route.sessionID) !== sessionID)) return
     active = true
     try {
-      const claimed = (await rpc.reviewClaim({ sessionID }, rpcOptions(sessionID))) as { draft?: ReviewDraft }
+      const claimed = (await rpc.reviewClaim({ sessionID, force: byUser }, rpcOptions(sessionID))) as { draft?: ReviewDraft }
       const draft = claimed.draft
-      if (!draft) return
-      const result = await walk(sessionID, draft)
-      const sent = (await rpc.reviewDone({ sessionID, key: draft.key, ...result }, rpcOptions(sessionID))) as { ok: boolean }
-      if (!sent.ok) context.ui.toast.show({ message: "The review dialog's draft changed meanwhile; replies not sent.", variant: "warning" })
+      if (!draft) {
+        if (byUser) context.ui.toast.show({ message: "No team review waits in this session.", variant: "info" })
+        return
+      }
+      const { progress, end } = await walk(draft)
+      const sent = (
+        end
+          ? await rpc.reviewDone({ sessionID, key: draft.key, end, replies: progress.replies, comments: progress.comments, questions: progress.questions }, rpcOptions(sessionID))
+          : await rpc.reviewSave({ sessionID, key: draft.key, progress }, rpcOptions(sessionID))
+      ) as { ok: boolean }
+      if (!sent.ok) context.ui.toast.show({ message: "The draft changed meanwhile; your review replies were not kept.", variant: "warning" })
+      else if (!end) context.ui.toast.show({ message: `Review paused at ${Math.min(progress.at + 1, draft.sections.length)} of ${draft.sections.length}. Reopen: Review in the Team sidebar, or /team-review.`, variant: "info" })
     } catch (e) {
       context.ui.toast.show({ message: `Team review dialog: ${(e as Error)?.message ?? String(e)}`, variant: "error" })
     } finally {
@@ -153,6 +169,29 @@ export function setupReview(
     }
   }
 
-  return rpc.events.on("review", (event) => void open(String(event.data.sessionID)))
-}
+  const currentRoot = () => {
+    const route = context.ui.router.current()
+    return route.type === "session" ? rootOf(route.sessionID) : undefined
+  }
 
+  context.keymap.layer(() => ({
+    mode: "global",
+    commands: [
+      {
+        id: "multi-agent-team.review",
+        title: "Team: open the waiting review",
+        group: "Team",
+        palette: true,
+        slash: { name: "team-review" },
+        enabled: () => currentRoot() !== undefined,
+        run: () => {
+          const sessionID = currentRoot()
+          if (sessionID) void open(sessionID, true)
+        },
+      },
+    ],
+  }))
+
+  const stop = rpc.events.on("review", (event) => void open(String(event.data.sessionID)))
+  return { open: (sessionID: string) => open(sessionID, true), stop }
+}

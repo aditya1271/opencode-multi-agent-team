@@ -41,6 +41,23 @@ const notes = {
   },
 } as const
 
+const replies = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: { id: { type: "string" }, verdict: { type: "string", enum: ["ok", "skip"] } },
+    required: ["id", "verdict"],
+    additionalProperties: false,
+  },
+} as const
+
+const progress = {
+  type: "object",
+  properties: { at: { type: "number" }, replies, comments: notes, questions: notes },
+  required: ["at", "replies", "comments", "questions"],
+  additionalProperties: false,
+} as const
+
 /** Sidebar data: per-agent usage of the session's current task, and totals over the whole session. */
 export const TeamStats = Rpc.define({
   id: "multi-agent-team",
@@ -68,6 +85,12 @@ export const TeamStats = Rpc.define({
             required: ["id", "workflow", "phase", "attempts", "attemptLimit", "rows"],
             additionalProperties: false,
           },
+          review: {
+            type: "object",
+            properties: { title: { type: "string" }, done: { type: "number" }, total: { type: "number" } },
+            required: ["title", "done", "total"],
+            additionalProperties: false,
+          },
           models: {
             type: "array",
             items: {
@@ -88,9 +111,14 @@ export const TeamStats = Rpc.define({
         additionalProperties: false,
       },
     },
-    /** A TUI takes the review the server offered (event "review"); no draft when another TUI took it first. */
+    /** A TUI opens the waiting review; no draft when none waits, or (unless force) another TUI has it open. */
     reviewClaim: {
-      input: sessionInput,
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" }, force: { type: "boolean" } },
+        required: ["sessionID"],
+        additionalProperties: false,
+      },
       output: {
         type: "object",
         properties: {
@@ -101,6 +129,7 @@ export const TeamStats = Rpc.define({
               title: { type: "string" },
               intro: { type: "string" },
               ask: { type: "boolean" },
+              progress,
               sections: {
                 type: "array",
                 items: {
@@ -111,7 +140,7 @@ export const TeamStats = Rpc.define({
                 },
               },
             },
-            required: ["key", "title", "intro", "ask", "sections"],
+            required: ["key", "title", "intro", "ask", "progress", "sections"],
             additionalProperties: false,
           },
         },
@@ -126,15 +155,7 @@ export const TeamStats = Rpc.define({
           sessionID: { type: "string" },
           key: { type: "string" },
           end: { type: "string", enum: ["done", "rest", "approve", "stop"] },
-          replies: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { id: { type: "string" }, verdict: { type: "string", enum: ["ok", "skip"] } },
-              required: ["id", "verdict"],
-              additionalProperties: false,
-            },
-          },
+          replies,
           comments: notes,
           questions: notes,
         },
@@ -148,10 +169,25 @@ export const TeamStats = Rpc.define({
         additionalProperties: false,
       },
     },
+    /** The user closed the review dialog before the end: their progress is kept for the next open. */
+    reviewSave: {
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" }, key: { type: "string" }, progress },
+        required: ["sessionID", "key", "progress"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+    },
   },
   events: {
     changed: { schema: sessionInput },
-    /** A draft waits for review in this session: a TUI showing it may claim it. */
+    /** A draft waits for review in this session: a TUI showing it opens the dialog. */
     review: { schema: sessionInput },
   },
 })
@@ -160,19 +196,32 @@ export interface ReviewDraft {
   key: string
   title: string
   intro: string
-  /** Ask the review style first (config reviewStyle "ask"). */
+  /** Ask the review style first (config reviewStyle "ask"; not once the review has started). */
   ask: boolean
+  /** What the user did before closing the dialog last time. */
+  progress: ReviewProgress
   /** summary: the user view (Summary and Recommended lines; a step: its purpose); body: the full text. */
   sections: { id: string; title: string; summary?: string; body: string }[]
 }
 
-export interface ReviewReply {
-  sessionID: string
-  key: string
-  end: "done" | "rest" | "approve" | "stop"
+/** Where the user is in the review dialog: the next section, and what they said so far. */
+export interface ReviewProgress {
+  at: number
   replies: { id: string; verdict: "ok" | "skip" }[]
   comments: { id: string; text: string }[]
   questions: { id: string; text: string }[]
+}
+
+export interface ReviewReply extends Omit<ReviewProgress, "at"> {
+  sessionID: string
+  key: string
+  end: "done" | "rest" | "approve" | "stop"
+}
+
+export interface ReviewSave {
+  sessionID: string
+  key: string
+  progress: ReviewProgress
 }
 
 export interface StatsRow {
@@ -202,6 +251,8 @@ export const line = (mark: string, name: string, calls: number | string, prompts
 
 export interface SidebarStats {
   task?: { id: string; workflow: string; phase: string; attempts: number; attemptLimit: number; rows: StatsRow[] }
+  /** A review waits in the dialog: done of total sections gone through. */
+  review?: { title: string; done: number; total: number }
   /** Each role's configured models, main first. */
   models: { role: string; models: string[] }[]
   session: { tasks: number; questions: number; total: { calls: number; prompts: number; tools: number; tokens: number } }

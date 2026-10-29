@@ -581,7 +581,7 @@ export function walkable(task: TaskState): string[] {
 /** A brief, document or plan waiting on the user: the walk-through, or the whole draft with the review style. */
 function reviewView(task: TaskState): string {
   const w = task.walk?.key === task.sections?.key ? task.walk : undefined
-  if (w?.dialog && !w.dialog.end) return DIALOG_OPEN
+  if (w?.dialog && !w.dialog.end) return dialogOpen(task)
   if (w?.dialog && w.dialog.end !== "rest") return dialogView(task, w)
   if (w && !w.rest && !w.done && w.at < w.ids.length) return walkSection(task, w)
   if (w?.done) {
@@ -630,8 +630,14 @@ export function styleView(task: TaskState): string {
   )
 }
 
-export const DIALOG_OPEN =
-  'REVIEW OPEN IN THE TERMINAL: the user reviews the draft in a dialog, one section at a time. You are woken when they finish.\nNEXT ACTION: tell the user in one line that the review is open in the dialog, then end your turn. Call no tool.'
+/** The draft waits in the review dialog: the manager only points the user to it. */
+export function dialogOpen(task: TaskState): string {
+  const n = task.walk?.ids.length ?? 0
+  return join(
+    `REVIEW READY IN THE DIALOG: ${draftTitle(task)}, ${n} section${n === 1 ? "" : "s"}. It opens on its own in a terminal showing this session; the user opens or reopens it with "Review" in the Team sidebar or /team-review, and closing it keeps their progress. You are woken when they finish.`,
+    'NEXT ACTION: tell the user in one line that the review is ready in the dialog ("Review" in the Team sidebar, or /team-review), then end your turn. Call no tool. Only if the user asks to review in the chat: team "section" with verdict "start"; to see it all at once: verdict "rest".',
+  )
+}
 
 const notesList = (task: TaskState, notes: { id: string; text: string }[]) => {
   const idx = task.sections
@@ -670,7 +676,9 @@ export function dialogData(task: TaskState): { title: string; intro: string; ask
   const sections = walkable(task).map((id) => {
     const s = all[idx?.ids.indexOf(id) ?? -1]
     if (!s) return { id, title: "?", body: "(section not found; see the file)" }
-    return { id, title: shownTitle(s.title).replace(/^#+\s*/, ""), summary: userView(s), body: fullBody(s) }
+    const summary = userView(s)
+    // The RPC output check rejects `summary: undefined`; leave the key out instead.
+    return { id, title: shownTitle(s.title).replace(/^#+\s*/, ""), ...(summary !== undefined && { summary }), body: fullBody(s) }
   })
   const intro = join(
     task.phase === "approval" && !draftIsDoc(task) ? `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}` : "",
@@ -710,7 +718,7 @@ export function detailsView(task: TaskState, ids: string[] = []): string {
 }
 
 /** "Concept brief", "What-document (version 2)", "Plan (plan 3)". */
-function draftTitle(task: TaskState): string {
+export function draftTitle(task: TaskState): string {
   if (task.phase === "brief") return `${task.workflow === "research" ? "Research" : "Concept"} brief`
   const name = docName(task)
   return `${name[0]!.toUpperCase()}${name.slice(1)}${draftIsDoc(task) ? ` (version ${task.doc})` : ` (plan ${task.plan})`}`

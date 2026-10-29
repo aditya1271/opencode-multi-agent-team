@@ -149,13 +149,15 @@ To update later, run `git pull` in the clone and restart OpenCode.
   to the team as one scoped revision; when you passed every section, the manager asks once
   to approve. A brief's excerpts aren't walked through, only listed. Set `"reviewStyle"` to
   `"all"` or `"sections"` to skip the question; auto modes skip the review altogether.
-  In the terminal UI the review opens in a dialog instead, with no model turn between
-  sections: [o] OK, [s] Skip, [c] Comment…, [q] Question…, [r] Show the rest, [x] Stop
-  (Esc = show the rest). Comments and questions are collected as typed. When you leave the
-  dialog, the manager wakes once: the agent answers your questions, then the manager polishes
-  your comments and confirms them once before the scoped revision. Pass every section
-  without comments and the dialog asks [Approve] [Show it all at once] itself. The desktop
-  and web apps, and `opencode run`, use the chat walk-through.
+  By default the review happens in a terminal UI dialog instead, with no model turn between
+  sections: [o] OK, [s] Skip, [c] Comment…, [q] Question…, [r] Show the rest, [x] Stop.
+  It opens on its own when you're on that session; otherwise, or to reopen it, click
+  `▶ Review … · N of M done` in the Team sidebar or type `/team-review`. Esc closes it and
+  keeps your progress. Comments and questions are collected as typed. When you finish, the
+  manager wakes once: the agent answers your questions, then the manager polishes your
+  comments and confirms them once before the scoped revision. Pass every section without
+  comments and the dialog asks [Approve] [Show it all at once] itself. Say "review in chat"
+  for the chat walk-through (the desktop and web apps and `opencode run` have no dialog).
 - **Summary view first:** the full drafts are written for the agents (paths, commands,
   `p4` moves). You see the direction: every reviewed section opens with
   `**Summary:** <1-3 plain sentences>`, and every plan step's first line is

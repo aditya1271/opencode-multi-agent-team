@@ -55,7 +55,7 @@ export default Plugin.define({
       return directory ? { location: { directory } } : undefined
     }
 
-    const stopReview = setupReview(context, rpc, rootOf, rpcOptions, { ...color, accent: color.running })
+    const review = setupReview(context, rpc, rootOf, rpcOptions, { ...color, accent: color.running })
 
     function TeamSection(props: { sessionID: string }) {
       const [stats, setStats] = createSignal<SidebarStats | undefined>()
@@ -135,6 +135,19 @@ export default Plugin.define({
               )}
             </Show>
           </box>
+          <Show when={stats()?.review}>
+            {(r: () => NonNullable<SidebarStats["review"]>) => (
+              <box
+                flexDirection="row"
+                onMouseDown={(event: { stopPropagation(): void }) => {
+                  event.stopPropagation()
+                  void review.open(root())
+                }}
+              >
+                <text fg={color.running()}>{fit(`▶ Review ${r().title.toLowerCase()} · ${r().done}/${r().total} done`)}</text>
+              </box>
+            )}
+          </Show>
           <Show when={prefs.expanded}>
             <Show when={rows().length > 0}>
               <text fg={color.muted()}>{line(" ", "agent", "call", "prmt", "tool", "tok", "%")}</text>
@@ -203,7 +216,7 @@ export default Plugin.define({
     const stopSlot = context.ui.slot({ prepend: "sidebar.content", render: (input: { sessionID: string }) => <TeamSection sessionID={input.sessionID} /> })
     return () => {
       stopSlot()
-      stopReview()
+      review.stop()
     }
   },
 })
