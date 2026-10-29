@@ -353,7 +353,9 @@ export class Team {
         return this.step(task, signal)
       case "extend":
         if (task.phase !== "budget") return this.wrongPhase(task, "extend")
-        task.attemptLimit += 10
+        if (task.budgetReason === "calls") task.agentCallLimit = (task.agentCallLimit ?? this.config.limits.taskAgentCalls) + 25
+        else task.attemptLimit += 5
+        task.budgetReason = undefined
         task.phase = "running"
         save(task)
         return this.step(task, signal)
@@ -564,7 +566,7 @@ export class Team {
         `NEXT ACTION: ask the user [Stop task] [Wait]. Stop task → call team with action "stop", then "start" again. Wait → tell the user to send the new request again when this task ends.`,
       ].join("\n")
     if (!text.trim()) return 'start needs text: the confirmed request. NEXT ACTION: call team with action "start" and the request.'
-    const task = newTask(this.root, managerSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)
+    const task = newTask(this.root, managerSession, this.ctx.location.directory, text, this.config.limits.taskAttempts, this.config.limits.taskAgentCalls)
     if (opts.plan === true) task.forcePlan = true
     if (opts.review === true) task.reviewFirst = true
     const auto = opts.auto ?? this.sessionModes.get(managerSession) ?? this.config.auto
@@ -1055,8 +1057,11 @@ export class Team {
     const auto = await this.autoStep(task, signal)
     if (auto !== undefined) return auto
     if (task.phase !== "running" || !task.pending) return render(task)
-    if (task.attempts >= task.attemptLimit) {
+    const calls = task.agentCalls ?? 0
+    const over = task.attempts >= task.attemptLimit ? "attempts" : calls >= (task.agentCallLimit ?? this.config.limits.taskAgentCalls) ? "calls" : undefined
+    if (over) {
       task.phase = "budget"
+      task.budgetReason = over
       await this.refreshManager(task)
       save(task)
       return render(task)
@@ -1067,10 +1072,10 @@ export class Team {
     const sessionID = keep && !pending.fresh ? task.sessions[keep] : undefined
     if (pending.mode === "fix" && !sessionID) task.developerSeenPlan = false
     const prompt = buildPrompt(this.config, task, pending, !sessionID)
-    task.attempts++
+    task.agentCalls = calls + 1
     save(task)
     this.onChange(task.managerSession)
-    this.log(`task ${task.id}: attempt ${task.attempts} → ${role} (${pending.mode})`)
+    this.log(`task ${task.id}: call ${task.agentCalls} → ${role} (${pending.mode}), failed attempts ${task.attempts}/${task.attemptLimit}`)
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -1098,6 +1103,7 @@ export class Team {
       task.phase = "stopped"
       await this.finish(task, "stopped")
     } else if (res.end !== "report" || !res.report) {
+      task.attempts++
       this.stuck(task, `${role} (${pending.mode}): ${res.failure ?? res.end}`, { ...pending, fresh: true })
     } else {
       task.pending = undefined
@@ -1125,7 +1131,7 @@ export class Team {
 
   private record(task: TaskState, mode: Mode, r: Report, file?: string) {
     task.history.push({
-      n: task.attempts,
+      n: task.agentCalls ?? 0,
       mode,
       role: MODE_ROLE[mode],
       status: r.status,
@@ -1242,6 +1248,7 @@ export class Team {
           task.pending = { mode: "review_trivial" }
           return
         }
+        task.attempts++
         task.trivialFailed = true
         task.pending = { mode: "lead_fail" }
         return
@@ -1250,6 +1257,7 @@ export class Team {
         const file = this.reportFile(task, "analysis", p.mode, r)
         this.record(task, p.mode, r, file)
         if (r.status === "PASS") return this.done(task, r.summary)
+        task.attempts++
         task.trivialFailed = true
         task.pending = { mode: "lead_fail" }
         return
@@ -1342,6 +1350,7 @@ export class Team {
         task.principalNote = file
         if (r.status === "APPROVE") return this.toApproval(task)
         task.architectUnseen.push(file)
+        task.attempts++
         task.skipPrincipalReview = true
         task.pending = { mode: "architect", afterReview: file, note: `Principal requested changes to plan ${task.plan} (${file}). Revise the plan once.` }
         return
@@ -1350,6 +1359,7 @@ export class Team {
         const file = this.reportFile(task, "report", p.mode, r)
         this.record(task, p.mode, r, file)
         task.architectUnseen.push(file)
+        if (r.status !== "DONE") task.attempts++
         if (r.status === "BLOCKED") return this.planFailure(task, `Developer is blocked on step ${task.step}: ${r.summary}`)
         if (r.status === "DONE") {
           if (task.step < task.planSteps) {
@@ -1379,6 +1389,7 @@ export class Team {
         this.record(task, p.mode, r, file)
         task.architectUnseen.push(file)
         if (r.status === "PASS") return this.done(task, r.summary)
+        task.attempts++
         task.step = task.planSteps
         return this.round(task, file, r)
       }

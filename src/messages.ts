@@ -708,7 +708,7 @@ function renderPhase(task: TaskState): string {
   const last = task.history[task.history.length - 1]
   const lastLine = last ? `${last.role} → ${last.status}: ${last.summary.split("\n")[0].replace(/[.\s]+$/, "")}` : "started"
   const files = task.editedFiles.length ? task.editedFiles.map((f) => `- ${f}`).join("\n") : "(none)"
-  const attempts = `Attempts: ${task.attempts}/${task.attemptLimit}.`
+  const attempts = `Failed attempts: ${task.attempts}/${task.attemptLimit}.`
   const usage = () => usageReport(task.usage, Math.max(1, task.planSteps))
   if (autoDecides(task)) {
     const next =
@@ -828,12 +828,14 @@ function renderPhase(task: TaskState): string {
       )
     case "budget":
       return join(
-        `ATTEMPT BUDGET USED UP: ${task.attempts} agent calls. Last: ${lastLine}.`,
+        task.budgetReason === "calls"
+          ? `AGENT CALL LIMIT REACHED: ${task.agentCalls ?? 0} agent calls (runaway guard; failed attempts ${task.attempts}/${task.attemptLimit}). Last: ${lastLine}.`
+          : `ATTEMPT BUDGET USED UP: ${task.attempts} failed attempts (failed steps, work sent back, broken agent calls). Last: ${lastLine}.`,
         task.pending ? `Left to do: ${task.pending.mode}${task.planSteps ? `, step ${task.step} of ${task.planSteps}` : ""}.` : "",
         `Files changed so far:\n${files}`,
         decided,
         usage(),
-        `NEXT ACTION: show this to the user and ask [Continue +10 attempts] [Stop]. Continue → team "extend". Stop → team "stop".`,
+        `NEXT ACTION: show this to the user and ask [${task.budgetReason === "calls" ? "Continue +25 calls" : "Continue +5 attempts"}] [Stop]. Continue → team "extend". Stop → team "stop".`,
       )
     case "done":
       if (isDocWorkflow(task))

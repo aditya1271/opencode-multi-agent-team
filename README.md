@@ -244,8 +244,16 @@ Architect writes to it and Principal reviews against it. Code tasks use the same
 standards; `workflows.code.confirmBrief` (default off) shows the concept brief there too.
 - **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
   Your answer goes back to the agent that asked, in its own session, so it keeps its context.
+- **Attempts** are failed tries: the team's own work failed and has to be redone. That
+  means a Developer step that fails its check or is blocked, a review that sends the work
+  back, Principal requesting changes to a plan, or an agent call that crashed, timed out or
+  never reported. Info requests, Intern searches, your questions and answers, and revisions
+  from your comments aren't attempts; their own limits bound them (`needInfoPerTask`,
+  `leadSearchRounds`, `questionsPerTask`, `escalateAfterComments`). `limits.taskAttempts`
+  (default 10) caps failed attempts per task. `limits.taskAgentCalls` (default 100) caps all
+  agent calls as a silent runaway guard.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the
-  changed files) and choose [Retry] / [Continue +10] / [Stop].
+  changed files) and choose [Retry] / [Continue +5 attempts, or +25 calls] / [Stop].
 - **Usage:** ask "how was the work divided?" to get a per-agent table (calls, prompts, tool
   calls, tokens, model) for the task, or for the last N tasks.
 - **Sidebar:** a **Team** section in the session sidebar shows the current task's phase and
@@ -259,7 +267,7 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
   price) are left out, so the numbers track what you pay.
 
   ```
-  ▼ Team running · 7/40 attempts
+  ▼ Team running · 1/10 attempts
    agent    call prmt tool   tok    %
    manager     0    6    5   41k  12%
      fuse/kimi-k2.6

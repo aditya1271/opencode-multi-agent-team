@@ -170,8 +170,14 @@ export interface TaskState {
   questionsFrom?: Mode
   askedAt?: number
   stuckReason?: string
+  /** Failed tries: the team's own work failed and has to be redone (see README, Attempts). */
   attempts: number
   attemptLimit: number
+  /** Every agent call of the task: a silent runaway guard, not shown as attempts. Missing on tasks from before: migrated on load. */
+  agentCalls?: number
+  agentCallLimit?: number
+  /** Why the task is in phase "budget". */
+  budgetReason?: "attempts" | "calls"
   sessions: Partial<Record<WorkerRole, string>>
   seq: Record<string, number>
   trivialFailed?: boolean
@@ -269,7 +275,7 @@ export function taskId(request: string, now = new Date()): string {
   return `${stamp}-${slug(request.split("\n").find((l) => l.trim() && !/^\W*goal\W*$/i.test(l.trim())) ?? request)}`
 }
 
-export function newTask(root: string, managerSession: string, workspace: string, request: string, attemptLimit: number): TaskState {
+export function newTask(root: string, managerSession: string, workspace: string, request: string, attemptLimit: number, agentCallLimit?: number): TaskState {
   const id = taskId(request)
   const dir = path.join(root, id)
   mkdirSync(path.join(dir, "logs"), { recursive: true })
@@ -284,6 +290,8 @@ export function newTask(root: string, managerSession: string, workspace: string,
     phase: "running",
     attempts: 0,
     attemptLimit,
+    agentCalls: 0,
+    agentCallLimit,
     sessions: {},
     seq: {},
     plan: 0,
@@ -374,7 +382,13 @@ export const migrateNames = (json: string) =>
 
 export function loadTask(dir: string): TaskState | undefined {
   try {
-    return JSON.parse(migrateNames(readFileSync(path.join(dir, "state.json"), "utf8"))) as TaskState
+    const task = JSON.parse(migrateNames(readFileSync(path.join(dir, "state.json"), "utf8"))) as TaskState
+    // Before attempts meant failed tries, they counted every agent call.
+    if (task.agentCalls === undefined) {
+      task.agentCalls = task.attempts
+      task.attempts = 0
+    }
+    return task
   } catch {
     return undefined
   }

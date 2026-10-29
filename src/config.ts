@@ -43,7 +43,10 @@ export interface Config {
   agentPrefix: string
   defaultAgent: boolean
   limits: {
+    /** Failed tries per task before the team stops and asks: a failed Developer step, a review sending work back, Principal requesting changes, an agent call that broke. */
     taskAttempts: number
+    /** Agent calls per task, failed or not: a runaway guard. */
+    taskAgentCalls: number
     developerRounds: number
     planFailures: number
     principalAdvice: number
@@ -87,7 +90,8 @@ export const DEFAULTS: Config = {
   agentPrefix: "team-",
   defaultAgent: false,
   limits: {
-    taskAttempts: 40,
+    taskAttempts: 10,
+    taskAgentCalls: 100,
     developerRounds: 2,
     planFailures: 2,
     principalAdvice: 1,

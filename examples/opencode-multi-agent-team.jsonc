@@ -57,7 +57,8 @@
   },
 
   "limits": {
-    "taskAttempts": 40,
+    "taskAttempts": 10,      // failed tries per task (failed step, work sent back, agent call broke); info requests and your comments don't count
+    "taskAgentCalls": 100,   // all agent calls per task: a runaway guard
     "developerRounds": 2,
     "planFailures": 2,
     "principalAdvice": 1,

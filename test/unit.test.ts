@@ -5,7 +5,7 @@ import { leadReadProblem, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, runs } from "../src/runtime.ts"
-import { appendFile, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
+import { appendFile, loadTask, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, join, render, stepTitles } from "../src/messages.ts"
@@ -950,6 +950,55 @@ describe("plan and research workflows", () => {
       save(t)
       const again = await team.handle({ action: "approve" }, "ses_c", signal)
       expect([again.mode, again.files, t.stage]).toEqual(["lead", ["infeasible-1.md"], "how"])
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("attempts count failed tries only; all agent calls have a separate runaway cap; old tasks migrate", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "add a flag", workflow: "plan" }, "ses_a", signal)
+      const t = team.task("ses_a")
+      expect([t.attempts, t.attemptLimit, t.agentCalls, t.agentCallLimit]).toEqual([0, 10, 0, 100])
+
+      // Info requests, searches and questions aren't failures.
+      team.apply(t, { mode: "lead" }, report("NEED_INFO", { content: "1. Where is main?" }), {})
+      team.apply(t, t.pending, report("FOUND", { content: "main.cpp:1" }), {})
+      team.apply(t, { mode: "lead" }, report("QUESTIONS", { questions: ["Short form too?"] }), {})
+      expect(t.attempts).toBe(0)
+
+      // A failed step, a blocked step and a review sending work back are.
+      Object.assign(t, { phase: "running", plan: 1, planSteps: 2, step: 1, rounds: 0 })
+      team.apply(t, { mode: "fix" }, report("FAIL", { content: "build failed" }), {})
+      expect([t.attempts, t.pending.mode]).toEqual([1, "diagnose"])
+      team.apply(t, { mode: "fix" }, report("DONE", { content: "ok" }), {})
+      expect(t.attempts).toBe(1)
+      team.apply(t, { mode: "review" }, report("CHANGES", { content: "missing test" }), {})
+      expect(t.attempts).toBe(2)
+      team.apply(t, { mode: "fix" }, report("BLOCKED", { content: "no access" }), {})
+      expect(t.attempts).toBe(3)
+
+      // Budget: failed attempts, or the call cap; extend raises the one that ran out.
+      const step = (Team.prototype as any).step
+      Object.assign(t, { phase: "running", pending: { mode: "fix" }, attempts: 10 })
+      await step.call(team, t, signal)
+      expect([t.phase, t.budgetReason]).toEqual(["budget", "attempts"])
+      expect(render(t)).toContain("ATTEMPT BUDGET USED UP: 10 failed attempts")
+      expect(render(t)).toContain("[Continue +5 attempts]")
+      Object.assign(t, { phase: "running", attempts: 0, agentCalls: 100 })
+      await step.call(team, t, signal)
+      expect([t.phase, t.budgetReason]).toEqual(["budget", "calls"])
+      expect(render(t)).toContain("AGENT CALL LIMIT REACHED: 100 agent calls")
+      team.step = async (x: any) => x.pending
+      await team.handle({ action: "extend" }, "ses_a", signal)
+      expect([t.agentCallLimit, t.attemptLimit, t.budgetReason]).toEqual([125, 10, undefined])
+
+      // A task saved when attempts counted every call.
+      const old = { ...t, attempts: 23, attemptLimit: 40, agentCalls: undefined, agentCallLimit: undefined }
+      writeFileSync(path.join(t.dir, "state.json"), JSON.stringify(old))
+      const loaded = loadTask(t.dir)!
+      expect([loaded.attempts, loaded.agentCalls]).toEqual([0, 23])
     } finally {
       cleanup()
     }
