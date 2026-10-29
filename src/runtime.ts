@@ -12,6 +12,10 @@ export interface Report {
   depth?: "quick" | "breadth" | "depth"
   /** Code task, Lead's ESCALATE: is the behaviour already fixed by the request? */
   what?: "settled" | "open"
+  /** ADVICE in an advice mode: one instruction per item. */
+  items?: string[]
+  /** A revision after advice: how each advice item (by id) was handled. */
+  addressed?: string
 }
 
 export interface ShellRun {

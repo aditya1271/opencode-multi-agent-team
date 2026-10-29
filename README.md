@@ -18,11 +18,11 @@ work.
 | `plan-manager` | Front agent for plan documents: the team writes a plan for you to review. No code changes. |
 | `research-manager` | Front agent for research: the team investigates and writes a findings report. No code changes. |
 | `team-lead` | Searches the code, then decides between a trivial fix and a plan. Writes the brief. |
-| `team-architect` | Writes plans and documents. You approve each one. |
+| `team-architect` | Writes plans and documents. You approve each one. Advises Lead when you keep sending its brief back. |
 | `team-intern` | Does code searches for the Architect, and answers your code questions. |
 | `team-developer` | Edits, builds and tests. The only agent that changes files. |
 | `team-reviewer` | Diagnoses failures and reviews finished work. |
-| `team-principal` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises once when the team is stuck. |
+| `team-principal` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
 
 The three front agents (switch with Tab) rewrite your request, ask you to confirm it, and drive
 the team. They can't read, edit or run anything, and they share the `manager` entry of the
@@ -118,6 +118,13 @@ To update later, run `git pull` in the clone and restart OpenCode.
   you, or ask for it in the request. Principal checks whether it can be built as written and
   whether it is the right design. On CHANGES the Architect revises once, and you see the review
   next to the revised version. At most `limits.principalReviews` (2) per task.
+- **When a draft keeps coming back:** the writer revises alone at first. At your 3rd round of
+  comments on the same brief or document, the next adviser up reads the draft and all your
+  comments and gives numbered advice (ADV1, …); at the 5th, the one above it. Lead's brief is
+  advised by the Architect, then Principal; the Architect's drafts by Principal. The writer
+  still writes the next version and must say how it handled each item; you see "Revised
+  following …'s advice" on it. A writer that reports STUCK gets the next adviser right away,
+  and when none is left the task comes to you. Set the rounds in `limits.escalateAfterComments`.
 
 ### Plan documents (`plan-manager`)
 
@@ -197,6 +204,7 @@ Edits are never reverted automatically. Every result lists the changed files.
 | Agent calls per task | 40, then [Continue +10] |
 | Developer rounds per plan step | 2 |
 | Failed plans before Principal advice | 2 (Principal advice: once per task) |
+| Your comment rounds on one draft before advice | 3 (next adviser), 5 (the one above) |
 | Searches / question rounds per task | 6 / 4 |
 | Tool calls per agent call | lead 40, architect 25, intern 30, developer 150, reviewer 30, principal 20 |
 | Time per agent call | 30 min (developer 240), or 15 min without activity |
@@ -285,7 +293,8 @@ Each task writes to `~/.cache/opencode-multi-agent-team/<task-id>/` (`taskDir`):
   `analysis-N.md`, `principal-N.md`, `answers.md`, `existing.md` (the document as it was
   before a task edited it)
 - how stage: `how-brief.md`, `how-answers.md`; Lead's answers to the Architect or Principal:
-  `brief-answer-N.md` / `how-brief-answer-N.md`; `infeasible-N.md`
+  `brief-answer-N.md` / `how-brief-answer-N.md`; `infeasible-N.md`; `advice-N.md` (with how
+  the writer handled each item), `stuck-N.md`
 - `logs/`: full build and long command output
 - `state.json`
 

@@ -25,5 +25,8 @@ Report **QUESTIONS** only when the user alone can answer (intent, a choice betwe
 - **QUESTIONS**: `questions` holds the questions; `content` has the context.
 - **ANSWER** (answer mode): answers to the Architect's or Principal's questions, each under its id.
 - **INFEASIBLE** (how stage): a decision of the approved what-document can't work in this code; the task message says what to include.
+- **STUCK** (revising your brief after the user's comments): you can't see how to give the user what they keep asking for. `content`: what they ask, what you tried, and where you are stuck. An adviser steps in, and you revise again.
+
+When the task message gives you advice items (ADV1, …), address each one in the revised brief: follow it, or say why not. `addressed` says, one line per id, what you changed.
 
 `summary`: at most 5 lines for the user.

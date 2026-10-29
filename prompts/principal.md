@@ -22,4 +22,8 @@ Look at the request, the plans tried, and the latest reports and analyses. Find 
 - **ADVICE**: `content`: the approach the Architect should take, concretely, and what to avoid.
 - **QUESTIONS**: the decision belongs to the user; `questions` holds the questions.
 
+## Draft advice mode (the user keeps sending a brief or draft back)
+
+The task message gives the brief or draft, the user's comments, and any earlier advice. Don't rewrite it: report **ADVICE** with `items` telling the writer what to do differently, as the task message says.
+
 Call `report` once, then stop. `summary`: at most 5 lines.

@@ -43,6 +43,8 @@ export interface Config {
     developerRounds: number
     planFailures: number
     principalAdvice: number
+    /** The user's comment rounds on one brief or document after which the next adviser up is consulted (Architect, then Principal). */
+    escalateAfterComments: number[]
     /** Principal reviews of a plan or document the user can ask for per task. */
     principalReviews: number
     needInfoPerTask: number
@@ -81,6 +83,7 @@ export const DEFAULTS: Config = {
     developerRounds: 2,
     planFailures: 2,
     principalAdvice: 1,
+    escalateAfterComments: [3, 5],
     principalReviews: 2,
     needInfoPerTask: 6,
     questionsPerTask: 4,

@@ -374,6 +374,95 @@ describe("plan and research workflows", () => {
     }
   })
 
+  test("a brief the user keeps sending back: Architect advises at round 3, Principal at 5; STUCK calls the next adviser", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_l", signal)
+      const t = team.task("ses_l")
+      const brief = (p: any, extra: object = {}) => {
+        t.pending = undefined
+        team.apply(t, p, report("ESCALATE", { content: "## Concept brief\n\n**Concerns**: x", ...extra }), {})
+        save(t)
+      }
+      const comment = async (n: number) => {
+        const p = await team.handle({ action: "change", text: `comment ${n}` }, "ses_l", signal)
+        expect(t.commentRounds).toBe(n)
+        return p
+      }
+      brief({ mode: "lead" })
+      expect(allowedStatuses(DEFAULTS, "lead", t)).not.toContain("STUCK")
+      for (const n of [1, 2]) {
+        const p = await comment(n)
+        expect([p.mode, p.adviceIds]).toEqual(["lead", undefined])
+        brief(p)
+      }
+      const adv = await comment(3)
+      expect([adv.mode, adv.advise, adv.fresh, adv.then.mode]).toEqual(["architect_advice", "lead", true, "lead"])
+      expect(allowedStatuses(DEFAULTS, "architect_advice", t)).toEqual(["ADVICE", "ASK"])
+      expect(buildPrompt(DEFAULTS, t, adv, true)).toContain("MODE: advice")
+      beginRun("ses_adv", { role: "architect", mode: "architect_advice", task: t, toolLimit: 10 })
+      expect(() => acceptReport(DEFAULTS, "ses_adv", { status: "ADVICE", summary: "s", content: "c" })).toThrow("items")
+      runs.delete("ses_adv")
+      t.pending = undefined
+      team.apply(t, adv, report("ADVICE", { content: "It ignores scale.", items: ["cover scale", "drop pets"] }), {})
+      const revise = t.pending
+      expect([revise.mode, revise.adviceIds, revise.files]).toEqual(["lead", ["ADV1", "ADV2"], ["advice-1.md"]])
+      expect(buildPrompt(DEFAULTS, t, revise, false)).toContain("**ADV2**: drop pets")
+      beginRun("ses_rev", { role: "lead", mode: "lead", task: t, toolLimit: 10 })
+      const esc = { status: "ESCALATE", summary: "s", content: "## Concept brief\n\nx" }
+      expect(() => acceptReport(DEFAULTS, "ses_rev", { ...esc, addressed: "ADV1: added scale" })).toThrow("missing: ADV2")
+      runs.delete("ses_rev")
+      brief(revise, { addressed: "ADV1: added scale\nADV2: dropped pets" })
+      expect(render(t)).toContain("**Revised following Architect's advice**")
+      expect(readFileSync(path.join(t.dir, "advice-1.md"), "utf8")).toContain("ADV2: dropped pets")
+
+      const p4 = await comment(4)
+      expect(p4.mode).toBe("lead")
+      expect(render(t)).not.toContain("Revised following")
+      brief(p4)
+      const p5 = await comment(5)
+      expect([p5.mode, p5.advise]).toEqual(["principal_draft_advice", "lead"])
+      expect(buildPrompt(DEFAULTS, t, p5, true)).toContain("Earlier advice on this draft")
+      t.pending = undefined
+      team.apply(t, p5, report("ADVICE", { items: ["one"] }), {})
+      expect(t.pending.adviceIds).toEqual(["ADV3"])
+      brief(t.pending, { addressed: "ADV3: done" })
+
+      // Both advisers used: STUCK goes to the user.
+      const p6 = await comment(6)
+      expect(p6.mode).toBe("lead")
+      expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("STUCK")
+      t.pending = undefined
+      team.apply(t, p6, report("STUCK", { content: "they want two things at once" }), {})
+      expect([t.phase, t.pending.mode]).toEqual(["stuck", "lead"])
+
+      // Approving the brief starts a new ladder; an Architect that is stuck on its first comment round gets Principal.
+      t.phase = "brief"
+      t.pending = undefined
+      save(t)
+      expect((await team.handle({ action: "approve" }, "ses_l", signal)).mode).toBe("architect")
+      expect([t.commentRounds, t.advisors, t.lastAdvice]).toEqual([0, [], undefined])
+      t.pending = undefined
+      team.apply(t, { mode: "architect" }, report("DOC"), {})
+      save(t)
+      const rev = await team.handle({ action: "change", text: "more" }, "ses_l", signal)
+      t.pending = undefined
+      team.apply(t, rev, report("ESCALATE", { content: "change X" }), {})
+      expect(t.pending.mode).toBe("architect")
+      const arch = t.pending
+      t.pending = undefined
+      team.apply(t, arch, report("STUCK", { content: "can't" }), {})
+      expect([t.pending.mode, t.pending.advise, t.pending.then.mode]).toEqual(["principal_draft_advice", "architect", "architect"])
+      const pa = t.pending
+      t.pending = undefined
+      team.apply(t, pa, report("ADVICE", { items: ["split it"] }), {})
+      expect([t.pending.mode, t.pending.adviceIds]).toEqual(["architect", ["ADV4"]])
+      expect(buildPrompt(DEFAULTS, t, t.pending, false)).toContain("**ADV4**: split it")
+    } finally {
+      cleanup()
+    }
+  })
+
   test("code: settled behaviour skips the what stage; the Architect asks Lead; INFEASIBLE goes back to the user", async () => {
     const { team, cleanup } = setup()
     try {

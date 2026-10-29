@@ -4,11 +4,11 @@ import { runs, type Report, type ShellRun } from "./runtime.ts"
 import { draftIsDoc, isDocWorkflow, type Mode, type TaskState } from "./state.ts"
 
 const BASE: Record<Mode, string[]> = {
-  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "INFEASIBLE"],
+  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "INFEASIBLE", "STUCK"],
   lead_fail: ["ESCALATE"],
   fix_trivial: ["DONE", "FAILED", "BLOCKED"],
   review_trivial: ["PASS", "ISSUES"],
-  architect: ["PLAN", "ASK", "QUESTIONS", "ESCALATE", "INFEASIBLE"],
+  architect: ["PLAN", "ASK", "QUESTIONS", "ESCALATE", "INFEASIBLE", "STUCK"],
   intern: ["FOUND", "NOT_FOUND"],
   principal_review: ["APPROVE", "CHANGES", "ASK"],
   fix: ["DONE", "FAILED", "BLOCKED"],
@@ -20,7 +20,15 @@ const BASE: Record<Mode, string[]> = {
   principal_reply: ["ANSWER"],
   principal_doc_review: ["APPROVE", "CHANGES", "ASK"],
   lead_answer: ["ANSWER"],
+  architect_advice: ["ADVICE", "ASK"],
+  principal_draft_advice: ["ADVICE", "ASK"],
 }
+
+const ADVICE_MODES: Mode[] = ["architect_advice", "principal_draft_advice"]
+
+/** STUCK: the writer can't resolve the user's comments (Lead on its brief, the Architect on its draft). */
+const mayBeStuck = (mode: Mode, task: TaskState) =>
+  !!task.commentRounds && (mode === "architect" || (mode === "lead" && !task.revising && !task.doc && !task.plan))
 
 /** Code task, Lead's first sort: ESCALATE must say whether the request already fixes the behaviour. */
 const needsWhat = (mode: Mode, task?: TaskState) =>
@@ -58,11 +66,12 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
     if ((task.forcePlan || isDocWorkflow(task) || task.stage) && mode === "lead") list = list.filter((s) => s !== "TRIVIAL")
     // Only the how stage can find an approved what-decision unworkable.
     if (task.stage !== "how" || !task.doc || task.revising) list = list.filter((s) => s !== "INFEASIBLE")
+    if (!mayBeStuck(mode, task)) list = list.filter((s) => s !== "STUCK")
     if (task.workflow === "research" && mode === "architect") list = list.map((s) => (s === "ASK" ? "NEED_INFO" : s))
     if (draftIsDoc(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
     if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
-  } else list = list.filter((s) => s !== "INFEASIBLE")
+  } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK")
   return list
 }
 
@@ -86,6 +95,10 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     properties.risk = { type: "string", enum: ["yes", "no"], description: "Required for PLAN: yes only for destructive or irreversible steps." }
     properties.steps = { type: "integer", minimum: 1, description: "Required for PLAN: number of plan steps." }
   }
+  if (ADVICE_MODES.includes(mode))
+    properties.items = { type: "array", items: { type: "string" }, description: "Required for ADVICE: one concrete instruction per item, unnumbered." }
+  if ((mode === "lead" || mode === "architect") && task?.pending?.adviceIds?.length)
+    properties.addressed = { type: "string", description: `Required for your draft: how you handled each advice item, one line per id (${task.pending.adviceIds.join(", ")}).` }
   if (mode === "fix" || mode === "fix_trivial")
     properties.checkCommand = { type: "string", description: "Required for DONE: the exact check command you ran last." }
   return { type: "object", properties, required: ["status", "summary", "content"], additionalProperties: false }
@@ -104,6 +117,8 @@ export const REPORT_INPUT = {
     checkCommand: { type: "string" },
     depth: { type: "string" },
     what: { type: "string" },
+    items: { type: "array", items: { type: "string" } },
+    addressed: { type: "string" },
   },
   required: ["status", "summary", "content"],
 }
@@ -123,6 +138,12 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (input.what !== "settled" && input.what !== "open") throw new Error('ESCALATE needs what: "settled" or "open".')
     if (input.what === "settled" && !/^#+\s*Why the behaviour is settled/im.test(input.content))
       throw new Error('what "settled" needs a "## Why the behaviour is settled" section at the top of content.')
+  }
+  if (input.status === "ADVICE" && ADVICE_MODES.includes(run.mode) && !input.items?.length) throw new Error("ADVICE needs a non-empty items list.")
+  const adviceIds = run.mode === "lead" || run.mode === "architect" ? (run.task?.pending?.adviceIds ?? []) : []
+  if (adviceIds.length && ["ESCALATE", "DOC", "PLAN"].includes(input.status)) {
+    const missing = adviceIds.filter((id) => !new RegExp(`\\b${id}\\b`).test(input.addressed ?? ""))
+    if (missing.length) throw new Error(`addressed must say how you handled every advice item by id; missing: ${missing.join(", ")}.`)
   }
   if (run.mode === "lead_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))

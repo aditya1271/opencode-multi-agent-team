@@ -20,6 +20,14 @@ export type Mode =
   | "principal_reply"
   | "principal_doc_review"
   | "lead_answer"
+  | "architect_advice"
+  | "principal_draft_advice"
+
+/** Who advises a writer the user keeps sending back, in order (see limits.escalateAfterComments). */
+export const LADDER: Record<"lead" | "architect", Mode[]> = {
+  lead: ["architect_advice", "principal_draft_advice"],
+  architect: ["principal_draft_advice"],
+}
 
 export const MODE_ROLE: Record<Mode, WorkerRole> = {
   lead: "lead",
@@ -38,6 +46,8 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   principal_reply: "principal",
   principal_doc_review: "principal",
   lead_answer: "lead",
+  architect_advice: "architect",
+  principal_draft_advice: "principal",
 }
 
 /** code: change files (the default). plan: write a plan document. research: write a findings report. */
@@ -83,6 +93,11 @@ export interface Pending {
   asker?: Mode
   /** Task files delivered with this hand-off (a continuing session sees them once). */
   files?: string[]
+  /** Advice modes: whose draft is advised on, and the writer's hand-off that runs after the advice. */
+  advise?: "lead" | "architect"
+  then?: Pending
+  /** The advice items (ADV1, …) the writer must address in `addressed`. */
+  adviceIds?: string[]
 }
 
 export interface HistoryEntry {
@@ -141,6 +156,14 @@ export interface TaskState {
   infeasible?: string
   /** Questions asked of Lead so far (ids A1, A2, …). */
   askSeq?: number
+  /** Rounds of user comments on the current brief or document, and the advisers already used on it. */
+  commentRounds?: number
+  advisors?: Mode[]
+  adviceFiles?: string[]
+  /** The advice the current version follows, shown to the user. */
+  lastAdvice?: { role: string; file: string }
+  /** Advice items given so far (ids ADV1, ADV2, …). */
+  adviceSeq?: number
   /** The user asked for a plan: lead can't pick TRIVIAL. */
   forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */

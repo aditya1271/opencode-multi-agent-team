@@ -15,6 +15,7 @@ import {
   draftIsDoc,
   findTask,
   isDocWorkflow,
+  LADDER,
   loadTask,
   MODE_ROLE,
   newTask,
@@ -79,6 +80,8 @@ const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = {
   // Kept so a review can continue after Lead answers its questions; each review starts fresh.
   principal_review: "principal",
   principal_doc_review: "principal",
+  architect_advice: "architect",
+  principal_draft_advice: "principal",
 }
 
 export class Team {
@@ -222,6 +225,10 @@ export class Team {
       case "approve":
         if (task.phase === "brief") {
           task.phase = "running"
+          // The approved brief starts a new document: its own comment rounds, advisers and sessions.
+          this.resetLadder(task)
+          task.sessions.architect = undefined
+          task.sessions.principal = undefined
           task.pending = { mode: "architect" }
           save(task)
           return this.step(task, signal)
@@ -580,10 +587,13 @@ export class Team {
     if (task.phase !== "approval" && task.phase !== "brief") return this.wrongPhase(task, "change")
     const { polished, note: comments } = await this.withOriginal(task, text, "comments")
     if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
+    task.commentRounds = (task.commentRounds ?? 0) + 1
+    task.lastAdvice = undefined
     if (task.phase === "brief") {
       const which = task.workflow === "research" ? "research" : "concept"
-      appendFile(task, answersName(task), `## Comments on the ${which} brief\n\n${comments}\n`)
-      task.pending = { mode: "lead", note: `The user adjusted the ${which} brief. Revise it and report ESCALATE again with the whole brief:\n${comments}` }
+      appendFile(task, answersName(task), `## Comments on the ${which} brief (round ${task.commentRounds})\n\n${comments}\n`)
+      const revise: Pending = { mode: "lead", note: `The user adjusted the ${which} brief. Revise it and report ESCALATE again with the whole brief:\n${comments}` }
+      task.pending = this.withAdvice(task, "lead", revise, comments)
     } else {
       // Comments go through Lead, who briefs the Architect (it has no file access).
       appendFile(task, answersName(task), `## Comments on the ${docName(task)} (${draftFile(task)})\n\n${comments}\n`)
@@ -765,7 +775,26 @@ export class Team {
   }
 
   private apply(task: TaskState, p: Pending, r: Report, res: RunResult) {
+    if (p.adviceIds?.length && r.addressed && task.lastAdvice) appendFile(task, task.lastAdvice.file, `\n## How ${MODE_ROLE[p.mode]} handled it\n\n${r.addressed}\n`)
     switch (p.mode) {
+      case "architect_advice":
+      case "principal_draft_advice": {
+        if (r.status === "ASK") return this.askLead(task, p, r)
+        const start = task.adviceSeq ?? 0
+        const ids = (r.items ?? []).map((_, i) => `ADV${start + i + 1}`)
+        task.adviceSeq = start + ids.length
+        const role = MODE_ROLE[p.mode] === "architect" ? "Architect" : "Principal"
+        const file = writeNumbered(task, "advice", join(`# ${role}'s advice`, r.content, (r.items ?? []).map((x, i) => `- **${ids[i]}**: ${x}`).join("\n")))
+        this.record(task, p.mode, r, file)
+        task.advisors = [...(task.advisors ?? []), p.mode]
+        task.adviceFiles = [...(task.adviceFiles ?? []), file]
+        task.lastAdvice = { role, file }
+        const then = p.then ?? { mode: p.advise === "architect" ? "architect" : "lead" }
+        const follow = `${role} reviewed the draft and the user's comments and gave advice (${file}, items ${ids.join(", ")}). Address every item: follow it, or say why not. Treat the user's material as a starting point, not the boundary. In \`addressed\`, say for each id what you changed.`
+        if (then.mode === "architect") task.architectUnseen.push(file)
+        task.pending = { ...then, adviceIds: ids, note: join(then.note, follow), files: then.mode === "architect" ? then.files : [...(then.files ?? []), file] }
+        return
+      }
       case "lead":
       case "lead_fail": {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
@@ -776,12 +805,14 @@ export class Team {
           this.record(task, p.mode, r, file)
           task.architectUnseen.push(file)
           const doc = draftIsDoc(task)
-          task.pending = {
+          const revise: Pending = {
             mode: "architect",
             note: `The user asked for changes to the ${docName(task)} (${draftFile(task)}); Lead's revision brief is ${file}. Revise it accordingly and report ${doc ? "DOC" : "PLAN"} with the whole revised ${doc ? "document" : "plan"}${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
           }
+          task.pending = this.withAdvice(task, "architect", revise, `Lead's revision brief for the user's latest comments is ${file}.`, [file])
           return
         }
+        if (r.status === "STUCK") return this.writerStuck(task, "lead", p, r)
         if (r.status === "TRIVIAL") {
           writeFile(task, "brief.md", r.content)
           this.record(task, p.mode, r, "brief.md")
@@ -814,8 +845,8 @@ export class Team {
         const note = `Lead answered your questions ${(p.ids ?? []).join(", ")} in ${file}.`
         if (asker === "architect") {
           task.architectUnseen.push(file)
-          task.pending = { mode: "architect", note, afterReview: p.afterReview }
-        } else task.pending = { mode: asker, note, files: [file], afterReview: p.afterReview }
+          task.pending = { mode: "architect", note, afterReview: p.afterReview, adviceIds: p.adviceIds }
+        } else task.pending = { mode: asker, note, files: [file], afterReview: p.afterReview, advise: p.advise, then: p.then }
         return
       }
       case "fix_trivial": {
@@ -842,6 +873,7 @@ export class Team {
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
         if (r.status === "ASK") return this.askLead(task, p, r)
         if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
+        if (r.status === "STUCK") return this.writerStuck(task, "architect", p, r)
         if (r.status === "NEED_INFO") {
           task.needInfo++
           this.record(task, p.mode, r)
@@ -1008,6 +1040,37 @@ export class Team {
     task.stageRun = (task.stageRun ?? 0) + 1
     task.needInfo = 0
     task.architectUnseen = []
+    this.resetLadder(task)
+  }
+
+  private resetLadder(task: TaskState) {
+    task.commentRounds = 0
+    task.advisors = []
+    task.adviceFiles = []
+    task.lastAdvice = undefined
+  }
+
+  /**
+   * The user keeps sending a draft back: at the configured comment rounds the next adviser up
+   * (Architect, then Principal) advises the writer before it revises. Otherwise the writer revises alone.
+   */
+  private withAdvice(task: TaskState, writer: "lead" | "architect", revise: Pending, note: string, files?: string[]): Pending {
+    const rounds = task.commentRounds ?? 0
+    const used = task.advisors ?? []
+    const due = LADDER[writer].find((mode, i) => !used.includes(mode) && rounds >= (this.config.limits.escalateAfterComments[i] ?? Infinity))
+    if (!due) return revise
+    this.log(`task ${task.id}: comment round ${rounds} on ${writer}'s draft → ${MODE_ROLE[due]} advises`)
+    return { mode: due, fresh: true, advise: writer, then: revise, files, note }
+  }
+
+  /** The writer can't resolve the user's comments: the next unused adviser steps in now, else the user decides. */
+  private writerStuck(task: TaskState, writer: "lead" | "architect", p: Pending, r: Report) {
+    const file = writeNumbered(task, "stuck", `# ${MODE_ROLE[p.mode]} is stuck\n\n${r.summary}\n\n${r.content}`)
+    this.record(task, p.mode, r, file)
+    const retry: Pending = { ...p, fresh: false, adviceIds: undefined }
+    const next = LADDER[writer].find((mode) => !(task.advisors ?? []).includes(mode))
+    if (!next) return this.stuck(task, `${MODE_ROLE[p.mode]} can't resolve the user's comments (${file})`, retry)
+    task.pending = { mode: next, fresh: true, advise: writer, then: retry, files: [file], note: `${MODE_ROLE[p.mode]} reports it is stuck on the user's comments (${file}).` }
   }
 
   /** The user approved the what-document: the how stage starts in fresh sessions with only that document. */
@@ -1040,6 +1103,9 @@ export class Team {
       ids,
       asker: p.mode,
       afterReview: p.afterReview,
+      advise: p.advise,
+      then: p.then,
+      adviceIds: p.adviceIds,
       note: join(`Questions from ${MODE_ROLE[p.mode] === "architect" ? "the Architect" : "Principal"}:`, text, r.content.trim() && `Context:\n${r.content}`),
     }
   }

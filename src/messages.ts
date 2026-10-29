@@ -64,11 +64,17 @@ const LEAD_WHAT = [
   "The Architect has no file access: your brief and your later answers are all it knows. Quote, don't paraphrase.",
   [
     "Write `content` in two parts. First `## Concept brief` (the user may read it before the Architect writes):",
-    "- **Concerns**: the concepts that decide whether the result is good. The ones the user named or stressed first, in their framing; then ones they didn't mention but should consider. For each: why it matters (with the source when the user's material says so), and 2-3 approaches with what each trades off. No pick unless the material settles it.",
+    "- **Concerns**: the concepts that decide whether the result is good. The ones the user named or stressed first, in their framing; then ones they didn't mention but should consider. The user's material is a starting point, not the boundary: think beyond it. For each: why it matters (with the source when the user's material says so), and 2-3 approaches with what each trades off. No pick unless the material settles it.",
     `- ${FEASIBILITY}`,
     "- **Assumptions**: defaults you'd take where nothing settles a point, each marked as assumed.",
     "Then `## Excerpts`: the verbatim passages (with `path:line` or file and heading) the Architect needs, grouped by concern. Nothing else: don't restate the request, the Architect gets it.",
   ].join("\n"),
+].join("\n\n")
+
+const ADVICE_RULES = [
+  "Read the user's comments across all rounds: what do they keep asking for that the draft still doesn't give? Think independently: the user's material and examples are a starting point, not the boundary. Look for concerns, approaches, edge cases and failure modes nobody has named yet.",
+  "Report ADVICE: `items` holds one concrete instruction per entry (what to add, explore, change or drop, and why), most important first; the plugin numbers them ADV1, ADV2, …. `content`: your diagnosis in a few lines (why the draft keeps missing).",
+  "You have no file access. When you need a fact from the code or the user's files, report ASK with your questions for Lead first.",
 ].join("\n\n")
 
 const LEAD_ASK =
@@ -213,8 +219,28 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
             LEAD_ASK,
           ),
         f("request.md"), f("checks.md"), answers(), p.note, capNote())
+    case "architect_advice":
+    case "principal_draft_advice": {
+      if (!freshSession && p.note) return join(p.note, ...delivered(), "Now report ADVICE.")
+      const writer = p.advise === "architect" ? "the Architect" : "Lead"
+      const draft = p.advise === "architect" ? `${docName(task)} (${draftFile(task)})` : `${task.workflow === "research" ? "research" : "concept"} brief (${briefName(task)})`
+      const earlier = (task.adviceFiles ?? []).map(f)
+      return join(
+        `MODE: advice. ${writer} wrote the ${draft} below, and the user has sent it back ${task.commentRounds ?? 0} time(s). Don't rewrite it. Find why it keeps missing what the user wants, and tell ${writer} what to do differently; ${writer} revises it.`,
+        ADVICE_RULES,
+        earlier.length > 0 && "Earlier advice on this draft is below: say why it wasn't enough, and don't repeat it.",
+        f("request.md"),
+        whatDoc(),
+        stageBrief(),
+        answers(),
+        p.advise === "architect" && f(draftFile(task)),
+        ...earlier,
+        ...delivered(),
+        p.note && `Latest:\n${p.note}`,
+      )
+    }
     case "lead_answer": {
-      const head = LEAD_ANSWER.replace("{asker}", p.asker === "architect" ? "The Architect" : "Principal")
+      const head = LEAD_ANSWER.replace("{asker}", MODE_ROLE[p.asker ?? "architect"] === "architect" ? "The Architect" : "Principal")
       if (!freshSession) return join(head, p.note)
       return join(head, f("request.md"), whatDoc(), stageBrief(), answers(), p.note)
     }
@@ -257,7 +283,9 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
         const stageFiles = task.history.filter((h) => h.stageRun === task.stageRun && h.file).map((h) => h.file!)
         const isDraft = (x: string) => /^(doc|plan)-\d+\.md$/.test(x)
         const draft = stageFiles.filter(isDraft).at(-1)
-        const others = [...new Set([...stageFiles, ...unseen])].filter((x) => !given.has(x) && !isDraft(x))
+        // Advice and stuck notes on an earlier document (the brief) are already worked into it.
+        const stale = (x: string) => /^(advice|stuck)-\d+\.md$/.test(x) && !(task.adviceFiles ?? []).includes(x) && !unseen.includes(x)
+        const others = [...new Set([...stageFiles, ...unseen])].filter((x) => !given.has(x) && !isDraft(x) && !stale(x))
         return join(
           `Task ${task.id}: write the ${docName(task)} for this request.`,
           architectHandoff(config, task),
@@ -421,6 +449,10 @@ const REPLY_ROUTES =
   'a clear approval ("approve", "go ahead") → team "approve"; a clear stop → team "stop"; feedback, requests for changes or more work → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask"; a request for a (critical) review → team "review", with what the review should look at as text if they said.'
 
 /** Principal's review shown at approval, marked when the plan or document was revised after it. */
+function adviceLine(task: TaskState): string {
+  return task.lastAdvice ? `**Revised following ${task.lastAdvice.role}'s advice** (${path.join(task.dir, task.lastAdvice.file)})` : ""
+}
+
 function principalBlock(task: TaskState): string {
   if (!task.principalNote) return ""
   const verdict = task.history.find((h) => h.file === task.principalNote)?.status
@@ -458,7 +490,7 @@ export function render(task: TaskState): string {
       const shown = research ? researchBrief(brief) : section(brief, "Concept brief") || brief
       return join(
         `${research ? "RESEARCH" : "CONCEPT"} BRIEF ready. Show this block to the user exactly as written:`,
-        `<show>\n${title}\n\n${shown}\n</show>`,
+        `<show>\n${join(title, shown, adviceLine(task))}\n</show>`,
         `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask".`,
       )
     }
@@ -480,6 +512,7 @@ export function render(task: TaskState): string {
           conflicts ? `**Conflicts between sources**\n${clip(conflicts, 20)}` : "",
           `**Sections**\n${sectionTitles(doc).map((t) => `- ${t}`).join("\n") || "(none)"}`,
           principalBlock(task),
+          adviceLine(task),
           `**File:** ${task.output ?? path.join(task.dir, `doc-${task.doc}.md`)}`,
         )
         const reply =
@@ -505,6 +538,7 @@ export function render(task: TaskState): string {
         `**Steps**\n${titles.length ? titles.join("\n") : `${task.planSteps} step(s); see the plan file.`}`,
         `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}`,
         principalBlock(task),
+        adviceLine(task),
         `**Plan file:** ${howDoc ?? path.join(task.dir, `plan-${task.plan}.md`)}`,
       )
       return join(

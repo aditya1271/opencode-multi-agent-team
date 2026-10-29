@@ -55,6 +55,7 @@
     "planFailures": 2,
     "principalAdvice": 1,
     "principalReviews": 2,   // reviews of a plan or document you can ask Principal for, per task
+    "escalateAfterComments": [3, 5],   // your comment rounds on one draft after which the next adviser up advises the writer
     "needInfoPerTask": 6,
     "questionsPerTask": 4,
     "toolCalls": { "lead": 40, "architect": 25, "intern": 30, "developer": 150, "reviewer": 30, "principal": 20 },
