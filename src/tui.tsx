@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js"
 import { compact, line, modelsText, TeamStats, type SidebarStats, type StatsRow } from "./rpc.ts"
+import { setupReview } from "./review.tsx"
 
 interface Prefs {
   expanded: boolean
@@ -53,6 +54,8 @@ export default Plugin.define({
       const directory = context.data.session.get(sessionID)?.location?.directory
       return directory ? { location: { directory } } : undefined
     }
+
+    const stopReview = setupReview(context, rpc, rootOf, rpcOptions, { ...color, accent: color.running })
 
     function TeamSection(props: { sessionID: string }) {
       const [stats, setStats] = createSignal<SidebarStats | undefined>()
@@ -197,6 +200,10 @@ export default Plugin.define({
     }
 
     // Built-in sections (Context, Limit, MCP, Todo) are appended first; at the bottom the section can end up off screen.
-    return context.ui.slot({ prepend: "sidebar.content", render: (input: { sessionID: string }) => <TeamSection sessionID={input.sessionID} /> })
+    const stopSlot = context.ui.slot({ prepend: "sidebar.content", render: (input: { sessionID: string }) => <TeamSection sessionID={input.sessionID} /> })
+    return () => {
+      stopSlot()
+      stopReview()
+    }
   },
 })

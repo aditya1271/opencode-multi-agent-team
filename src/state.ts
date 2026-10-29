@@ -15,7 +15,17 @@ export interface Walk {
   rest?: boolean
   /** Every section was gone through without comments: waits for the approval. */
   done?: boolean
+  /** The walk runs in a TUI dialog: comments and questions are collected there, as typed, and handled together at the end. */
+  dialog?: {
+    comments: { id: string; text: string }[]
+    questions: { id: string; text: string }[]
+    /** Unset while the dialog is open. */
+    end?: DialogEnd
+  }
 }
+
+/** How the user left the review dialog: went through every section, chose to see the rest at once, approved, or stopped. */
+export type DialogEnd = "done" | "rest" | "approve" | "stop"
 
 export type Mode =
   | "lead"

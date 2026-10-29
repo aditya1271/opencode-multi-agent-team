@@ -24,6 +24,23 @@ const total = {
   additionalProperties: false,
 } as const
 
+const sessionInput = {
+  type: "object",
+  properties: { sessionID: { type: "string" } },
+  required: ["sessionID"],
+  additionalProperties: false,
+} as const
+
+const notes = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: { id: { type: "string" }, text: { type: "string" } },
+    required: ["id", "text"],
+    additionalProperties: false,
+  },
+} as const
+
 /** Sidebar data: per-agent usage of the session's current task, and totals over the whole session. */
 export const TeamStats = Rpc.define({
   id: "multi-agent-team",
@@ -71,18 +88,91 @@ export const TeamStats = Rpc.define({
         additionalProperties: false,
       },
     },
-  },
-  events: {
-    changed: {
-      schema: {
+    /** A TUI takes the review the server offered (event "review"); no draft when another TUI took it first. */
+    reviewClaim: {
+      input: sessionInput,
+      output: {
         type: "object",
-        properties: { sessionID: { type: "string" } },
-        required: ["sessionID"],
+        properties: {
+          draft: {
+            type: "object",
+            properties: {
+              key: { type: "string" },
+              title: { type: "string" },
+              intro: { type: "string" },
+              ask: { type: "boolean" },
+              sections: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: { id: { type: "string" }, title: { type: "string" }, body: { type: "string" } },
+                  required: ["id", "title", "body"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["key", "title", "intro", "ask", "sections"],
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    /** The user's replies when they leave the review dialog. */
+    reviewDone: {
+      input: {
+        type: "object",
+        properties: {
+          sessionID: { type: "string" },
+          key: { type: "string" },
+          end: { type: "string", enum: ["done", "rest", "approve", "stop"] },
+          replies: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { id: { type: "string" }, verdict: { type: "string", enum: ["ok", "skip"] } },
+              required: ["id", "verdict"],
+              additionalProperties: false,
+            },
+          },
+          comments: notes,
+          questions: notes,
+        },
+        required: ["sessionID", "key", "end", "replies", "comments", "questions"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
         additionalProperties: false,
       },
     },
   },
+  events: {
+    changed: { schema: sessionInput },
+    /** A draft waits for review in this session: a TUI showing it may claim it. */
+    review: { schema: sessionInput },
+  },
 })
+
+export interface ReviewDraft {
+  key: string
+  title: string
+  intro: string
+  /** Ask the review style first (config reviewStyle "ask"). */
+  ask: boolean
+  sections: { id: string; title: string; body: string }[]
+}
+
+export interface ReviewReply {
+  sessionID: string
+  key: string
+  end: "done" | "rest" | "approve" | "stop"
+  replies: { id: string; verdict: "ok" | "skip" }[]
+  comments: { id: string; text: string }[]
+  questions: { id: string; text: string }[]
+}
 
 export interface StatsRow {
   role: string

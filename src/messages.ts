@@ -576,6 +576,8 @@ export function walkable(task: TaskState): string[] {
 /** A brief, document or plan waiting on the user: the walk-through, or the whole draft with the review style. */
 function reviewView(task: TaskState): string {
   const w = task.walk?.key === task.sections?.key ? task.walk : undefined
+  if (w?.dialog && !w.dialog.end) return DIALOG_OPEN
+  if (w?.dialog && w.dialog.end !== "rest") return dialogView(task, w)
   if (w && !w.rest && !w.done && w.at < w.ids.length) return walkSection(task, w)
   if (w?.done) {
     const { text, idx, under } = reviewDraft(task)
@@ -595,22 +597,82 @@ function reviewView(task: TaskState): string {
   if (w?.rest) {
     const kept = w.replies.filter((r) => r.verdict === "finetune" || r.verdict === "revise").map((r) => `${r.id} (${r.verdict === "finetune" ? "fine-tune" : "revise"})`)
     const ok = w.replies.filter((r) => r.verdict === "ok").map((r) => r.id)
+    const d = w.dialog
     return join(
       full,
       kept.length || ok.length
         ? `From the walk-through: ${[ok.length && `ok ${idRanges(ok)}`, kept.length && `comments on ${kept.join(", ")}`].filter(Boolean).join("; ")}. They are kept and sent with the user's next comments ("change"); approving drops the comments.`
         : "",
+      d?.questions.length ? `The user's questions from the review dialog (as typed):\n${notesList(task, d.questions)}\nAfter showing the draft, call team "ask" once with all of them, each starting with its section id, and show the answers.` : "",
+      d?.comments.length
+        ? `The user's comments from the review dialog (as typed):\n${notesList(task, d.comments)}\nThey go with the user's next comments: polish both together into the one "change" (finetune = sections where the user states the exact edit, revise = the others). Approving drops them.`
+        : "",
     )
   }
+  return styleView(task) || full
+}
+
+/** The review-style question shown before a draft (or the direct start with reviewStyle "sections"); empty when the whole draft shows at once. */
+export function styleView(task: TaskState): string {
   const style = task.reviewStyle ?? "ask"
-  if (style === "all" || !walkable(task).length) return full
+  const n = walkable(task).length
+  if (style === "all" || !n) return ""
   // The draft itself comes with the next call, so the review style is always chosen first.
   if (style === "sections") return 'REVIEW ONE SECTION AT A TIME (config reviewStyle). NEXT ACTION: call team "section" with verdict "start" right away.'
-  const n = walkable(task).length
   return join(
     `${draftTitle(task)} ready: ${n} section${n > 1 ? "s" : ""} to review.`,
     'NEXT ACTION: tell the user in one line, then ask with the question tool how to review it: [All at once] [One section at a time]. All at once → team "section" with verdict "rest". One section at a time → team "section" with verdict "start". Follow the NEXT ACTION of that result.',
   )
+}
+
+export const DIALOG_OPEN =
+  'REVIEW OPEN IN THE TERMINAL: the user reviews the draft in a dialog, one section at a time. You are woken when they finish.\nNEXT ACTION: tell the user in one line that the review is open in the dialog, then end your turn. Call no tool.'
+
+const notesList = (task: TaskState, notes: { id: string; text: string }[]) => {
+  const idx = task.sections
+  return notes.map((n) => `- ${n.id} ${idx ? shownTitle(idx.titles[idx.ids.indexOf(n.id)] ?? "").replace(/^#+\s*/, "") : ""}: ${n.text}`).join("\n")
+}
+
+/** What the manager does after the review dialog: answer the questions, then polish and send the comments. */
+export function dialogView(task: TaskState, w: NonNullable<TaskState["walk"]>): string {
+  const d = w.dialog!
+  if (d.end === "stop") return 'The user chose Stop in the review dialog.\nNEXT ACTION: call team with action "stop".'
+  if (d.end === "approve") return `The user went through every section of the ${draftTitle(task).toLowerCase()} and approved it in the review dialog.\nNEXT ACTION: call team with action "approve".`
+  const ok = w.replies.filter((r) => r.verdict === "ok").map((r) => r.id)
+  const skipped = w.replies.filter((r) => r.verdict === "skip").map((r) => r.id)
+  const steps: string[] = []
+  if (d.questions.length) steps.push('call team "ask" once with all the questions, each starting with its section id; show the answers')
+  if (d.comments.length)
+    steps.push(
+      'polish the comments (one paragraph per section, keeping the user\'s meaning) and confirm them [Send] [Edit] [Cancel]; then call team "change" with text = the confirmed comments, finetune = sections where the user states the exact edit, revise = the others (when unsure, revise). If the answers settle a comment, the user may drop it at [Edit]',
+    )
+  else
+    steps.push(
+      'ask the user with the question tool: [Approve] [Comment] [Show it all at once]. Approve → team "approve". Comment → take the comment as free text, polish and confirm [Send] [Edit] [Cancel], then team "change". Show it all at once → team "section" with verdict "rest"',
+    )
+  return join(
+    `REVIEW DIALOG FINISHED: ${draftTitle(task)}. ${[ok.length && `ok ${idRanges(ok)}`, skipped.length && `skipped ${idRanges(skipped)}`].filter(Boolean).join("; ") || "No section marked ok"}.`,
+    d.questions.length ? `Questions (as typed):\n${notesList(task, d.questions)}` : "",
+    d.comments.length ? `Comments (as typed):\n${notesList(task, d.comments)}` : "",
+    `NEXT ACTION: ${steps.map((s, i) => (steps.length > 1 ? `${i + 1}. ${s}.` : `${s}.`)).join(" ")}`,
+  )
+}
+
+/** The draft's sections for the review dialog, and what shows above the first one. */
+export function dialogData(task: TaskState): { title: string; intro: string; ask: boolean; sections: { id: string; title: string; body: string }[] } {
+  const { text, idx } = reviewDraft(task)
+  const all = split(text).sections
+  const sections = walkable(task).map((id) => {
+    const s = all[idx?.ids.indexOf(id) ?? -1]
+    return { id, title: s ? shownTitle(s.title).replace(/^#+\s*/, "") : "?", body: s ? s.text.split("\n").slice(1).join("\n").trim() : "(section not found; see the file)" }
+  })
+  const intro = join(
+    task.phase === "approval" && !draftIsDoc(task) ? `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}` : "",
+    changeLine(task, false),
+    principalBlock(task),
+    adviceLine(task),
+  )
+  return { title: draftTitle(task), intro, ask: (task.reviewStyle ?? "ask") === "ask", sections }
 }
 
 /** "Concept brief", "What-document (version 2)", "Plan (plan 3)". */

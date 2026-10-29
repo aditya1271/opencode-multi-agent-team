@@ -149,6 +149,13 @@ To update later, run `git pull` in the clone and restart OpenCode.
   to the team as one scoped revision; when you passed every section, the manager asks once
   to approve. A brief's excerpts aren't walked through, only listed. Set `"reviewStyle"` to
   `"all"` or `"sections"` to skip the question; auto modes skip the review altogether.
+  In the terminal UI the review opens in a dialog instead, with no model turn between
+  sections: [o] OK, [s] Skip, [c] Comment…, [q] Question…, [r] Show the rest, [x] Stop
+  (Esc = show the rest). Comments and questions are collected as typed. When you leave the
+  dialog, the manager wakes once: the agent answers your questions, then the manager polishes
+  your comments and confirms them once before the scoped revision. Pass every section
+  without comments and the dialog asks [Approve] [Show it all at once] itself. The desktop
+  and web apps, and `opencode run`, use the chat walk-through.
 - **Modes:** from fully interactive to hands-off; see [Modes](#modes).
 
 ### Modes

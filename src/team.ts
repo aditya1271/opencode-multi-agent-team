@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, walkable } from "./messages.ts"
+import { buildPrompt, checksText, dialogData, DIALOG_OPEN, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
 import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
 import { EditedFilesTrack, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
@@ -34,7 +34,18 @@ import {
   type Pending,
   type Phase,
   type TaskState,
+  type DialogEnd,
+  type Walk,
 } from "./state.ts"
+
+/** What the TUI review dialog sends back when the user leaves it. */
+export interface DialogReply {
+  key: string
+  end: DialogEnd
+  replies: Walk["replies"]
+  comments: { id: string; text: string }[]
+  questions: { id: string; text: string }[]
+}
 /** A NEED_INFO report's queries: content plus any questions list (models put queries in either). */
 const queries = (r: Report) => join(r.content, (r.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"))
 
@@ -141,6 +152,8 @@ export class Team {
   private questions = new Map<string, { count: number; usage: Partial<Record<Role, AgentUsage>> }>()
   /** Called when a session's numbers change (the sidebar refreshes). */
   onChange: (managerSession: string) => void = () => {}
+  /** Asks a TUI showing the session to open the review dialog; true when one took it. Unset: chat only. */
+  offerDialog?: (managerSession: string) => Promise<boolean>
 
   constructor(
     private ctx: Context,
@@ -149,6 +162,47 @@ export class Team {
   ) {
     this.root = expandHome(config.taskDir)
     setOnWrite((task, file, before) => this.trackEdit(task.managerSession, [{ path: file, before }]))
+  }
+
+  // ---- review dialog (TUI) ----
+
+  /** When a result asks for the review style, offers the draft to a TUI dialog instead; the chat walk-through stays the fallback. */
+  async withDialog(managerSession: string, content: string): Promise<string> {
+    const task = this.task(managerSession)
+    if (!task || !this.offerDialog || !task.sections || (task.phase !== "brief" && task.phase !== "approval") || autoDecides(task)) return content
+    if (task.walk?.key === task.sections.key) return content
+    const style = styleView(task)
+    if (!style || !content.includes(style)) return content
+    if (!(await this.offerDialog(managerSession))) return content
+    task.walk = { key: task.sections.key, ids: walkable(task), at: 0, replies: [], dialog: { comments: [], questions: [] } }
+    task.askedAt = Date.now()
+    save(task)
+    return content.replace(style, DIALOG_OPEN)
+  }
+
+  /** The draft for the dialog that took the review. */
+  dialog(managerSession: string): ({ key: string } & ReturnType<typeof dialogData>) | undefined {
+    const task = this.task(managerSession)
+    const w = task?.walk
+    if (!task || !w?.dialog || w.dialog.end || w.key !== task.sections?.key) return undefined
+    return { key: w.key, ...dialogData(task) }
+  }
+
+  /** The user's replies from the dialog: stored on the walk, then the manager is woken once to act on them. */
+  dialogDone(managerSession: string, input: DialogReply): string | undefined {
+    const task = this.task(managerSession)
+    const w = task?.walk
+    if (!task || !w?.dialog || w.dialog.end || w.key !== input.key || w.key !== task.sections?.key) return undefined
+    const known = new Set(w.ids)
+    const keep = <T extends { id: string }>(list: T[]) => list.filter((r) => known.has(r.id))
+    w.replies = keep(input.replies)
+    w.dialog = { comments: keep(input.comments).filter((c) => c.text.trim()), questions: keep(input.questions).filter((q) => q.text.trim()), end: input.end }
+    w.at = w.replies.length
+    if (input.end === "rest") w.rest = true
+    task.askedAt = Date.now()
+    save(task)
+    this.onChange(managerSession)
+    return render(task)
   }
 
   // ---- sidebar ----
@@ -640,6 +694,8 @@ export class Team {
     if (res.sessionID) task.sessions[role] = res.sessionID
     const answer = res.report?.content ?? `${role} couldn't answer: ${res.failure ?? res.end}.`
     appendFile(task, answersName(task), `## User question\n\n${note}\n\n## ${role} answered\n\n${answer}\n`)
+    // The review dialog's questions were asked together in this call.
+    if (task.walk?.dialog?.end) task.walk.dialog.questions = []
     task.askedAt = Date.now()
     save(task)
     this.onChange(task.managerSession)

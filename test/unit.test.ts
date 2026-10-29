@@ -8,7 +8,7 @@ import { beginRun, runs } from "../src/runtime.ts"
 import { appendFile, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
-import { buildPrompt, render, stepTitles } from "../src/messages.ts"
+import { buildPrompt, join, render, stepTitles } from "../src/messages.ts"
 import { annotate, checkEdits, idRanges, indexOf, splice, split } from "../src/sections.ts"
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -726,6 +726,75 @@ describe("plan and research workflows", () => {
       expect(whole).not.toContain("From the walk-through")
       t.auto = "safe"
       expect(render(t)).not.toContain('verdict "start"')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("review dialog: a TUI takes the review; replies come back once; questions, then comments, then one change", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_d", signal)
+      const t = team.task("ses_d")
+      t.reviewStyle = "ask"
+      const brief =
+        "## Concept brief\n\n### Concerns\n\n#### 1. Scope\n\npost-edit only\n\n**Recommended:** as written\n\n#### 2. Glossary\n\ntwo passes\n\n**Recommended:** as written\n\n## Excerpts\n\nE"
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: brief }), {})
+      save(t)
+      const style = render(t)
+
+      // No TUI: the chat question stays.
+      expect(await team.withDialog("ses_d", style)).toBe(style)
+      team.offerDialog = async () => false
+      expect(await team.withDialog("ses_d", style)).toBe(style)
+      expect(t.walk).toBeUndefined()
+
+      // A TUI takes it: the manager only says so; the dialog gets the sections and the intro.
+      team.offerDialog = async () => true
+      const open = await team.withDialog("ses_d", join("Saved.", style))
+      expect(open).toContain("Saved.")
+      expect(open).toContain("REVIEW OPEN IN THE TERMINAL")
+      expect(open).not.toContain("[All at once]")
+      expect(render(t)).toContain("REVIEW OPEN IN THE TERMINAL")
+      const draft = team.dialog("ses_d")!
+      expect(draft.ask).toBe(true)
+      expect(draft.title).toBe("Concept brief")
+      expect(draft.sections.map((s) => [s.id, s.title])).toEqual([["S3", "1. Scope"], ["S4", "2. Glossary"]])
+      expect(draft.sections[0].body).toBe("post-edit only\n\n**Recommended:** as written")
+      // Already open: not offered twice.
+      expect(await team.withDialog("ses_d", style)).toBe(style)
+
+      // A stale draft is refused; the replies come back with a question and a comment.
+      const reply = { key: draft.key, end: "done" as const, replies: [{ id: "S3", verdict: "ok" as const }], comments: [{ id: "S4", text: "add linking" }], questions: [{ id: "S3", text: "why post-edit?" }] }
+      expect(team.dialogDone("ses_d", { ...reply, key: "old" })).toBeUndefined()
+      const wake = team.dialogDone("ses_d", reply)!
+      expect(wake).toContain("REVIEW DIALOG FINISHED: Concept brief. ok S3.")
+      expect(wake).toContain("- S3 1. Scope: why post-edit?")
+      expect(wake).toContain("- S4 2. Glossary: add linking")
+      expect(wake).toContain('1. call team "ask" once')
+      expect(wake).toContain('2. polish the comments')
+      expect(team.dialog("ses_d")).toBeUndefined()
+      expect(team.dialogDone("ses_d", reply)).toBeUndefined()
+
+      // Once asked, only the comments are left; the change keeps the ok as final.
+      t.walk.dialog.questions = []
+      expect(render(t)).not.toContain('call team "ask"')
+      expect(render(t)).toContain("polish the comments")
+      await team.handle({ action: "change", text: "S4: add entity linking", revise: ["S4"] }, "ses_d", signal)
+      expect([t.sections.final, t.walk, t.scope?.revise]).toEqual([["S3"], undefined, ["S4"]])
+
+      // Other ends: approve, stop, and show the rest (the comments go with the next change).
+      const again = () => {
+        t.phase = "brief"
+        t.walk = { key: t.sections.key, ids: ["S3", "S4"], at: 0, replies: [], dialog: { comments: [], questions: [] } }
+        return t.sections.key
+      }
+      expect(team.dialogDone("ses_d", { key: again(), end: "approve", replies: [], comments: [], questions: [] })).toContain('call team with action "approve"')
+      expect(team.dialogDone("ses_d", { key: again(), end: "stop", replies: [], comments: [], questions: [] })).toContain('call team with action "stop"')
+      const rest = team.dialogDone("ses_d", { key: again(), end: "rest", replies: [], comments: [{ id: "S4", text: "shorter" }], questions: [] })!
+      expect(rest).toContain("#### 2. Glossary [S4]")
+      expect(rest).toContain("- S4 2. Glossary: shorter")
+      expect(rest).toContain("They go with the user's next comments")
     } finally {
       cleanup()
     }
