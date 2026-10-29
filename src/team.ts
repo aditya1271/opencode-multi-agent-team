@@ -13,6 +13,7 @@ import {
   answersName,
   appendFile,
   autoDecides,
+  type AutoLevel,
   briefName,
   draftIsDoc,
   findTask,
@@ -39,6 +40,18 @@ import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, t
 export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
 
+export type TeamMode = "off" | AutoLevel
+
+/** The /team-mode-* slash commands: pick a mode without remembering what to say. */
+export const MODE_COMMANDS: { name: string; mode: TeamMode; description: string }[] = [
+  { name: "team-mode-default", mode: "off", description: "Team mode: confirm every polished message and make every decision yourself" },
+  { name: "team-mode-polished", mode: "polished", description: "Team mode: polished messages are sent without [Send] [Edit] [Cancel]; you still decide" },
+  { name: "team-mode-safe", mode: "safe", description: "Team mode: the team also answers questions and approves; stops at destructive plans and before implementing" },
+  { name: "team-mode-full", mode: "full", description: "Team mode: the team decides everything, approves destructive plans and implements; stops only when stuck" },
+]
+
+export const modeName = (mode: TeamMode) => (mode === "off" ? "default" : `${mode} auto`)
+
 export interface TeamInput {
   action: TeamAction
   text?: string
@@ -49,7 +62,7 @@ export interface TeamInput {
   output?: string
   review?: boolean
   /** start and auto: auto mode (off = interactive). */
-  auto?: "off" | "polished" | "safe" | "full"
+  auto?: TeamMode
   /** change only: the revision scope, by section id (add: titles of new sections). */
   finetune?: string[]
   revise?: string[]
@@ -110,6 +123,8 @@ const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = {
 export class Team {
   readonly root: string
   private tasks = new Map<string, TaskState>()
+  /** The mode chosen with a /team-mode-* command, per chat session: used by the session's next tasks. */
+  private sessionModes = new Map<string, TeamMode>()
   /** Task folders per manager session, built on first use. */
   private sessionDirs?: Map<string, string[]>
   /** Code questions per manager session (they have no task folder). */
@@ -278,6 +293,34 @@ export class Team {
         return this.step(task, signal)
     }
     return render(task)
+  }
+
+  /**
+   * A /team-mode-* command: sets the mode for the chat session's new tasks and for its open task.
+   * resume: the open task waits on the user at a stop the new mode decides, so the manager should continue it.
+   */
+  async setMode(sessionID: string, mode: TeamMode): Promise<{ text: string; resume: boolean }> {
+    this.sessionModes.set(sessionID, mode)
+    try {
+      // Tells the manager, so it polishes (or sends) the next request in this mode and passes it to start.
+      await this.ctx.session.instructions.entry.put({
+        sessionID,
+        key: "team-mode" as never,
+        value: {
+          mode: modeName(mode),
+          rule: `The user chose ${modeName(mode)} with /team-${mode === "off" ? "mode-default" : `mode-${mode}`} for this chat. It overrides the project's default mode: call start with auto = "${mode}" unless the request names another mode. See **Modes**.`,
+        },
+      })
+    } catch (e) {
+      this.log(`team-mode: could not set the session instruction: ${(e as Error).message}`)
+    }
+    const task = this.task(sessionID)
+    if (!task || TERMINAL.includes(task.phase)) return { text: `Team mode: **${modeName(mode)}** for new tasks in this chat.`, resume: false }
+    task.auto = mode === "off" ? undefined : mode
+    save(task)
+    this.onChange(sessionID)
+    this.log(`task ${task.id}: mode ${modeName(mode)} (command)`)
+    return { text: `Team mode: **${modeName(mode)}** for the open task and new tasks in this chat.`, resume: autoDecides(task) }
   }
 
   private async approve(task: TaskState, signal: AbortSignal): Promise<string> {
@@ -458,7 +501,7 @@ export class Team {
     const task = newTask(this.root, managerSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)
     if (opts.plan === true) task.forcePlan = true
     if (opts.review === true) task.reviewFirst = true
-    const auto = opts.auto ?? this.config.auto
+    const auto = opts.auto ?? this.sessionModes.get(managerSession) ?? this.config.auto
     if (auto === "polished" || auto === "safe" || auto === "full") task.auto = auto
     const workflow = WORKFLOWS.includes(opts.workflow as Workflow) ? opts.workflow : "code"
     if (workflow !== "code") {

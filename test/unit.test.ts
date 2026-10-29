@@ -6,7 +6,7 @@ import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, runs } from "../src/runtime.ts"
 import { appendFile, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
-import { Team } from "../src/team.ts"
+import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, render, stepTitles } from "../src/messages.ts"
 import { annotate, checkEdits, idRanges, indexOf, splice, split } from "../src/sections.ts"
@@ -317,6 +317,24 @@ describe("plan and research workflows", () => {
       expect(render(t)).not.toContain("AUTO-SEND")
       expect(managerPrompt(merge(DEFAULTS, { auto: "polished" }), "code")).toContain("default mode is **polished auto**")
       expect(managerPrompt(DEFAULTS, "code")).not.toContain("default mode is")
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("/team-mode-* commands set the session's mode for new tasks and the open task", async () => {
+    const { team, cleanup } = setup()
+    try {
+      expect(await team.setMode("ses_m", "polished")).toEqual({ text: "Team mode: **polished auto** for new tasks in this chat.", resume: false })
+      await team.handle({ action: "start", text: "design the cache", workflow: "plan" }, "ses_m", signal)
+      const t = team.task("ses_m")
+      expect(t.auto).toBe("polished")
+      team.apply(t, { mode: "lead" }, report("QUESTIONS", { questions: ["LRU or LFU?"] }), {})
+      expect(await team.setMode("ses_m", "safe")).toEqual({ text: "Team mode: **safe auto** for the open task and new tasks in this chat.", resume: true })
+      expect(t.auto).toBe("safe")
+      expect((await team.setMode("ses_m", "off")).resume).toBe(false)
+      expect(t.auto).toBeUndefined()
+      expect(MODE_COMMANDS.map((c) => c.name)).toEqual(["team-mode-default", "team-mode-polished", "team-mode-safe", "team-mode-full"])
     } finally {
       cleanup()
     }

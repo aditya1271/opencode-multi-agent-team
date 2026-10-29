@@ -172,12 +172,18 @@ budget runs out; they never raise the budget. Each automatic decision shows as o
 listed under **Decided on auto** when the task ends or stops.
 
 **Choosing a mode:**
+- **Slash command (easiest):** type `/team-mode` in the chat and pick one of the four:
+  `/team-mode-default`, `/team-mode-polished`, `/team-mode-safe`, `/team-mode-full`. It
+  applies to the open task right away (if the team is waiting on you at a stop the new mode
+  decides, it carries on by itself) and to every new task in that chat. The plugin sets the
+  mode itself; a `[team-mode]` line in the chat confirms it.
 - **Per request:** say it with the request ("full auto: add a --upper flag"). The polished
   request ends with a `Mode: …` line.
 - **During a task:** "polished auto", "go auto", "full auto", or "stop auto" (back to default).
   It takes effect right away, including while the team waits on you.
 - **Default for new tasks:** `"auto"` in the team's config: `"off"` (default), `"polished"`,
-  `"safe"` or `"full"`.
+  `"safe"` or `"full"`. A slash command overrides it for that chat; a mode named in a request
+  overrides both for that task.
 
 `"polish": "off"` is separate: the manager doesn't rewrite your text at all and sends it as
 written, with no confirmation, in any mode.

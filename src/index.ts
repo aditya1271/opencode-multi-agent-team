@@ -9,7 +9,7 @@ import { registerGuards } from "./guards.ts"
 import { acceptReport, REPORT_DESCRIPTION, REPORT_INPUT } from "./report.ts"
 import { TeamStats } from "./rpc.ts"
 import type { Report } from "./runtime.ts"
-import { Team, TEAM_DESCRIPTION, TEAM_SCHEMA, type TeamInput } from "./team.ts"
+import { MODE_COMMANDS, Team, TEAM_DESCRIPTION, TEAM_SCHEMA, type TeamInput } from "./team.ts"
 
 export default Plugin.define({
   id: "opencode-multi-agent-team",
@@ -77,6 +77,27 @@ export default Plugin.define({
           return { content: reply }
         },
       })
+    })
+
+    await ctx.command.transform((editor) => {
+      for (const { name, mode, description } of MODE_COMMANDS)
+        editor.add({
+          name,
+          description,
+          execute: async ({ sessionID }) => {
+            try {
+              const { text, resume } = await team.setMode(sessionID, mode)
+              if (resume)
+                await ctx.session.prompt({
+                  sessionID,
+                  text: `[team-mode] ${text} The team waits at a stop this mode decides: call team with action "continue".`,
+                })
+              else await ctx.session.synthetic({ sessionID, text: `[team-mode] ${text}` })
+            } catch (e) {
+              log(`team-mode error: ${(e as Error).stack ?? String(e)}`)
+            }
+          },
+        })
     })
 
     const stats = await ctx.rpc.register(TeamStats, {

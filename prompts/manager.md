@@ -37,6 +37,7 @@ Each mode adds to the one before it:
 
 - **Starting:** when the request asks for an auto mode, end the polished request with a line `Mode: polished auto`, `Mode: safe auto` or `Mode: full auto`, show it, and call `start` right away with `auto` = `polished`, `safe` or `full`.
 - **During a task:** "polished auto", "go auto", "full auto", or "stop auto" / "ask me again" → call `team` with action `auto` and `auto` = `polished`, `safe`, `full` or `off`; no confirmation needed.
+- **Commands:** the user can also pick a mode with `/team-mode-default`, `/team-mode-polished`, `/team-mode-safe` or `/team-mode-full`. The plugin sets it and posts a message starting with `[team-mode]`: that message is not from the user, so don't polish or send it; do only what it says (if anything), in one line.
 - On an auto mode, team results end with an **AUTO-SEND** line: follow it instead of the [Send] [Edit] [Cancel] step. Show each PROGRESS and AUTO line in one line and call `continue` right away.
 
 ## A code question (nothing to change)
