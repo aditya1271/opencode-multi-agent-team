@@ -3,7 +3,7 @@ import path from "node:path"
 import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
 import { needInfoLimit } from "./report.ts"
-import { annotate, ensureIndex, idRanges, shownTitle, split, walkIds, type SectionIndex } from "./sections.ts"
+import { annotate, ensureIndex, idRanges, missingSummaries, oneLine, sectionBody, shortView, shownTitle, split, userView, walkIds, type Section, type SectionIndex } from "./sections.ts"
 import { answerFiles, answersName, autoDecides, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
 import { report as usageReport } from "./usage.ts"
 
@@ -108,7 +108,10 @@ function idList(task: TaskState, text: string, steps: boolean): string {
   const lines = split(text)
     .sections.map((s, i) => ({ s, id: idx.ids[i]! }))
     .filter(({ s }) => s.step === steps)
-    .map(({ s, id }) => `- ${id} ${s.title}${idx.final.includes(id) ? " ✅" : ""}`)
+    .map(({ s, id }) => {
+      const line = oneLine(s)
+      return `- ${id} ${s.title}${idx.final.includes(id) ? " ✅" : ""}${line ? `: ${line}` : ""}`
+    })
   return clip(lines.join("\n"), 40)
 }
 
@@ -533,8 +536,10 @@ export const howOutput = (output: string) => {
 
 // ---- what the manager gets back ----
 
-const REPLY_ROUTES =
-  'a clear approval ("approve", "go ahead") → team "approve"; a clear stop → team "stop"; feedback, requests for changes or more work → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask"; a request for a (critical) review → team "review", with what the review should look at as text if they said.'
+const DETAILS_ROUTE =
+  'a request for details, the full text or "more" (of the whole draft or of sections) → team "details", with ids = the section ids if they named some (no confirmation; no agent runs)'
+
+const REPLY_ROUTES = `a clear approval ("approve", "go ahead") → team "approve"; a clear stop → team "stop"; feedback, requests for changes or more work → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask"; ${DETAILS_ROUTE}; a request for a (critical) review → team "review", with what the review should look at as text if they said.`
 
 /** Principal's review shown at approval, marked when the plan or document was revised after it. */
 function adviceLine(task: TaskState): string {
@@ -558,7 +563,7 @@ export function render(task: TaskState): string {
 }
 
 const SECTION_ROUTES =
-  'Then act on the reply: "ok", "fine", "looks good" → team "section" with verdict "ok" (no confirmation); "skip" → verdict "skip"; a comment → polish it and confirm [Send] [Edit] [Cancel], then team "section" with verdict "finetune" (the user states the exact edit; give it in text) or "revise" (unhappy with the substance; when unsure, revise) and text = the confirmed comment; a question → polish and confirm, then team "ask" (the same section comes back after the answer); "show the rest" or "all at once" → verdict "rest"; a clear stop → team "stop".'
+  'Then act on the reply: "ok", "fine", "looks good" → team "section" with verdict "ok" (no confirmation); "skip" → verdict "skip"; a comment → polish it and confirm [Send] [Edit] [Cancel], then team "section" with verdict "finetune" (the user states the exact edit; give it in text) or "revise" (unhappy with the substance; when unsure, revise) and text = the confirmed comment; a question → polish and confirm, then team "ask" (the same section comes back after the answer); "details" or "more" → team "details" with ids = [the id of this section] (the same section stays open); "show the rest" or "all at once" → verdict "rest"; a clear stop → team "stop".'
 
 /** The draft the user reviews now: the brief, or the latest document or plan. */
 function reviewDraft(task: TaskState): { text: string; idx?: SectionIndex; under?: string } {
@@ -659,12 +664,13 @@ export function dialogView(task: TaskState, w: NonNullable<TaskState["walk"]>): 
 }
 
 /** The draft's sections for the review dialog, and what shows above the first one. */
-export function dialogData(task: TaskState): { title: string; intro: string; ask: boolean; sections: { id: string; title: string; body: string }[] } {
+export function dialogData(task: TaskState): { title: string; intro: string; ask: boolean; sections: { id: string; title: string; summary?: string; body: string }[] } {
   const { text, idx } = reviewDraft(task)
   const all = split(text).sections
   const sections = walkable(task).map((id) => {
     const s = all[idx?.ids.indexOf(id) ?? -1]
-    return { id, title: s ? shownTitle(s.title).replace(/^#+\s*/, "") : "?", body: s ? s.text.split("\n").slice(1).join("\n").trim() : "(section not found; see the file)" }
+    if (!s) return { id, title: "?", body: "(section not found; see the file)" }
+    return { id, title: shownTitle(s.title).replace(/^#+\s*/, ""), summary: userView(s), body: fullBody(s) }
   })
   const intro = join(
     task.phase === "approval" && !draftIsDoc(task) ? `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}` : "",
@@ -673,6 +679,34 @@ export function dialogData(task: TaskState): { title: string; intro: string; ask
     adviceLine(task),
   )
   return { title: draftTitle(task), intro, ask: (task.reviewStyle ?? "ask") === "ask", sections }
+}
+
+/** A section's full text under its title (a step: its purpose, then the details). */
+const fullBody = (s: Section) => (s.step ? join(userView(s), sectionBody(s)) : sectionBody(s))
+
+/** The stored full text of the waiting draft, or of some of its sections: no agent runs. */
+export function detailsView(task: TaskState, ids: string[] = []): string {
+  if (task.phase !== "brief" && task.phase !== "approval") return join('"details" applies only while a brief, document or plan waits on the user.', render(task))
+  const { text, idx } = reviewDraft(task)
+  const want = [...new Set(ids.map((x) => x.trim().toUpperCase()).filter(Boolean))]
+  const unknown = want.filter((id) => !idx?.ids.includes(id))
+  if (unknown.length) return `No section ${unknown.join(", ")} in the waiting draft. Its sections: ${idx ? idRanges(idx.ids) : "(none)"}.\nNEXT ACTION: call team "details" again with ids from that list, or without ids for the whole draft.`
+  const all = split(text).sections
+  const shown = want.length
+    ? want
+        .map((id) => {
+          const s = all[idx!.ids.indexOf(id)]!
+          return join(`**${id} · ${shownTitle(s.title).replace(/^#+\s*/, "")}**`, fullBody(s))
+        })
+        .join("\n\n")
+    : idx
+      ? annotate(text, idx)
+      : text
+  return join(
+    `FULL TEXT of the ${draftTitle(task).toLowerCase()}${want.length ? `, ${want.join(", ")}` : ""} (from the stored draft; no agent ran). Show this block to the user exactly as written:`,
+    `<show>\n${shown}\n</show>`,
+    "NEXT ACTION: show the block above. The draft still waits on the user: end with the same reply line as before (the section under review stays open) and act on their reply as the previous result said.",
+  )
 }
 
 /** "Concept brief", "What-document (version 2)", "Plan (plan 3)". */
@@ -695,12 +729,13 @@ function walkSection(task: TaskState, w: NonNullable<TaskState["walk"]>): string
         adviceLine(task),
       )
     : ""
-  const body = s ? s.text.split("\n").slice(1).join("\n").trim() : "(section not found; see the file)"
+  const short = s && userView(s)
+  const body = s ? (short ?? sectionBody(s)) : "(section not found; see the file)"
   const block = join(head, `**${draftTitle(task)}, ${id} · ${s ? shownTitle(s.title).replace(/^#+\s*/, "") : "?"}** (${w.at + 1} of ${w.ids.length})`, body)
   return join(
     `SECTION ${w.at + 1} OF ${w.ids.length}. Show this block to the user exactly as written, without rewording or shortening it:`,
     `<show>\n${block}\n</show>`,
-    `NEXT ACTION: show the block above and end with one line: "Reply ok, comment on it, ask about it, skip it, or say show the rest." No buttons. ${SECTION_ROUTES}`,
+    `NEXT ACTION: show the block above and end with one line: "Reply ok, comment on it, ask about it${short ? ", ask for details" : ""}, skip it, or say show the rest." No buttons. ${SECTION_ROUTES}`,
   )
 }
 
@@ -743,13 +778,13 @@ function renderPhase(task: TaskState): string {
       const research = task.workflow === "research"
       const raw = readTaskFile(task, "brief.md")
       const idx = sectionIndex(task, "brief")
-      const brief = idx ? annotate(raw, idx) : raw
+      const brief = shortView(idx ? annotate(raw, idx) : raw, research ? "Research brief" : "Concept brief")
       const title = research ? `**Research brief** (${task.depth ?? "?"} research)` : "**Concept brief**"
       const shown = research ? researchBrief(brief) : section(brief, "Concept brief") || brief
       return join(
         `${research ? "RESEARCH" : "CONCEPT"} BRIEF ready. Show this block to the user exactly as written:`,
         `<show>\n${join(title, shown, changeLine(task), adviceLine(task))}\n</show>`,
-        `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask".`,
+        `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, ask for details, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask"; ${DETAILS_ROUTE}.`,
         idx && SCOPE_RULE,
       )
     }
@@ -759,9 +794,11 @@ function renderPhase(task: TaskState): string {
       if (draftIsDoc(task)) {
         const doc = readTaskFile(task, `doc-${task.doc}.md`)
         const research = task.workflow === "research"
-        const decisions = !research && section(doc, "Decisions")
-        const findings = research && section(doc, "Key findings")
-        const conflicts = research && section(doc, "Conflicts")
+        // With summaries, the section list carries each section's direction; the details are on request.
+        const long = missingSummaries(doc).length > 0
+        const decisions = long && !research && section(doc, "Decisions")
+        const findings = long && research && section(doc, "Key findings")
+        const conflicts = long && research && section(doc, "Conflicts")
         const block = join(
           `**${Name}** (version ${task.doc})`,
           `**What you get**\n${task.docSummary ?? "(no summary)"}`,
@@ -778,9 +815,9 @@ function renderPhase(task: TaskState): string {
         const reply =
           task.stage === "what"
             ? task.infeasible
-              ? "Reply with how to change the what-document, approve it as it is (the team plans again), stop, ask about it, or have Principal review it."
-              : "Reply to approve the behaviour (the team then plans the change), change or stop it, ask about it, or have Principal review it."
-            : "Reply to approve, change or stop it, ask about it, or have Principal review it."
+              ? "Reply with how to change the what-document, approve it as it is (the team plans again), stop, ask about it or for details, or have Principal review it."
+              : "Reply to approve the behaviour (the team then plans the change), change or stop it, ask about it or for details, or have Principal review it."
+            : "Reply to approve, change or stop it, ask about it or for details, or have Principal review it."
         return join(
           `${name.toUpperCase()} ready for the user. Show this block to the user exactly as written, without rewording or shortening it:`,
           `<show>\n${block}\n</show>`,
@@ -793,7 +830,7 @@ function renderPhase(task: TaskState): string {
       const steps = idList(task, planText, true)
       const titles = steps ? [steps] : stepTitles(planText)
       const others = idList(task, planText, false)
-      const behaviour = section(planText, "Behaviour")
+      const behaviour = (!others || missingSummaries(planText).length > 0) && section(planText, "Behaviour")
       const block = join(
         `**${howDoc ? `${Name} (plan ${task.plan})` : `Plan ${task.plan}`}**`,
         `**What you get**\n${task.planSummary ?? "(no summary)"}`,
@@ -811,7 +848,7 @@ function renderPhase(task: TaskState): string {
       return join(
         `PLAN ${task.plan} ready for approval. Show this block to the user exactly as written, without rewording or shortening it:`,
         `<show>\n${block}\n</show>`,
-        `NEXT ACTION: show the block above and end with one line: "${howDoc ? "Reply to approve (then you can implement it)" : "Reply to approve"}, change or stop the plan, ask about it, or have Principal review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+        `NEXT ACTION: show the block above and end with one line: "${howDoc ? "Reply to approve (then you can implement it)" : "Reply to approve"}, change or stop the plan, ask about it or for details, or have Principal review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
         task.sections && SCOPE_RULE,
       )
     }

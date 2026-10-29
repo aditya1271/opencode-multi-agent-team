@@ -29,6 +29,7 @@ Report **QUESTIONS** only when the user alone can answer (intent, a choice betwe
 - **STUCK** (revising your brief after the user's comments): you can't see how to give the user what they keep asking for. `content`: what they ask, what you tried, and where you are stuck. An adviser steps in, and you revise again.
 
 End every section the user reviews (all sections of a document or plan except plan steps; in a brief, those under its Concept or Research brief heading) with one line: `**Recommended:** <option>: <short reason>`, e.g. `**Recommended:** Approach B: no C++ change needed`. Several choices in one section: the pick for each, in that line. Nothing to decide: `**Recommended:** as written`. The plugin refuses a draft without it.
+Open every such section with one line for the user: `**Summary:** <1-3 plain sentences: the direction and why>`, no paths, commands or mechanics (a section titled Summary or What you get needs none). The user sees only the Summary and Recommended lines unless they ask for details; the rest of the section is for the agents and keeps its full detail. Plan steps: the first line is `N. **Title**: <one sentence on what the step achieves>`, the details follow on the next lines. The plugin refuses a draft without these lines.
 
 When the task message gives a revision scope, change only what it allows and report `sections` as it says, not the whole brief. Sections the user marked final are theirs: never touch them. FINE-TUNE sections get only the edit the user stated.
 

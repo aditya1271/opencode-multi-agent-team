@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, dialogData, DIALOG_OPEN, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
+import { buildPrompt, checksText, detailsView, dialogData, DIALOG_OPEN, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
 import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
 import { EditedFilesTrack, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
@@ -51,7 +51,7 @@ const queries = (r: Report) => join(r.content, (r.questions ?? []).map((q, i) =>
 
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
-export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status"] as const
+export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status", "details"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
 
 export type TeamMode = "off" | AutoLevel
@@ -85,6 +85,8 @@ export interface TeamInput {
   add?: string[]
   /** section only: the user's reply to the section shown (start begins the walk-through). */
   verdict?: "start" | "ok" | "skip" | "finetune" | "revise" | "rest"
+  /** details only: the sections to show in full (none: the whole draft). */
+  ids?: string[]
 }
 
 export const TEAM_DESCRIPTION = [
@@ -93,7 +95,8 @@ export const TEAM_DESCRIPTION = [
   "ask (text = a question; while a task is open, the agent it waits on answers),",
   "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), section (going through the waiting brief, document or plan one section at a time: verdict = start, ok, skip, finetune or revise with text = the confirmed comment, or rest to show the remaining sections at once), review (Principal critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
-  "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status.",
+  "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status,",
+  "details (the stored full text of the waiting brief, document or plan; ids = sections, none = all; no agent runs).",
   "Always follow the NEXT ACTION line of the result.",
 ].join(" ")
 
@@ -122,6 +125,7 @@ export const TEAM_SCHEMA = {
       enum: ["start", "ok", "skip", "finetune", "revise", "rest"],
       description: "section only: start the walk-through; ok, skip, finetune or revise (with text) the section shown; rest shows the remaining sections at once.",
     },
+    ids: { type: "array", items: { type: "string" }, description: "details only: ids of the sections to show in full (S3); none: the whole draft." },
   },
   required: ["action"],
   additionalProperties: false,
@@ -314,6 +318,8 @@ export class Team {
     switch (input.action) {
       case "status":
         return render(task)
+      case "details":
+        return detailsView(task, input.ids)
       case "continue":
         if (task.phase === "stopped")
           return `Task ${task.id} is stopped.\nNEXT ACTION: ask the user whether to resume it. Yes → call team with action "resume".`

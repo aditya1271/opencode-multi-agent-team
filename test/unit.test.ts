@@ -9,7 +9,7 @@ import { appendFile, loadTask, migrateNames, newTask, save, taskId, WORKFLOWS } 
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, join, render, stepTitles } from "../src/messages.ts"
-import { annotate, checkEdits, idRanges, indexOf, splice, split } from "../src/sections.ts"
+import { annotate, checkEdits, idRanges, indexOf, missingSummaries, shortView, splice, split, userView } from "../src/sections.ts"
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -284,6 +284,25 @@ describe("sections", () => {
     const next = indexOf("## A\n\nx\n\n## New\n\ny\n\n## After\n\nz", "doc:1", idx)
     expect([next.ids, next.final]).toEqual([["S2", "S7", "S6"], ["S2"]])
     expect(idRanges(["S1", "S2", "S3", "S5", "S7", "S8"])).toBe("S1–S3, S5, S7, S8")
+  })
+  test("the user view: Summary and Recommended lines, a step's purpose; the details stay for the agents", () => {
+    const plan = [
+      "# Plan",
+      "## Summary\n\nApproving this moves the files.",
+      "## Approach\n\n**Summary:** Move the files with history kept.\n\nUse p4 move for each file, then p4 delete the stubs.\n\n**Recommended:** p4 move: keeps history",
+      "## Steps\n\n1. **Move the sources**: they live under lib/\n\np4 move src/a.cpp lib/a.cpp\n\n2. **Fix the build**\n\nedit CMakeLists.txt:12",
+    ].join("\n\n")
+    const { sections } = split(plan)
+    expect(userView(sections[2]!)).toBe("**Summary:** Move the files with history kept.\n\n**Recommended:** p4 move: keeps history")
+    expect(userView(sections[4]!)).toBe("they live under lib/")
+    expect(missingSummaries(plan)).toEqual(["2. Fix the build"])
+    expect(missingSummaries(plan.replace("**Summary:** Move", "Move"))).toEqual(["Approach", "2. Fix the build"])
+    const short = shortView(plan)
+    expect(short).toContain("Approving this moves the files.")
+    expect(short).toContain("## Approach\n\n**Summary:** Move the files with history kept.\n\n**Recommended:** p4 move: keeps history")
+    expect(short).toContain("1. **Move the sources**: they live under lib/")
+    expect(short).not.toContain("p4 move src")
+    expect(short).not.toContain("p4 delete")
   })
 })
 
@@ -661,7 +680,7 @@ describe("plan and research workflows", () => {
       expect(t.reviewStyle).toBe("all")
       t.reviewStyle = "ask"
       const brief =
-        "## Concept brief\n\n### Concerns\n\n#### 1. Scope\n\npost-edit only\n\n**Recommended:** Post-edit only: no parser change\n\n#### 2. Glossary\n\ntwo passes\n\n**Recommended:** as written\n\n## Excerpts\n\nE"
+        "## Concept brief\n\n### Concerns\n\n#### 1. Scope\n\n**Summary:** Edit only after parsing.\n\npost-edit only\n\n**Recommended:** Post-edit only: no parser change\n\n#### 2. Glossary\n\n**Summary:** Two passes over the text.\n\ntwo passes\n\n**Recommended:** as written\n\n## Excerpts\n\nE"
       team.apply(t, { mode: "lead" }, report("ESCALATE", { content: brief }), {})
       save(t)
       const ask = render(t)
@@ -671,7 +690,15 @@ describe("plan and research workflows", () => {
 
       // Start, ok the first, then show the rest: the ok is kept and goes with the next change.
       const first = await team.handle({ action: "section", verdict: "start" }, "ses_w", signal)
-      expect(first).toContain("**Concept brief, S3 · 1. Scope** (1 of 2)\n\npost-edit only\n\n**Recommended:** Post-edit only: no parser change")
+      expect(first).toContain("**Concept brief, S3 · 1. Scope** (1 of 2)\n\n**Summary:** Edit only after parsing.\n\n**Recommended:** Post-edit only: no parser change")
+      expect(first).not.toContain("post-edit only")
+      expect(first).toContain("ask for details")
+      const more = await team.handle({ action: "details", ids: ["s3"] }, "ses_w", signal)
+      expect(more).toContain("**S3 · 1. Scope**\n\n**Summary:** Edit only after parsing.\n\npost-edit only")
+      expect(more).toContain("no agent ran")
+      expect(t.walk.at).toBe(0)
+      expect(await team.handle({ action: "details", ids: ["S9"] }, "ses_w", signal)).toContain("No section S9")
+      expect(await team.handle({ action: "details" }, "ses_w", signal)).toContain("## Excerpts")
       expect(first).not.toContain("Excerpts")
       const second = await team.handle({ action: "section", verdict: "ok" }, "ses_w", signal)
       expect(second).toContain("**Concept brief, S4 · 2. Glossary** (2 of 2)")
@@ -686,10 +713,10 @@ describe("plan and research workflows", () => {
       // A scoped revision is checked as merged: the revised section needs its Recommended line too.
       t.pending = undefined
       beginRun("ses_wr", { role: "lead", mode: "lead", task: t, toolLimit: 10 })
-      const noRec = { status: "ESCALATE", summary: "s", content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then linking" }] }
+      const noRec = { status: "ESCALATE", summary: "s", content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\n**Summary:** Two passes, then linking.\n\ntwo passes, then linking" }] }
       expect(() => acceptReport(DEFAULTS, "ses_wr", noRec as any)).toThrow("Missing in: 2. Glossary. Return those sections too")
       runs.delete("ses_wr")
-      team.apply(t, p, report("ESCALATE", { content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then linking\n\n**Recommended:** as written" }] }), {})
+      team.apply(t, p, report("ESCALATE", { content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\n**Summary:** Two passes, then linking.\n\ntwo passes, then linking\n\n**Recommended:** as written" }] }), {})
       save(t)
 
       // Only S4 is left to go through; a confirmed comment sends one change right away.
@@ -701,7 +728,7 @@ describe("plan and research workflows", () => {
       expect(t.pending.note).toContain("**S4 2. Glossary** (fine-tune):")
       expect(t.pending.note).toContain('say "entity linking"')
       t.pending = undefined
-      team.apply(t, t.pending ?? { mode: "lead" }, report("ESCALATE", { content: "tuned", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then entity linking\n\n**Recommended:** as written" }] }), {})
+      team.apply(t, t.pending ?? { mode: "lead" }, report("ESCALATE", { content: "tuned", sections: [{ id: "S4", content: "#### 2. Glossary\n\n**Summary:** Two passes, then entity linking.\n\ntwo passes, then entity linking\n\n**Recommended:** as written" }] }), {})
       save(t)
 
       // Every section passes: marked final, the user approves once; the excerpts are listed, not walked.
@@ -738,7 +765,7 @@ describe("plan and research workflows", () => {
       const t = team.task("ses_d")
       t.reviewStyle = "ask"
       const brief =
-        "## Concept brief\n\n### Concerns\n\n#### 1. Scope\n\npost-edit only\n\n**Recommended:** as written\n\n#### 2. Glossary\n\ntwo passes\n\n**Recommended:** as written\n\n## Excerpts\n\nE"
+        "## Concept brief\n\n### Concerns\n\n#### 1. Scope\n\n**Summary:** Edit only after parsing.\n\npost-edit only\n\n**Recommended:** as written\n\n#### 2. Glossary\n\n**Summary:** Two passes over the text.\n\ntwo passes\n\n**Recommended:** as written\n\n## Excerpts\n\nE"
       team.apply(t, { mode: "lead" }, report("ESCALATE", { content: brief }), {})
       save(t)
       const style = render(t)
@@ -760,7 +787,8 @@ describe("plan and research workflows", () => {
       expect(draft.ask).toBe(true)
       expect(draft.title).toBe("Concept brief")
       expect(draft.sections.map((s) => [s.id, s.title])).toEqual([["S3", "1. Scope"], ["S4", "2. Glossary"]])
-      expect(draft.sections[0].body).toBe("post-edit only\n\n**Recommended:** as written")
+      expect(draft.sections[0].summary).toBe("**Summary:** Edit only after parsing.\n\n**Recommended:** as written")
+      expect(draft.sections[0].body).toBe("**Summary:** Edit only after parsing.\n\npost-edit only\n\n**Recommended:** as written")
       // Already open: not offered twice.
       expect(await team.withDialog("ses_d", style)).toBe(style)
 
@@ -815,13 +843,18 @@ describe("plan and research workflows", () => {
       }
       const brief = "## Concept brief\n\n### Concerns\n\nA or B\n\n### Assumptions\n\nx\n\n## Excerpts\n\nE"
       expect(() => check("lead", "lead", { status: "ESCALATE", content: brief })).toThrow("Missing in: Concerns; Assumptions.")
-      const fixed = brief.replace("A or B", "A or B\n\n**Recommended:** A: simpler").replace("x\n", "x\n\n- **Recommended:** as written\n")
+      const recs = brief.replace("A or B", "A or B\n\n**Recommended:** A: simpler").replace("x\n", "x\n\n- **Recommended:** as written\n")
+      expect(() => check("lead", "lead", { status: "ESCALATE", content: recs })).toThrow("opens with a line \"**Summary:**")
+      const fixed = recs.replace("A or B", "**Summary:** Keep it simple.\n\nA or B").replace("### Assumptions\n\n", "### Assumptions\n\n**Summary:** Defaults.\n\n")
       expect(() => check("lead", "lead", { status: "ESCALATE", content: fixed })).not.toThrow()
       expect(() => check("lead", "lead", { status: "ESCALATE", content: "## Code\n\n`a.ts:1`" })).not.toThrow()
-      const plan = "# Plan\n\n## Risks\n\nnone\n\n## Steps\n\nIn order.\n\n1. **Edit a.ts**\n\nchange it\n\n2. **Test**\n\nrun it"
+      const plan = "# Plan\n\n## Risks\n\n**Summary:** Low risk.\n\nnone\n\n## Steps\n\nIn order.\n\n1. **Edit a.ts**: the flag exists\n\nchange it\n\n2. **Test**: it is proven\n\nrun it"
       t.stage = "how"
       expect(() => check("architect", "architect", { status: "PLAN", content: plan, risk: "no", steps: 2 })).toThrow("Missing in: Risks.")
-      expect(() => check("architect", "architect", { status: "PLAN", content: plan.replace("none", "none\n\n**Recommended:** as written"), risk: "no", steps: 2 })).not.toThrow()
+      const planOk = plan.replace("none", "none\n\n**Recommended:** as written")
+      expect(() => check("architect", "architect", { status: "PLAN", content: planOk, risk: "no", steps: 2 })).not.toThrow()
+      expect(() => check("architect", "architect", { status: "PLAN", content: planOk.replace("**Test**: it is proven", "**Test**"), risk: "no", steps: 2 })).toThrow("Missing in: 2. Test.")
+      expect(() => check("architect", "architect", { status: "PLAN", content: planOk.replace("**Summary:** Low risk.\n\n", ""), risk: "no", steps: 2 })).toThrow("Missing in: Risks.")
     } finally {
       cleanup()
     }
@@ -1083,6 +1116,23 @@ describe("plan approval", () => {
       expect(text).toContain("1. Write r4.md")
       expect(text).toContain("**Risk:** no")
       expect(text).toContain(path.join(t.dir, "plan-1.md"))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  test("with summaries, the approval block lists each section's direction and each step's purpose, not the details", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-approval-"))
+    try {
+      const t = newTask(root, "ses_a", "/w", "x", 10)
+      Object.assign(t, { phase: "approval", reviewStyle: "all", plan: 1, planSteps: 1, planSummary: "Approving this moves the files." })
+      const plan = "## Behaviour\n\n**Summary:** Same behaviour, new place.\n\nAll includes change.\n\n**Recommended:** as written\n\n## Steps\n\n1. **Move the sources**: they live under lib/\n\np4 move src/a.cpp lib/a.cpp"
+      writeFileSync(path.join(t.dir, "plan-1.md"), plan)
+      const text = render(t)
+      expect(text).toContain("- S3 1. Move the sources: they live under lib/")
+      expect(text).toContain("- S1 Behaviour: Same behaviour, new place. · **Recommended:** as written")
+      expect(text).not.toContain("p4 move")
+      expect(text).not.toContain("All includes change")
+      expect(text).toContain('team "details"')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

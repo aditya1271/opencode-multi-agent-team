@@ -255,6 +255,65 @@ export function missingRecommendations(text: string, under?: string): string[] {
     .map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))
 }
 
+/** A section's opening line for the user: "**Summary:** …". */
+export const SUMMARY_LINE = /^[-*>\s]*\**\s*summary\b\s*\**\s*:?\s*\**/i
+
+/** A step's purpose: what follows its bold title on the first line. */
+const stepPurpose = (s: Section) =>
+  (s.text.split("\n")[0] ?? "")
+    .replace(/\s*\[S\d+(?: ✅)?\]\s*$/, "")
+    .replace(/^\d+\.\s+\*\*.+?\*\*\s*[:.—–-]?\s*/, "")
+    .trim()
+
+/** The section titled like a document summary needs no summary line of its own. */
+const isSummary = (s: Section) => /^(summary|what you get)\b/.test(plain(s.title))
+
+/** What the user sees of a section by default: its Summary and Recommended lines (a step: its purpose). Undefined without a summary. */
+export function userView(s: Section): string | undefined {
+  if (s.step) return stepPurpose(s) || undefined
+  const lines = body(s).split("\n").filter((l) => l.trim())
+  const summary = lines.find((l) => SUMMARY_LINE.test(l))
+  if (!summary) return undefined
+  const last = lines.at(-1) ?? ""
+  return RECOMMENDED_LINE.test(last) && last !== summary ? `${summary}\n\n${last}` : summary
+}
+
+/** A section's text under its heading line. */
+export const sectionBody = (s: Section) => body(s)
+
+/** The user view on one line, without the "Summary:" label; "" without a summary. */
+export const oneLine = (s: Section) =>
+  (userView(s) ?? "")
+    .replace(SUMMARY_LINE, "")
+    .replace(/\s*\n+\s*/g, " · ")
+    .trim()
+
+/** Reviewed sections that don't open with a Summary line, and plan steps with no purpose after the title, by title. */
+export function missingSummaries(text: string, under?: string): string[] {
+  const { sections } = split(text)
+  return (reviewed(sections, under) ?? [])
+    .map((i) => sections[i]!)
+    .filter((s) => (s.step ? !stepPurpose(s) : !/^steps\b/.test(plain(s.title)) && !isSummary(s) && !SUMMARY_LINE.test(body(s).split("\n").find((l) => l.trim()) ?? "")))
+    .map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))
+}
+
+/** The draft as the user sees it by default: each reviewed section's user view; other sections show only their heading. */
+export function shortView(text: string, under?: string): string {
+  const { head, sections } = split(text)
+  const shown = new Set(reviewed(sections, under) ?? reviewed(sections)!)
+  return assemble(
+    head,
+    sections.map((s, i) => {
+      const first = s.text.split("\n")[0]!
+      if (s.step) return first
+      if (!body(s)) return s.text
+      if (!shown.has(i)) return `${first}\n\n_(details on request)_\n`
+      const view = userView(s)
+      return view ? `${first}\n\n${view}\n` : s.text
+    }),
+  )
+}
+
 export function idRanges(ids: string[]): string {
   const nums = [...new Set(ids.map((id) => Number(id.slice(1))))].filter(Number.isFinite).sort((a, b) => a - b)
   const out: string[] = []

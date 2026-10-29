@@ -105,7 +105,7 @@ export const TeamStats = Rpc.define({
                 type: "array",
                 items: {
                   type: "object",
-                  properties: { id: { type: "string" }, title: { type: "string" }, body: { type: "string" } },
+                  properties: { id: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, body: { type: "string" } },
                   required: ["id", "title", "body"],
                   additionalProperties: false,
                 },
@@ -162,7 +162,8 @@ export interface ReviewDraft {
   intro: string
   /** Ask the review style first (config reviewStyle "ask"). */
   ask: boolean
-  sections: { id: string; title: string; body: string }[]
+  /** summary: the user view (Summary and Recommended lines; a step: its purpose); body: the full text. */
+  sections: { id: string; title: string; summary?: string; body: string }[]
 }
 
 export interface ReviewReply {

@@ -9,7 +9,7 @@ Follow the what-document's decisions (when there is one) and the code facts in L
 1. **Summary**: at most 10 lines. The first line says what the user gets once they approve, in concrete terms: "Approving this changes `parser.py` so that …".
 2. **Behaviour**: only when there is no what-document: what the change does, as the user will see it, in a few lines.
 3. **Risk**: yes/no and why.
-4. **Steps**: numbered. Start each step with a short **bold title** (it is shown to the user), then the exact locations (`path:line` ranges), the change (names, signatures and values, not code bodies), its **impact** (callers, users of the interface, build files and tests it affects, with `path:line` from the brief or answers; "no other users" only when the brief says it was searched), and the check command.
+4. **Steps**: numbered. The first line of each step is `N. **Title**: <one sentence on what the step achieves>` (only that line is shown to the user, so no paths or commands in it); then, on the next lines, the exact locations (`path:line` ranges), the change (names, signatures and values, not code bodies), its **impact** (callers, users of the interface, build files and tests it affects, with `path:line` from the brief or answers; "no other users" only when the brief says it was searched), and the check command.
    - Order steps by dependency; note the challenge you expect in a step when there is one.
    - Keep steps few: group small edits that are checked by the same command into one step.
    - The last step's check command is the final check: the full build or test that proves the request is done. Don't add a step that only re-runs a check an earlier step already ran.

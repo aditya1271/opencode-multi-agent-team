@@ -1,7 +1,7 @@
 // The section-by-section review in a TUI dialog: no model turn between sections; the manager is woken once at the end.
 import type { Plugin } from "@opencode/plugin/tui"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { For } from "solid-js"
+import { createSignal, For } from "solid-js"
 import { TeamStats, type ReviewDraft, type ReviewReply } from "./rpc.ts"
 
 type Context = Plugin.Context
@@ -41,7 +41,9 @@ export function setupReview(
         resolve(choice)
       }
       const s = draft.sections[i]!
-      const body = [...notes, i === 0 && draft.intro ? draft.intro : "", s.body].filter(Boolean).join("\n\n")
+      const view = (text: string) => [...notes, i === 0 && draft.intro ? draft.intro : "", text].filter(Boolean).join("\n\n")
+      // The summary view by default; d switches to the full text the agents work from.
+      const [full, setFull] = createSignal(!s.summary)
       dialog.show(() => {
         context.keymap.layer(() => ({
           mode: "global",
@@ -49,6 +51,7 @@ export function setupReview(
           enabled: () => !settled,
           commands: [
             ...KEYS.map((k) => ({ title: k.title, group: "Team review", bind: k.key, run: () => finish(k.choice) })),
+            ...(s.summary ? [{ title: "Details", group: "Team review", bind: "d", run: () => setFull(!full()) }] : []),
             { title: "Scroll up", group: "Team review", bind: "up", run: () => scroll?.scrollBy(-1) },
             { title: "Scroll down", group: "Team review", bind: "down", run: () => scroll?.scrollBy(1) },
             { title: "Page up", group: "Team review", bind: "pageup", run: () => scroll?.scrollBy(-10) },
@@ -60,7 +63,7 @@ export function setupReview(
             <text fg={color.header()}>{`${draft.title}, ${s.id} · ${s.title}  (${i + 1} of ${draft.sections.length})`}</text>
             <scrollbox ref={(r: ScrollBoxRenderable) => (scroll = r)} height={Math.max(6, Math.min(30, (context.renderer.height ?? 40) - 20))} scrollY>
               <text fg={color.header()} wrapMode="word">
-                {body}
+                {view(full() ? s.body : s.summary!)}
               </text>
             </scrollbox>
             <box flexDirection="row" gap={2}>
@@ -77,7 +80,7 @@ export function setupReview(
                 )}
               </For>
             </box>
-            <text fg={color.muted()}>↑↓ PgUp PgDn scroll · Esc: show the rest</text>
+            <text fg={color.muted()}>{`${s.summary ? `[d] ${full() ? "Summary" : "Details"} · ` : ""}↑↓ PgUp PgDn scroll · Esc: show the rest`}</text>
           </box>
         )
       }, () => finish("rest"))

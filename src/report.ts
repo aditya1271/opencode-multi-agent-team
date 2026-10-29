@@ -1,7 +1,7 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { runs, type Report, type ShellRun } from "./runtime.ts"
-import { checkEdits, missingRecommendations, splice } from "./sections.ts"
+import { checkEdits, missingRecommendations, missingSummaries, shownTitle, splice, split } from "./sections.ts"
 import { draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
 
 const SECTION_EDIT = {
@@ -149,7 +149,7 @@ export const REPORT_DESCRIPTION =
   "Finish your work by calling this exactly once. Only the listed statuses are valid now. After calling it, stop."
 
 /**
- * Briefs, documents and plans the user reviews: each reviewed section ends with the writer's pick. A brief counts only
+ * Briefs, documents and plans the user reviews: each reviewed section opens with a Summary line and ends with the writer's pick. A brief counts only
  * with its "Concept brief" or "Research brief" heading (how-stage briefs aren't shown to the user). A scoped revision
  * is checked as merged into the previous version.
  */
@@ -157,18 +157,32 @@ function recommendProblem(role: string, input: Report, task: TaskState | undefin
   const lead = role === "lead" && input.status === "ESCALATE"
   if (!lead && !(role === "architect" && (input.status === "DOC" || input.status === "PLAN"))) return undefined
   let text = input.content
+  // A scoped revision answers only for the sections it returns: the others it may not touch.
+  let returned: Set<string> | undefined
   if (scoped && task?.sections && input.sections?.length) {
     try {
       text = splice(readTaskFile(task, scopedFile(task)), task.sections, input.sections, task.scope?.finetune ?? []).text
     } catch {
       return undefined
     }
+    returned = new Set(input.sections.flatMap((e) => split(e.content, true).sections.map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))))
   }
-  const missing = lead
-    ? [...missingRecommendations(text, "Concept brief"), ...missingRecommendations(text, "Research brief")]
-    : missingRecommendations(text)
-  if (!missing.length) return undefined
-  return `Every section the user reviews ends with a line "**Recommended:** <option>: <short reason>" (several choices in one section: the pick for each, in that line; nothing to decide: "**Recommended:** as written"). Missing in: ${missing.join("; ")}.${scoped ? " Return those sections too, with only that line added." : ""}`
+  const check = (f: (text: string, under?: string) => string[]) =>
+    (lead ? [...f(text, "Concept brief"), ...f(text, "Research brief")] : f(text)).filter((t) => !returned || returned.has(t))
+  const missing = check(missingRecommendations)
+  const unsummed = check(missingSummaries)
+  if (!missing.length && !unsummed.length) return undefined
+  return [
+    missing.length
+      ? `Every section the user reviews ends with a line "**Recommended:** <option>: <short reason>" (several choices in one section: the pick for each, in that line; nothing to decide: "**Recommended:** as written"). Missing in: ${missing.join("; ")}.`
+      : "",
+    unsummed.length
+      ? `Every section the user reviews opens with a line "**Summary:** <1-3 plain sentences: the direction and why, not the mechanics>", and every plan step's first line is "N. **Title**: <one sentence on what the step achieves>". The user sees only those lines unless they ask for details. Missing in: ${unsummed.join("; ")}.`
+      : "",
+    scoped ? "Return those sections too, with only the missing lines added." : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
 }
 
 /** Validates and stores the report for the session. Throws a message the model sees. */

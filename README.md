@@ -156,6 +156,13 @@ To update later, run `git pull` in the clone and restart OpenCode.
   your comments and confirms them once before the scoped revision. Pass every section
   without comments and the dialog asks [Approve] [Show it all at once] itself. The desktop
   and web apps, and `opencode run`, use the chat walk-through.
+- **Summary view first:** the full drafts are written for the agents (paths, commands,
+  `p4` moves). You see the direction: every reviewed section opens with
+  `**Summary:** <1-3 plain sentences>`, and every plan step's first line is
+  `N. **Title**: <what it achieves>`. Reviews, approvals and the dialog show only those lines
+  and the Recommended line; the plugin refuses a draft without them. Say "details" (or
+  "details S5") for the stored full text, or press [d] in the dialog to switch views. No
+  agent runs for it.
 - **Modes:** from fully interactive to hands-off; see [Modes](#modes).
 
 ### Modes
