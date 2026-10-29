@@ -36,6 +36,8 @@ export interface SessionRun {
   task?: TaskState
   toolLimit: number
   toolCalls: number
+  /** Lead's reads the plugin refused (they don't count toward toolLimit). */
+  refused?: number
   tools: Partial<Record<ToolKind, number>>
   prompts: number
   report?: Report

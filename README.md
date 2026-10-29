@@ -336,6 +336,11 @@ with whatever you use to explore code (a code graph, clangd, a docs RAG, ...):
 }
 ```
 
+Give code-search tools to the Intern, not Lead. Lead doesn't search: it can read only the files
+the request, your material or the Intern's findings name, and sends every search to the Intern.
+Tools you add to Lead still work, so a code-search MCP there lets it search again; add only
+tools that fetch your material (an issue tracker, a wiki).
+
 Each agent's prompt has a fixed core: its role, the report statuses, and the safety rules. The
 editable defaults are in `prompts/<role>.instructions.md`; copy one as a starting point.
 The front agents each have their own polishing instructions (the shape of the polished

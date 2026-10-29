@@ -171,12 +171,16 @@ export async function registerGuards(ctx: Context, config: Config) {
       )
     if (run.task?.skipChecks && kind === "build")
       throw new Error("Build and test are skipped for this task (the user chose this). Don't build or test; finish the edits and report.")
-    run.toolCalls++
-    run.tools[kind] = (run.tools[kind] ?? 0) + 1
     if (run.role === "lead" && event.tool === "read" && run.task) {
       const problem = leadReadProblem(run.task, event.input)
-      if (problem) throw new Error(problem)
+      if (problem) {
+        // Refused reads don't use up the tool calls; from the third one on, Lead is told to stop trying.
+        run.refused = (run.refused ?? 0) + 1
+        throw new Error(run.refused >= 3 ? `${problem} Stop reading now: report NEED_INFO with all your queries in one round.` : problem)
+      }
     }
+    run.toolCalls++
+    run.tools[kind] = (run.tools[kind] ?? 0) + 1
     run.inFlight++
     if (EDIT_TOOLS.has(event.tool)) {
       const cwd = run.task?.workspace ?? ctx.location.directory
