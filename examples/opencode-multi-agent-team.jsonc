@@ -35,6 +35,9 @@
   // confirming), "safe" (also let the team decide questions and approvals; stops at destructive
   // plans and before implementing), "full" (also those). The user can switch per request.
   "auto": "off",
+  // How you review briefs, documents and plans: "ask" (at every stop), "all" (at once) or
+  // "sections" (one section at a time, with the recommended option per section).
+  "reviewStyle": "ask",
 
   // Start new sessions in build-manager.
   "defaultAgent": false,

@@ -296,7 +296,8 @@ describe("plan and research workflows", () => {
       location: { directory: workspace },
       session: { context: async () => [], get: async () => undefined, switchAgent: async (i: { agent: string }) => void switched.push(i.agent) },
     }
-    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    // Drafts shown whole; the section-by-section test sets its own review style.
+    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root, reviewStyle: "all" }), () => {}) as any
     team.step = async (t: any) => t.pending
     const cleanup = () => {
       rmSync(root, { recursive: true, force: true })
@@ -647,6 +648,111 @@ describe("plan and research workflows", () => {
       expect(marks).toContain("Saved: final S2, S3.")
       expect([t.phase, t.sections.final]).toEqual(["approval", ["S2", "S3"]])
       expect(await team.handle({ action: "change", text: "x", finetune: ["S3"] }, "ses_s", signal)).toContain("S3 is final")
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("section by section: ok/skip/comments, show the rest, one change at the end, approve when all pass", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_w", signal)
+      const t = team.task("ses_w")
+      expect(t.reviewStyle).toBe("all")
+      t.reviewStyle = "ask"
+      const brief =
+        "## Concept brief\n\n### Concerns\n\n#### 1. Scope\n\npost-edit only\n\n**Recommended:** Post-edit only: no parser change\n\n#### 2. Glossary\n\ntwo passes\n\n**Recommended:** as written\n\n## Excerpts\n\nE"
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: brief }), {})
+      save(t)
+      const ask = render(t)
+      expect(ask).toContain("Concept brief ready: 2 sections to review.")
+      expect(ask).toContain("[All at once] [One section at a time]")
+      expect(ask).not.toContain("post-edit only")
+
+      // Start, ok the first, then show the rest: the ok is kept and goes with the next change.
+      const first = await team.handle({ action: "section", verdict: "start" }, "ses_w", signal)
+      expect(first).toContain("**Concept brief, S3 · 1. Scope** (1 of 2)\n\npost-edit only\n\n**Recommended:** Post-edit only: no parser change")
+      expect(first).not.toContain("Excerpts")
+      const second = await team.handle({ action: "section", verdict: "ok" }, "ses_w", signal)
+      expect(second).toContain("**Concept brief, S4 · 2. Glossary** (2 of 2)")
+      expect(render(t)).toContain("**Concept brief, S4 · 2. Glossary** (2 of 2)")
+      const rest = await team.handle({ action: "section", verdict: "rest" }, "ses_w", signal)
+      expect(rest).toContain("#### 2. Glossary [S4]")
+      expect(rest).toContain("From the walk-through: ok S3")
+      const p = await team.handle({ action: "change", text: "glossary needs entity linking", revise: ["S4"] }, "ses_w", signal)
+      expect([t.scope, t.sections.final, t.walk]).toEqual([{ draft: "brief", revise: ["S4"], finetune: [], add: [], open: false }, ["S3"], undefined])
+      expect(p.note).toContain("- S4 2. Glossary: REVISE")
+
+      // A scoped revision is checked as merged: the revised section needs its Recommended line too.
+      t.pending = undefined
+      beginRun("ses_wr", { role: "lead", mode: "lead", task: t, toolLimit: 10 })
+      const noRec = { status: "ESCALATE", summary: "s", content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then linking" }] }
+      expect(() => acceptReport(DEFAULTS, "ses_wr", noRec as any)).toThrow("Missing in: 2. Glossary. Return those sections too")
+      runs.delete("ses_wr")
+      team.apply(t, p, report("ESCALATE", { content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then linking\n\n**Recommended:** as written" }] }), {})
+      save(t)
+
+      // Only S4 is left to go through; a confirmed comment sends one change right away.
+      expect(await team.handle({ action: "section", verdict: "start" }, "ses_w", signal)).toContain("**Concept brief, S4 · 2. Glossary** (1 of 1)")
+      expect(await team.handle({ action: "section", verdict: "finetune" }, "ses_w", signal)).toContain("needs text")
+      await team.handle({ action: "section", verdict: "finetune", text: "say \"entity linking\"" }, "ses_w", signal)
+      expect(t.walk).toBeUndefined()
+      expect(t.pending.note).toContain("- S4 2. Glossary: FINE-TUNE")
+      expect(t.pending.note).toContain("**S4 2. Glossary** (fine-tune):")
+      expect(t.pending.note).toContain('say "entity linking"')
+      t.pending = undefined
+      team.apply(t, t.pending ?? { mode: "lead" }, report("ESCALATE", { content: "tuned", sections: [{ id: "S4", content: "#### 2. Glossary\n\ntwo passes, then entity linking\n\n**Recommended:** as written" }] }), {})
+      save(t)
+
+      // Every section passes: marked final, the user approves once; the excerpts are listed, not walked.
+      await team.handle({ action: "section", verdict: "start" }, "ses_w", signal)
+      const done = await team.handle({ action: "section", verdict: "ok" }, "ses_w", signal)
+      expect(done).toContain("ALL SECTIONS ACCEPTED")
+      expect(done).toContain("S5 Excerpts")
+      expect(done).toContain("[Approve] [Show it all at once]")
+      expect(t.sections.final).toContain("S4")
+      expect(await team.handle({ action: "section", verdict: "start" }, "ses_w", signal)).toContain("no sections to go through")
+
+      // Config picks the style; auto modes skip the review altogether.
+      t.reviewStyle = "all"
+      expect(render(t)).not.toContain("One section at a time")
+      t.sections.final = []
+      t.walk = undefined
+      t.reviewStyle = "sections"
+      expect(render(t)).toContain('call team "section" with verdict "start" right away')
+      t.reviewStyle = "ask"
+      const whole = await team.handle({ action: "section", verdict: "rest" }, "ses_w", signal)
+      expect(whole).toContain("#### 2. Glossary [S4]")
+      expect(whole).not.toContain("From the walk-through")
+      t.auto = "safe"
+      expect(render(t)).not.toContain('verdict "start"')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("reviewed sections must end with a Recommended line; excerpts, plan steps and how briefs are exempt", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_r", signal)
+      const t = team.task("ses_r")
+      const check = (role: string, mode: string, input: object) => {
+        beginRun("ses_rc", { role, mode, task: t, toolLimit: 10 } as any)
+        try {
+          return acceptReport(DEFAULTS, "ses_rc", { summary: "s", ...input } as any)
+        } finally {
+          runs.delete("ses_rc")
+        }
+      }
+      const brief = "## Concept brief\n\n### Concerns\n\nA or B\n\n### Assumptions\n\nx\n\n## Excerpts\n\nE"
+      expect(() => check("lead", "lead", { status: "ESCALATE", content: brief })).toThrow("Missing in: Concerns; Assumptions.")
+      const fixed = brief.replace("A or B", "A or B\n\n**Recommended:** A: simpler").replace("x\n", "x\n\n- **Recommended:** as written\n")
+      expect(() => check("lead", "lead", { status: "ESCALATE", content: fixed })).not.toThrow()
+      expect(() => check("lead", "lead", { status: "ESCALATE", content: "## Code\n\n`a.ts:1`" })).not.toThrow()
+      const plan = "# Plan\n\n## Risks\n\nnone\n\n## Steps\n\nIn order.\n\n1. **Edit a.ts**\n\nchange it\n\n2. **Test**\n\nrun it"
+      t.stage = "how"
+      expect(() => check("architect", "architect", { status: "PLAN", content: plan, risk: "no", steps: 2 })).toThrow("Missing in: Risks.")
+      expect(() => check("architect", "architect", { status: "PLAN", content: plan.replace("none", "none\n\n**Recommended:** as written"), risk: "no", steps: 2 })).not.toThrow()
     } finally {
       cleanup()
     }

@@ -4,8 +4,8 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS } from "./messages.ts"
-import { idRanges, indexOf, splice, split, type Scope } from "./sections.ts"
+import { buildPrompt, checksText, docName, draftFile, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, walkable } from "./messages.ts"
+import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
 import { EditedFilesTrack, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
 import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
@@ -40,7 +40,7 @@ const queries = (r: Report) => join(r.content, (r.questions ?? []).map((q, i) =>
 
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
-export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status"] as const
+export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
 
 export type TeamMode = "off" | AutoLevel
@@ -72,13 +72,15 @@ export interface TeamInput {
   final?: string[]
   reopen?: string[]
   add?: string[]
+  /** section only: the user's reply to the section shown (start begins the walk-through). */
+  verdict?: "start" | "ok" | "skip" | "finetune" | "revise" | "rest"
 }
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
   "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document; auto = polished, safe or full when the user asked for an auto mode),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
-  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), review (Principal critically reviews the waiting plan or document; text = what to look at),",
+  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), section (going through the waiting brief, document or plan one section at a time: verdict = start, ok, skip, finetune or revise with text = the confirmed comment, or rest to show the remaining sections at once), review (Principal critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
@@ -104,6 +106,11 @@ export const TEAM_SCHEMA = {
     final: { type: "array", items: { type: "string" }, description: "change only: ids of sections the user calls good or done; they stay as they are until reopened." },
     reopen: { type: "array", items: { type: "string" }, description: "change only: ids of final sections the user now wants changed." },
     add: { type: "array", items: { type: "string" }, description: "change only: short titles of new sections the user asks for." },
+    verdict: {
+      type: "string",
+      enum: ["start", "ok", "skip", "finetune", "revise", "rest"],
+      description: "section only: start the walk-through; ok, skip, finetune or revise (with text) the section shown; rest shows the remaining sections at once.",
+    },
   },
   required: ["action"],
   additionalProperties: false,
@@ -275,6 +282,8 @@ export class Team {
       }
       case "change":
         return this.change(task, input, signal)
+      case "section":
+        return this.section(task, input, signal)
       case "review":
         return this.review(task, input.text ?? "", signal)
       case "implement":
@@ -506,6 +515,7 @@ export class Team {
     if (opts.review === true) task.reviewFirst = true
     const auto = opts.auto ?? this.sessionModes.get(managerSession) ?? this.config.auto
     if (auto === "polished" || auto === "safe" || auto === "full") task.auto = auto
+    task.reviewStyle = this.config.reviewStyle
     const workflow = WORKFLOWS.includes(opts.workflow as Workflow) ? opts.workflow : "code"
     if (workflow !== "code") {
       task.workflow = workflow
@@ -715,16 +725,97 @@ export class Team {
 
   private async change(task: TaskState, input: TeamInput, signal: AbortSignal): Promise<string> {
     if (task.phase !== "approval" && task.phase !== "brief") return this.wrongPhase(task, "change")
+    // Replies kept from a walk-through the user left with "show the rest" go with these comments.
+    const walk = task.walk?.key === task.sections?.key ? task.walk?.replies ?? [] : []
+    const of = (v: string) => walk.filter((r) => r.verdict === v).map((r) => r.id)
+    if (walk.length)
+      input = {
+        ...input,
+        finetune: [...(input.finetune ?? []), ...of("finetune")],
+        revise: [...(input.revise ?? []), ...of("revise")],
+        final: [...(input.final ?? []), ...of("ok")],
+      }
     const scope = this.scopeOf(task, input)
     if (typeof scope === "string") return scope
     if (scope?.marksOnly) {
+      task.walk = undefined
       // Only final/reopen marks: nothing to revise, show the draft again.
       task.sections!.final = scope.final
       save(task)
       return join(`Saved: final ${idRanges(scope.final) || "none"}.`, render(task))
     }
-    const { polished, note: comments } = await this.withOriginal(task, input.text ?? "", "comments")
-    if (!polished) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
+    const { polished, note } = await this.withOriginal(task, input.text ?? "", "comments")
+    const earlier = this.walkComments(task)
+    if (!polished && !earlier) return 'change needs text: the user\'s comments. NEXT ACTION: call team with action "change".'
+    task.walk = undefined
+    return this.applyChange(task, scope, join(earlier, polished ? note : ""), signal)
+  }
+
+  /** The comments confirmed in a walk-through, one block per section. */
+  private walkComments(task: TaskState): string {
+    const w = task.walk?.key === task.sections?.key ? task.walk : undefined
+    const idx = task.sections
+    return (w?.replies ?? [])
+      .filter((r) => r.note)
+      .map((r) => `**${r.id} ${idx ? shownTitle(idx.titles[idx.ids.indexOf(r.id)] ?? "") : ""}** (${r.verdict === "finetune" ? "fine-tune" : "revise"}):\n${r.note}`)
+      .join("\n\n")
+  }
+
+  /** Going through the waiting draft one section at a time; the replies go to the team together at the end. */
+  private async section(task: TaskState, input: TeamInput, signal: AbortSignal): Promise<string> {
+    if (task.phase !== "approval" && task.phase !== "brief") return this.wrongPhase(task, "section")
+    const verdict = input.verdict ?? "start"
+    let w = task.walk?.key === task.sections?.key ? task.walk : undefined
+    if (verdict === "rest" && task.sections) {
+      // "All at once", chosen up front or partway: replies already given are kept for the next change.
+      task.walk = w = w ?? { key: task.sections.key, ids: walkable(task), at: 0, replies: [] }
+      w.rest = true
+      w.done = false
+      save(task)
+      return render(task)
+    }
+    if (verdict === "start" || !w) {
+      const ids = walkable(task)
+      if (!ids.length) return join("This draft has no sections to go through one at a time.", render(task))
+      task.walk = { key: task.sections!.key, ids, at: 0, replies: [] }
+      task.askedAt = Date.now()
+      save(task)
+      return render(task)
+    }
+    if (w.done || w.rest || w.at >= w.ids.length) return render(task)
+    const id = w.ids[w.at]!
+    if (verdict === "finetune" || verdict === "revise") {
+      const { polished, note } = await this.withOriginal(task, input.text ?? "", "comments")
+      if (!polished) return `section with verdict ${verdict} needs text: the user's confirmed comment on ${id}. NEXT ACTION: call team "section" again with it.`
+      w.replies.push({ id, verdict, note })
+    } else w.replies.push({ id, verdict: verdict === "ok" ? "ok" : "skip" })
+    task.askedAt = Date.now()
+    w.at++
+    if (w.at < w.ids.length) {
+      save(task)
+      return render(task)
+    }
+    const ok = w.replies.filter((r) => r.verdict === "ok").map((r) => r.id)
+    task.sections!.final = [...new Set([...task.sections!.final, ...ok])]
+    const comments = w.replies.filter((r) => r.note)
+    if (!comments.length) {
+      w.done = true
+      save(task)
+      return render(task)
+    }
+    const scope = this.scopeOf(task, {
+      action: "change",
+      finetune: comments.filter((r) => r.verdict === "finetune").map((r) => r.id),
+      revise: comments.filter((r) => r.verdict === "revise").map((r) => r.id),
+    })
+    if (typeof scope === "string") return scope
+    const text = this.walkComments(task)
+    task.walk = undefined
+    return join(`All ${w.ids.length} sections gone through: comments on ${idRanges(comments.map((r) => r.id))} sent to the team.`, await this.applyChange(task, scope, text, signal))
+  }
+
+  /** Sends the user's comments on the waiting brief, document or plan to the team, within the scope. */
+  private async applyChange(task: TaskState, scope: ReturnType<Team["scopeOf"]> & object | undefined, comments: string, signal: AbortSignal): Promise<string> {
     // Exact edits alone aren't the team failing: no comment round (ladder), no advice, no revision brief.
     const tuneOnly = !!scope && scope.finetune.length > 0 && !scope.revise.length && !scope.add.length
     if (!tuneOnly) task.commentRounds = (task.commentRounds ?? 0) + 1
@@ -812,6 +903,7 @@ export class Team {
     task.scope = undefined
     task.sectionChange = undefined
     const prevFile = kind === "brief" ? briefName(task) : kind === "doc" ? task.doc && `doc-${task.doc}.md` : task.plan && `plan-${task.plan}.md`
+    task.walk = undefined
     if (scope && r.sections?.length && prevFile && task.sections?.key === key) {
       const out = splice(readTaskFile(task, prevFile), task.sections, r.sections, scope.finetune ?? [])
       task.sections = out.index
@@ -821,6 +913,7 @@ export class Team {
     task.sections = indexOf(r.content, key, task.sections?.key === key ? task.sections : undefined)
     return r.content
   }
+
 
   /** The user asks Principal to critically review the waiting plan or document. */
   private async review(task: TaskState, text: string, signal: AbortSignal): Promise<string> {

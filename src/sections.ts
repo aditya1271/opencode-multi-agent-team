@@ -213,6 +213,48 @@ export function annotate(text: string, index: SectionIndex): string {
 }
 
 /** "S1–S4, S7" for a list of ids. */
+/** A section's title without numbering, emphasis or id tag, as written (for showing). */
+export const shownTitle = (title: string) => title.replace(/\s*\[S\d+(?: ✅)?\]\s*$/, "").replace(/\*\*/g, "").trim()
+
+const body = (s: Section) => s.text.split("\n").slice(1).join("\n").trim()
+
+/**
+ * The sections a user reviews (indices): those with text under their heading, and for a brief only those under its
+ * top heading (`under`, e.g. "Concept brief"), so the supporting excerpts are left out. Undefined when `under` is missing.
+ */
+function reviewed(sections: Section[], under?: string): number[] | undefined {
+  const level = (s: Section) => (s.step ? 99 : (/^(#+)/.exec(s.text)?.[1]?.length ?? 99))
+  let from = 0
+  let to = sections.length
+  if (under) {
+    const top = sections.findIndex((s) => !s.step && plain(s.title).startsWith(under.toLowerCase()))
+    if (top < 0) return undefined
+    from = top
+    const next = sections.findIndex((s, i) => i > top && level(s) <= level(sections[top]!))
+    if (next > 0) to = next
+  }
+  return sections.map((_, i) => i).filter((i) => i >= from && i < to && body(sections[i]!))
+}
+
+/** The sections to go through one at a time: the reviewed ones not marked final. */
+export function walkIds(text: string, index: SectionIndex, under?: string): string[] {
+  const { sections } = split(text)
+  const all = reviewed(sections, under) ?? reviewed(sections)!
+  return all.map((i) => index.ids[i]!).filter((id) => !index.final.includes(id))
+}
+
+/** A section's closing line with the writer's pick: "**Recommended:** …". */
+export const RECOMMENDED_LINE = /^[-*>\s]*\**\s*recommended\b/i
+
+/** Reviewed sections (plan steps and their Steps heading aside) whose last line isn't a Recommended line, by title. */
+export function missingRecommendations(text: string, under?: string): string[] {
+  const { sections } = split(text)
+  return (reviewed(sections, under) ?? [])
+    .map((i) => sections[i]!)
+    .filter((s) => !s.step && !/^steps\b/.test(plain(s.title)) && !RECOMMENDED_LINE.test(body(s).split("\n").pop() ?? ""))
+    .map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))
+}
+
 export function idRanges(ids: string[]): string {
   const nums = [...new Set(ids.map((id) => Number(id.slice(1))))].filter(Number.isFinite).sort((a, b) => a - b)
   const out: string[] = []

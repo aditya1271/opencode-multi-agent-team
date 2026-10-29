@@ -38,6 +38,8 @@ export interface Config {
   polish: "on" | "off"
   /** Mode for new tasks unless the user asks otherwise: off (interactive), polished, safe or full auto. */
   auto: "off" | "polished" | "safe" | "full"
+  /** How the user reviews briefs, documents and plans: asked at every stop, all at once, or one section at a time. */
+  reviewStyle: "ask" | "all" | "sections"
   agentPrefix: string
   defaultAgent: boolean
   limits: {
@@ -81,6 +83,7 @@ export const DEFAULTS: Config = {
   agents: {},
   polish: "on",
   auto: "off",
+  reviewStyle: "ask",
   agentPrefix: "team-",
   defaultAgent: false,
   limits: {

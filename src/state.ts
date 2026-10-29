@@ -4,6 +4,19 @@ import type { Role, WorkerRole } from "./config.ts"
 import type { Scope, SectionChange, SectionIndex } from "./sections.ts"
 import type { AgentUsage } from "./usage.ts"
 
+/** The user goes through a draft one section at a time; the replies go to the team together at the end. */
+export interface Walk {
+  /** The sections index key the walk belongs to. */
+  key: string
+  ids: string[]
+  at: number
+  replies: { id: string; verdict: "ok" | "skip" | "finetune" | "revise"; note?: string }[]
+  /** The user asked to see the remaining sections at once. */
+  rest?: boolean
+  /** Every section was gone through without comments: waits for the approval. */
+  done?: boolean
+}
+
 export type Mode =
   | "lead"
   | "lead_fail"
@@ -191,6 +204,10 @@ export interface TaskState {
   scope?: Scope
   /** What the last scoped revision changed, shown to the user. */
   sectionChange?: SectionChange
+  /** How the user reviews briefs, documents and plans (config reviewStyle, set at start). */
+  reviewStyle?: "ask" | "all" | "sections"
+  /** The section-by-section review of the waiting brief, document or plan. */
+  walk?: Walk
   /** Auto mode: replies sent without confirmation (polished), and the team deciding the user's stops (safe, full). */
   auto?: AutoLevel
   /** What auto mode decided, shown to the user at the end. */

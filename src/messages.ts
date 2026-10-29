@@ -3,7 +3,7 @@ import path from "node:path"
 import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
 import { needInfoLimit } from "./report.ts"
-import { annotate, ensureIndex, idRanges, split, type SectionIndex } from "./sections.ts"
+import { annotate, ensureIndex, idRanges, shownTitle, split, walkIds, type SectionIndex } from "./sections.ts"
 import { answerFiles, answersName, autoDecides, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
 import { report as usageReport } from "./usage.ts"
 
@@ -113,7 +113,7 @@ function idList(task: TaskState, text: string, steps: boolean): string {
 }
 
 /** What the last revision changed and which sections are final, with how to mark them, for the user. */
-function changeLine(task: TaskState): string {
+function changeLine(task: TaskState, hint = true): string {
   const c = task.sectionChange
   const final = task.sections?.final ?? []
   return join(
@@ -128,6 +128,7 @@ function changeLine(task: TaskState): string {
         .filter(Boolean)
         .join(" · ") || "no section changed"}`,
     final.length > 0 && `**Final:** ${idRanges(final)}`,
+    hint &&
     !!task.sections?.ids.length &&
       `Mark sections you're happy with as **final** (e.g. "S3–S6 are final"). Final sections stay exactly as they are until you **reopen** them.`,
   )
@@ -149,7 +150,7 @@ const LEAD_WHAT = [
   "The Architect has no file access: your brief and your later answers are all it knows. Quote, don't paraphrase.",
   [
     "Write `content` in two parts. First `## Concept brief` (the user may read it before the Architect writes):",
-    "- **Concerns**: the concepts that decide whether the result is good. The ones the user named or stressed first, in their framing; then ones they didn't mention but should consider. The user's material is a starting point, not the boundary: think beyond it. For each: why it matters (with the source when the user's material says so), and 2-3 approaches with what each trades off. No pick unless the material settles it.",
+    "- **Concerns**: the concepts that decide whether the result is good. The ones the user named or stressed first, in their framing; then ones they didn't mention but should consider. The user's material is a starting point, not the boundary: think beyond it. For each: why it matters (with the source when the user's material says so), and 2-3 approaches with what each trades off; your pick goes in the section's closing Recommended line.",
     `- ${FEASIBILITY}`,
     "- **Assumptions**: defaults you'd take where nothing settles a point, each marked as assumed.",
     "Then `## Excerpts`: the verbatim passages (with `path:line` or file and heading) the Architect needs, grouped by concern. Nothing else: don't restate the request, the Architect gets it.",
@@ -551,8 +552,94 @@ const AUTO_SEND = (level: string) =>
   `AUTO-SEND (${level} auto): wherever this says to polish and confirm [Send] [Edit] [Cancel], polish the user's text as usual, show it in one block as sent, and send it right away without asking. Build and test commands are still sent as typed.`
 
 export function render(task: TaskState): string {
-  const out = renderPhase(task)
+  const review = (task.phase === "brief" || task.phase === "approval") && !autoDecides(task)
+  const out = review ? reviewView(task) : renderPhase(task)
   return task.auto ? join(out, AUTO_SEND(task.auto)) : out
+}
+
+const SECTION_ROUTES =
+  'Then act on the reply: "ok", "fine", "looks good" → team "section" with verdict "ok" (no confirmation); "skip" → verdict "skip"; a comment → polish it and confirm [Send] [Edit] [Cancel], then team "section" with verdict "finetune" (the user states the exact edit; give it in text) or "revise" (unhappy with the substance; when unsure, revise) and text = the confirmed comment; a question → polish and confirm, then team "ask" (the same section comes back after the answer); "show the rest" or "all at once" → verdict "rest"; a clear stop → team "stop".'
+
+/** The draft the user reviews now: the brief, or the latest document or plan. */
+function reviewDraft(task: TaskState): { text: string; idx?: SectionIndex; under?: string } {
+  const brief = task.phase === "brief"
+  const text = readTaskFile(task, brief ? briefName(task) : draftFile(task))
+  return { text, idx: sectionIndex(task, brief ? "brief" : "draft"), under: brief ? (task.workflow === "research" ? "Research brief" : "Concept brief") : undefined }
+}
+
+/** The sections a walk-through would go through now. */
+export function walkable(task: TaskState): string[] {
+  const { text, idx, under } = reviewDraft(task)
+  return idx ? walkIds(text, idx, under) : []
+}
+
+/** A brief, document or plan waiting on the user: the walk-through, or the whole draft with the review style. */
+function reviewView(task: TaskState): string {
+  const w = task.walk?.key === task.sections?.key ? task.walk : undefined
+  if (w && !w.rest && !w.done && w.at < w.ids.length) return walkSection(task, w)
+  if (w?.done) {
+    const { text, idx, under } = reviewDraft(task)
+    // A brief's sections outside its top heading (the excerpts).
+    const inBrief = under && idx ? walkIds(text, { ...idx, final: [] }, under) : []
+    const extra = !under || !idx ? [] : split(text).sections
+      .map((s, i) => ({ s, id: idx.ids[i]! }))
+      .filter(({ s, id }) => !inBrief.includes(id) && s.text.split("\n").slice(1).join("\n").trim())
+      .map(({ s, id }) => `${id} ${shownTitle(s.title)}`)
+    return join(
+      `ALL SECTIONS ACCEPTED: ${idRanges(w.ids)} ${w.ids.length > 1 ? "are" : "is"} marked final.`,
+      extra.length ? `Not gone through (supporting material, shown on request): ${extra.join("; ")}.` : "",
+      `NEXT ACTION: tell the user in one line, then ask with the question tool: [Approve] [Show it all at once]. Approve → team "approve". Show it all at once → team "section" with verdict "rest".`,
+    )
+  }
+  const full = renderPhase(task)
+  if (w?.rest) {
+    const kept = w.replies.filter((r) => r.verdict === "finetune" || r.verdict === "revise").map((r) => `${r.id} (${r.verdict === "finetune" ? "fine-tune" : "revise"})`)
+    const ok = w.replies.filter((r) => r.verdict === "ok").map((r) => r.id)
+    return join(
+      full,
+      kept.length || ok.length
+        ? `From the walk-through: ${[ok.length && `ok ${idRanges(ok)}`, kept.length && `comments on ${kept.join(", ")}`].filter(Boolean).join("; ")}. They are kept and sent with the user's next comments ("change"); approving drops the comments.`
+        : "",
+    )
+  }
+  const style = task.reviewStyle ?? "ask"
+  if (style === "all" || !walkable(task).length) return full
+  // The draft itself comes with the next call, so the review style is always chosen first.
+  if (style === "sections") return 'REVIEW ONE SECTION AT A TIME (config reviewStyle). NEXT ACTION: call team "section" with verdict "start" right away.'
+  const n = walkable(task).length
+  return join(
+    `${draftTitle(task)} ready: ${n} section${n > 1 ? "s" : ""} to review.`,
+    'NEXT ACTION: tell the user in one line, then ask with the question tool how to review it: [All at once] [One section at a time]. All at once → team "section" with verdict "rest". One section at a time → team "section" with verdict "start". Follow the NEXT ACTION of that result.',
+  )
+}
+
+/** "Concept brief", "What-document (version 2)", "Plan (plan 3)". */
+function draftTitle(task: TaskState): string {
+  if (task.phase === "brief") return `${task.workflow === "research" ? "Research" : "Concept"} brief`
+  const name = docName(task)
+  return `${name[0]!.toUpperCase()}${name.slice(1)}${draftIsDoc(task) ? ` (version ${task.doc})` : ` (plan ${task.plan})`}`
+}
+
+function walkSection(task: TaskState, w: NonNullable<TaskState["walk"]>): string {
+  const { text, idx } = reviewDraft(task)
+  const id = w.ids[w.at]!
+  const s = split(text).sections[idx?.ids.indexOf(id) ?? -1]
+  const first = w.at === 0 && !w.replies.length
+  const head = first
+    ? join(
+        task.phase === "approval" && !draftIsDoc(task) ? `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}` : "",
+        changeLine(task, false),
+        principalBlock(task),
+        adviceLine(task),
+      )
+    : ""
+  const body = s ? s.text.split("\n").slice(1).join("\n").trim() : "(section not found; see the file)"
+  const block = join(head, `**${draftTitle(task)}, ${id} · ${s ? shownTitle(s.title).replace(/^#+\s*/, "") : "?"}** (${w.at + 1} of ${w.ids.length})`, body)
+  return join(
+    `SECTION ${w.at + 1} OF ${w.ids.length}. Show this block to the user exactly as written, without rewording or shortening it:`,
+    `<show>\n${block}\n</show>`,
+    `NEXT ACTION: show the block above and end with one line: "Reply ok, comment on it, ask about it, skip it, or say show the rest." No buttons. ${SECTION_ROUTES}`,
+  )
 }
 
 function renderPhase(task: TaskState): string {

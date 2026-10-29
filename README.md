@@ -138,6 +138,17 @@ To update later, run `git pull` in the clone and restart OpenCode.
   shown to you as "also changed S9 (…)". Each version says what changed ("revised S5, S6 ·
   fine-tuned S8 · new S12"). A round of fine-tunes only goes straight to the writer (no
   revision brief from the Lead) and doesn't count toward the escalation rounds.
+- **One section at a time:** long briefs, documents and plans are hard to take in at once.
+  At every review stop the manager asks [All at once] [One section at a time]. One at a
+  time shows a section per turn (`S3 · Concerns (3 of 9)`). Every section you review ends
+  with the writer's pick, `**Recommended:** <option>: <short reason>` (or "as written" when
+  there's nothing to decide); the plugin refuses a draft without it. Reply "ok" (marks it final),
+  "skip", a comment (polished and confirmed right away, stored as a fine-tune or revise), a
+  question (answered, then the same section again), or "show the rest" (the remaining
+  sections at once; your earlier replies are kept). After the last section, all comments go
+  to the team as one scoped revision; when you passed every section, the manager asks once
+  to approve. A brief's excerpts aren't walked through, only listed. Set `"reviewStyle"` to
+  `"all"` or `"sections"` to skip the question; auto modes skip the review altogether.
 - **Modes:** from fully interactive to hands-off; see [Modes](#modes).
 
 ### Modes

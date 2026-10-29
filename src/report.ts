@@ -1,7 +1,7 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { runs, type Report, type ShellRun } from "./runtime.ts"
-import { checkEdits } from "./sections.ts"
+import { checkEdits, missingRecommendations, splice } from "./sections.ts"
 import { draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
 
 const SECTION_EDIT = {
@@ -148,6 +148,29 @@ export const REPORT_INPUT = {
 export const REPORT_DESCRIPTION =
   "Finish your work by calling this exactly once. Only the listed statuses are valid now. After calling it, stop."
 
+/**
+ * Briefs, documents and plans the user reviews: each reviewed section ends with the writer's pick. A brief counts only
+ * with its "Concept brief" or "Research brief" heading (how-stage briefs aren't shown to the user). A scoped revision
+ * is checked as merged into the previous version.
+ */
+function recommendProblem(role: string, input: Report, task: TaskState | undefined, scoped: boolean): string | undefined {
+  const lead = role === "lead" && input.status === "ESCALATE"
+  if (!lead && !(role === "architect" && (input.status === "DOC" || input.status === "PLAN"))) return undefined
+  let text = input.content
+  if (scoped && task?.sections && input.sections?.length) {
+    try {
+      text = splice(readTaskFile(task, scopedFile(task)), task.sections, input.sections, task.scope?.finetune ?? []).text
+    } catch {
+      return undefined
+    }
+  }
+  const missing = lead
+    ? [...missingRecommendations(text, "Concept brief"), ...missingRecommendations(text, "Research brief")]
+    : missingRecommendations(text)
+  if (!missing.length) return undefined
+  return `Every section the user reviews ends with a line "**Recommended:** <option>: <short reason>" (several choices in one section: the pick for each, in that line; nothing to decide: "**Recommended:** as written"). Missing in: ${missing.join("; ")}.${scoped ? " Return those sections too, with only that line added." : ""}`
+}
+
 /** Validates and stores the report for the session. Throws a message the model sees. */
 export function acceptReport(config: Config, sessionID: string, input: Report): string {
   const run = runs.get(sessionID)
@@ -174,6 +197,8 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     const errors = checkEdits(task.sections!, task.scope!, input.sections, readTaskFile(task, scopedFile(task)))
     if (errors.length) throw new Error(`This revision is scoped:\n- ${errors.join("\n- ")}`)
   }
+  const recommendErr = recommendProblem(run.role, input, task, !whole && isScopedWriter(run.mode, task))
+  if (recommendErr) throw new Error(recommendErr)
   if (run.mode === "lead_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))
     if (missing.length) throw new Error(`Answer every question by its id; missing: ${missing.join(", ")}.`)
