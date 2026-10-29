@@ -41,6 +41,8 @@ export interface SessionRun {
   inFlight: number
   shells: ShellRun[]
   edited: Set<string>
+  /** Each edited file's content before this call's first edit (undefined: it didn't exist). */
+  before: Map<string, string | undefined>
   /** Session token counts when the call started, for live usage. */
   base?: { input: number; cacheRead: number; output: number }
 }
@@ -60,7 +62,7 @@ export function counter(sessionID: string): Counter {
   return c
 }
 
-export function beginRun(sessionID: string, run: Omit<SessionRun, "toolCalls" | "tools" | "prompts" | "lastActivity" | "inFlight" | "shells" | "edited">): SessionRun {
+export function beginRun(sessionID: string, run: Omit<SessionRun, "toolCalls" | "tools" | "prompts" | "lastActivity" | "inFlight" | "shells" | "edited" | "before">): SessionRun {
   const r: SessionRun = {
     ...run,
     toolCalls: 0,
@@ -70,6 +72,7 @@ export function beginRun(sessionID: string, run: Omit<SessionRun, "toolCalls" | 
     inFlight: 0,
     shells: [],
     edited: new Set(),
+    before: new Map(),
   }
   runs.set(sessionID, r)
   return r

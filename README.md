@@ -138,8 +138,9 @@ and saved next to it as `<name>.how.md`. Nobody edits code, and there is no buil
 The what-document is saved to `docs/<task>.md` in the project (`workflows.plan.output`), or to
 the path you name. A default path never overwrites an existing file; a path you name is edited
 in place. If
-[opencode-edited-files](https://github.com/aditya1271/opencode-edited-files) is installed, the
-saved document shows in its sidebar.
+[opencode-edited-files](https://github.com/aditya1271/opencode-edited-files) is installed, its
+sidebar in your session shows the saved document, every file the team writes in the task folder
+(brief, answers, drafts, advice, …; not `state.json` or `logs/`), and the code Developer changed.
 
 You reply in your own words. Comments on any plan or document go to the Lead first, who turns
 them into a revision brief (including places with the same problem that you didn't name); the

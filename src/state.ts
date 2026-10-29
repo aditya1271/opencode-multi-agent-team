@@ -250,12 +250,26 @@ export function save(task: TaskState) {
   writeFileSync(path.join(task.dir, "state.json"), JSON.stringify(task, null, 2))
 }
 
+/** Told about every task file written (with its content before), so it can show in the user's edited files. */
+let onWrite: ((task: TaskState, file: string, before: string | undefined) => void) | undefined
+export function setOnWrite(fn: typeof onWrite) {
+  onWrite = fn
+}
+
+function written(task: TaskState, file: string, write: () => void) {
+  const before = onWrite && existsSync(file) ? readFileSync(file, "utf8") : undefined
+  write()
+  onWrite?.(task, file, before)
+}
+
 export function writeFile(task: TaskState, name: string, content: string) {
-  writeFileSync(path.join(task.dir, name), content.endsWith("\n") ? content : content + "\n")
+  const file = path.join(task.dir, name)
+  written(task, file, () => writeFileSync(file, content.endsWith("\n") ? content : content + "\n"))
 }
 
 export function appendFile(task: TaskState, name: string, content: string) {
-  appendFileSync(path.join(task.dir, name), content.endsWith("\n") ? content : content + "\n")
+  const file = path.join(task.dir, name)
+  written(task, file, () => appendFileSync(file, content.endsWith("\n") ? content : content + "\n"))
 }
 
 /** Writes `<kind>-N.md` with the next number and returns its name. */

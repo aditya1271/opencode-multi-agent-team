@@ -20,6 +20,7 @@ import {
   MODE_ROLE,
   newTask,
   save,
+  setOnWrite,
   TERMINAL,
   writeFile,
   writeNumbered,
@@ -100,6 +101,7 @@ export class Team {
     private log: (msg: string) => void,
   ) {
     this.root = expandHome(config.taskDir)
+    setOnWrite((task, file, before) => this.trackEdit(task.managerSession, [{ path: file, before }]))
   }
 
   // ---- sidebar ----
@@ -441,7 +443,7 @@ export class Team {
       const before = existsSync(file) ? readFileSync(file, "utf8") : undefined
       mkdirSync(path.dirname(file), { recursive: true })
       writeFileSync(file, content.endsWith("\n") ? content : content + "\n")
-      this.trackEdit(task.managerSession, file, before)
+      this.trackEdit(task.managerSession, [{ path: file, before }])
       return undefined
     } catch (e) {
       this.log(`task ${task.id}: cannot write ${file}: ${(e as Error).message}`)
@@ -449,12 +451,13 @@ export class Team {
     }
   }
 
-  /** Shows a file the plugin wrote in the opencode-edited-files sidebar; does nothing when that plugin isn't installed. */
-  private trackEdit(sessionID: string, file: string, before: string | undefined) {
+  /** Shows files the team wrote in the opencode-edited-files sidebar; does nothing when that plugin isn't installed. */
+  private trackEdit(sessionID: string, files: { path: string; before: string | undefined }[]) {
+    if (!files.length) return
     try {
       void this.ctx
         .rpc(EditedFilesTrack)
-        .track({ sessionID, files: [{ path: file, ...(before === undefined ? {} : { before }) }] })
+        .track({ sessionID, files: files.map(({ path, before }) => (before === undefined ? { path } : { path, before })) })
         .catch(() => undefined)
     } catch {
       // No RPC client (tests).
@@ -726,6 +729,8 @@ export class Team {
       const rel = path.relative(task.workspace, file) || file
       if (!task.editedFiles.includes(rel)) task.editedFiles.push(rel)
     }
+    // Agents edit in their own sessions; show their changes in the user's session too.
+    this.trackEdit(task.managerSession, [...(res.run?.edited ?? [])].map((file) => ({ path: file, before: res.run?.before.get(file) })))
     if (res.end === "aborted") {
       task.phase = "stopped"
       await this.finish(task, "stopped")

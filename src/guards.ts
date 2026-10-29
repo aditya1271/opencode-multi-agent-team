@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { accessSync, constants, existsSync, writeFileSync } from "node:fs"
+import { accessSync, constants, existsSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
@@ -148,9 +148,12 @@ export async function registerGuards(ctx: Context, config: Config) {
     run.toolCalls++
     run.tools[kind] = (run.tools[kind] ?? 0) + 1
     run.inFlight++
-    if (run.role === "developer" && (event.tool === "edit" || event.tool === "write" || event.tool === "patch")) {
+    if (EDIT_TOOLS.has(event.tool)) {
       const cwd = run.task?.workspace ?? ctx.location.directory
-      for (const file of editedPaths(event.input, cwd)) if (isReadOnly(file)) await p4Edit(file)
+      for (const file of editedPaths(event.input, cwd)) {
+        if (!run.before.has(file)) run.before.set(file, existsSync(file) ? readFileSync(file, "utf8") : undefined)
+        if (run.role === "developer" && isReadOnly(file)) await p4Edit(file)
+      }
     }
   })
 

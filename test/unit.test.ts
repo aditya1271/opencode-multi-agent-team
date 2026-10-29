@@ -5,7 +5,7 @@ import { toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, runs } from "../src/runtime.ts"
-import { migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
+import { appendFile, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, render, stepTitles } from "../src/messages.ts"
@@ -371,6 +371,29 @@ describe("plan and research workflows", () => {
       expect(readFileSync(path.join(t.dir, "revision-1.md"), "utf8").trim()).toBe("change section X")
     } finally {
       cleanup()
+    }
+  })
+
+  test("task files and agents' edits show in the user's edited files", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-tr-"))
+    const tracked: any[] = []
+    const ctx = {
+      location: { directory: root },
+      session: { context: async () => [], get: async () => undefined },
+      rpc: () => ({ track: async (i: any) => void tracked.push(...i.files.map((f: any) => ({ session: i.sessionID, ...f }))) }),
+    }
+    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    team.step = async (t: any) => t.pending
+    try {
+      await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_t", signal)
+      const t = team.task("ses_t")
+      expect(tracked.find((x) => x.path.endsWith("request.md"))).toEqual({ session: "ses_t", path: path.join(t.dir, "request.md") })
+      appendFile(t, "answers.md", "one")
+      appendFile(t, "answers.md", "two")
+      expect(tracked.filter((x) => x.path.endsWith("answers.md")).map((x) => x.before)).toEqual([undefined, "one\n"])
+      expect(tracked.some((x) => x.path.endsWith("state.json"))).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 
