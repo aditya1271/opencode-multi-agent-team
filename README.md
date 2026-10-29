@@ -343,6 +343,16 @@ the request, your material or the Intern's findings name, and sends every search
 Tools you add to Lead still work, so a code-search MCP there lets it search again; add only
 tools that fetch your material (an issue tracker, a wiki).
 
+Code-search tools often skip some files. A code graph indexes only the languages it knows,
+so SWIG `.i` files, scripts or generated sources may be missing. When its search finds
+nothing, the Intern falls back to glob, grep and find before reporting NOT_FOUND. To close a
+gap in codebase-memory, check coverage with `check_index_coverage`, map extra extensions to a
+known language in `~/.config/codebase-memory-mcp/config.json`, and re-index:
+
+```json
+{ "extra_extensions": { ".i": "cpp" } }
+```
+
 Each agent's prompt has a fixed core: its role, the report statuses, and the safety rules. The
 editable defaults are in `prompts/<role>.instructions.md`; copy one as a starting point.
 The front agents each have their own polishing instructions (the shape of the polished
