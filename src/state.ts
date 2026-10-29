@@ -61,6 +61,14 @@ export const isDocWorkflow = (task: { workflow?: Workflow }) => task.workflow ==
 export type Stage = "what" | "how"
 
 /** The Architect's next draft is a document (what-document, research report), not a step plan. */
+/** safe: stops at risky plans and doesn't implement a finished plan; full: neither. Both stop when stuck or out of budget. */
+export type AutoLevel = "safe" | "full"
+
+/** Auto mode decides this stop itself: the user isn't asked. */
+export const autoDecides = (task: TaskState) =>
+  !!task.auto &&
+  (["checks", "questions", "brief"].includes(task.phase) || (task.phase === "approval" && !(task.auto === "safe" && task.planRisk && !draftIsDoc(task))))
+
 export const draftIsDoc = (task: { workflow?: Workflow; stage?: Stage }) =>
   task.workflow === "research" || task.stage === "what" || (task.workflow === "plan" && task.stage !== "how")
 
@@ -179,6 +187,10 @@ export interface TaskState {
   scope?: Scope
   /** What the last scoped revision changed, shown to the user. */
   sectionChange?: SectionChange
+  /** Auto mode: the team takes the recommended choice wherever it would wait on the user. */
+  auto?: AutoLevel
+  /** What auto mode decided, shown to the user at the end. */
+  autoLog?: string[]
   /** The user asked for a plan: lead can't pick TRIVIAL. */
   forcePlan?: boolean
   /** The user chose to skip build and test: no check commands, builds are blocked. */

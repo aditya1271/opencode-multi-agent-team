@@ -303,6 +303,46 @@ describe("plan and research workflows", () => {
   }
   const report = (status: string, extra: object = {}) => ({ status, summary: "Approving this gives you a design.", content: "# Design\n\n## Options\n\nA or B", ...extra })
 
+  test("auto mode: safe auto decides questions and approvals, stops at a risky plan; full auto implements", async () => {
+    const switched: string[] = []
+    const { team, cleanup } = setup(switched)
+    try {
+      await team.handle({ action: "start", text: "design the cache", workflow: "plan", auto: "safe" }, "ses_a", signal)
+      const t = team.task("ses_a")
+      expect(t.auto).toBe("safe")
+      team.apply(t, { mode: "lead" }, report("QUESTIONS", { questions: ["LRU or LFU? (recommended: LRU)"] }), {})
+      expect(t.phase).toBe("questions")
+      expect(render(t)).toContain("Next, on safe auto: answer lead's questions with the recommended options")
+      expect(await team.autoStep(t, signal)).toContain("AUTO (safe): took the recommended answer to 1 question from lead")
+      expect([t.phase, t.pending.mode]).toEqual(["running", "lead"])
+      expect(t.pending.note).toContain("take your recommended option for each question")
+      t.pending = undefined
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: "## Concept brief\n\n**Concerns**: speed" }), {})
+      expect(await team.autoStep(t, signal)).toContain("approved the concept brief")
+      t.pending = undefined
+      team.apply(t, { mode: "architect" }, report("DOC"), {})
+      expect(await team.autoStep(t, signal)).toContain("approved the what-document")
+      expect(t.stage).toBe("how")
+      t.pending = undefined
+      team.apply(t, { mode: "lead" }, report("ESCALATE", { content: "## Code\n\n`a.ts:1`" }), {})
+      t.pending = undefined
+      t.skipPrincipalReview = true
+      team.apply(t, { mode: "architect" }, report("PLAN", { content: "## Steps\n1. **Drop the table** — `db.ts:1`", steps: 1, risk: "yes" }), {})
+      save(t)
+      expect(await team.autoStep(t, signal)).toBeUndefined()
+      expect(render(t)).toContain("**Safe auto stopped here:**")
+      expect(render(t)).toContain("**Decided on auto:**\n- took the recommended answer to 1 question from lead\n- approved the concept brief")
+
+      await team.handle({ action: "auto", auto: "full" }, "ses_a", signal)
+      expect(await team.autoStep(t, signal)).toContain("AUTO (full): approved the plan 1 (destructive or irreversible steps) and started implementing it")
+      expect([t.phase, switched]).toEqual(["done", ["build-manager"]])
+      expect(team.task("ses_a").auto).toBe("full")
+      expect(readFileSync(path.join(t.dir, "how-answers.md"), "utf8")).toContain("## Decided on full auto")
+    } finally {
+      cleanup()
+    }
+  })
+
   test("a plan task skips checks, writes the document without overwriting, and never reaches the developer", async () => {
     const switched: string[] = []
     const { team, workspace, cleanup } = setup(switched)

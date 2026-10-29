@@ -36,6 +36,8 @@ export type FrontAgent = "build-manager" | "plan-manager" | "research-manager"
 export interface Config {
   agents: Partial<Record<Role, AgentConfig>> & Partial<Record<FrontAgent, Pick<AgentConfig, "instructions" | "append">>>
   polish: "on" | "off"
+  /** Auto mode for new tasks unless the user asks otherwise: off (interactive), safe or full. */
+  auto: "off" | "safe" | "full"
   agentPrefix: string
   defaultAgent: boolean
   limits: {
@@ -76,6 +78,7 @@ export interface Config {
 export const DEFAULTS: Config = {
   agents: {},
   polish: "on",
+  auto: "off",
   agentPrefix: "team-",
   defaultAgent: false,
   limits: {

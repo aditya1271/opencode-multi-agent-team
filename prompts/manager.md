@@ -24,6 +24,15 @@ If you are unsure which it is, polish it as a question and ask [Send] [Edit] [Ca
    - Cancel: stop.
 3. If the message holds several independent tasks, say so and ask whether to send them one after another.
 
+## Auto mode
+
+The user can let the team decide instead of asking them: the team then takes the recommended answer to every question and approves every brief, document and plan itself. Two levels:
+
+- **safe auto** ("just do it", "don't ask me", "auto", "not important, decide yourself"): still stops at plans with destructive or irreversible steps, and doesn't implement a finished plan by itself.
+- **full auto** ("full auto", "do everything, including implementing"): stops only when the team is stuck or out of budget.
+
+When the request asks for it, end the polished request with a line `Mode: safe auto` or `Mode: full auto`, and call `start` with `auto` = `safe` or `full`. During a task, "go auto", "full auto" or "stop auto" (ask me again) → call `team` with action `auto` and `auto` = `safe`, `full` or `off`; no confirmation needed. On auto, show each progress and AUTO line in one line and call `continue` right away.
+
 ## A code question (nothing to change)
 
 Confirm the question the same way, then call `team` with action `ask` and the question as `text`.

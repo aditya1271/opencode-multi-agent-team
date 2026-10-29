@@ -12,6 +12,7 @@ import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
 import {
   answersName,
   appendFile,
+  autoDecides,
   briefName,
   draftIsDoc,
   findTask,
@@ -35,7 +36,7 @@ import {
 } from "./state.ts"
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
-export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "review", "implement", "stop", "resume", "retry", "extend", "stats", "status"] as const
+export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
 
 export interface TeamInput {
@@ -47,6 +48,8 @@ export interface TeamInput {
   workflow?: Workflow
   output?: string
   review?: boolean
+  /** start and auto: auto mode (off = interactive). */
+  auto?: "off" | "safe" | "full"
   /** change only: the revision scope, by section id (add: titles of new sections). */
   finetune?: string[]
   revise?: string[]
@@ -57,11 +60,11 @@ export interface TeamInput {
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
-  "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document),",
+  "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Principal to review the plan or document; auto = safe or full when the user wants no questions),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
   "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), review (Principal critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
-  "retry, extend, stats (last = N tasks), status.",
+  "retry, extend, auto (auto = off, safe or full: switch auto mode for the open task), stats (last = N tasks), status.",
   "Always follow the NEXT ACTION line of the result.",
 ].join(" ")
 
@@ -74,6 +77,11 @@ export const TEAM_SCHEMA = {
     plan: { type: "boolean", description: "start only: the user wants a plan, not a quick fix." },
     output: { type: "string", description: "start only, plan/research: the document path the user named." },
     review: { type: "boolean", description: "start only: the user asked for Principal's review of the plan or document." },
+    auto: {
+      type: "string",
+      enum: ["off", "safe", "full"],
+      description: "start and auto: safe = take the recommended choice at every question and approval, but stop at destructive plans and before implementing a finished plan; full = also those; off = ask the user.",
+    },
     finetune: { type: "array", items: { type: "string" }, description: "change only: ids of sections that get only an exact edit the user stated (the edit is in text)." },
     revise: { type: "array", items: { type: "string" }, description: "change only: ids of sections whose substance the user wants reworked (S5). Empty with no finetune or add: every section that isn't final." },
     final: { type: "array", items: { type: "string" }, description: "change only: ids of sections the user calls good or done; they stay as they are until reopened." },
@@ -238,34 +246,14 @@ export class Team {
       case "answer":
         return this.answer(task, input.text ?? "", signal)
       case "approve":
-        if (task.phase === "brief") {
-          task.phase = "running"
-          // The approved brief starts a new document: its own comment rounds, advisers and sessions.
-          this.resetLadder(task)
-          task.sessions.architect = undefined
-          task.sessions.principal = undefined
-          task.pending = { mode: "architect" }
-          save(task)
-          return this.step(task, signal)
-        }
-        if (task.phase !== "approval") return this.wrongPhase(task, "approve")
-        if (task.stage === "what") {
-          this.toHow(task)
-          save(task)
-          return this.step(task, signal)
-        }
-        if (isDocWorkflow(task)) {
-          this.done(task, (task.stage === "how" ? task.planSummary : task.docSummary) ?? "")
-          await this.finish(task, "done")
-          return render(task)
-        }
-        task.phase = "running"
-        task.step = 1
-        task.rounds = 0
-        task.developerSeenPlan = false
-        task.pending = { mode: "fix", fresh: true }
+        return this.approve(task, signal)
+      case "auto": {
+        const level = input.auto ?? "safe"
+        task.auto = level === "off" ? undefined : level
         save(task)
-        return this.step(task, signal)
+        const line = task.auto ? `Auto mode is ${task.auto} for this task.` : "Auto mode is off: the team asks you again."
+        return join(line, TERMINAL.includes(task.phase) ? render(task) : await this.step(task, signal))
+      }
       case "change":
         return this.change(task, input, signal)
       case "review":
@@ -289,6 +277,78 @@ export class Team {
         return this.step(task, signal)
     }
     return render(task)
+  }
+
+  private async approve(task: TaskState, signal: AbortSignal): Promise<string> {
+    if (task.phase === "brief") {
+      task.phase = "running"
+      // The approved brief starts a new document: its own comment rounds, advisers and sessions.
+      this.resetLadder(task)
+      task.sessions.architect = undefined
+      task.sessions.principal = undefined
+      task.pending = { mode: "architect" }
+      save(task)
+      return this.step(task, signal)
+    }
+    if (task.phase !== "approval") return this.wrongPhase(task, "approve")
+    if (task.stage === "what") {
+      this.toHow(task)
+      save(task)
+      return this.step(task, signal)
+    }
+    if (isDocWorkflow(task)) {
+      this.done(task, (task.stage === "how" ? task.planSummary : task.docSummary) ?? "")
+      await this.finish(task, "done")
+      return render(task)
+    }
+    task.phase = "running"
+    task.step = 1
+    task.rounds = 0
+    task.developerSeenPlan = false
+    task.pending = { mode: "fix", fresh: true }
+    save(task)
+    return this.step(task, signal)
+  }
+
+  /**
+   * Auto mode at a stop where the team would wait on the user: takes the recommended choice and goes on.
+   * Undefined when auto mode doesn't decide this stop (the user is asked as usual).
+   */
+  private async autoStep(task: TaskState, signal: AbortSignal): Promise<string | undefined> {
+    if (!autoDecides(task)) return undefined
+    const decided = (line: string) => {
+      task.autoLog = [...(task.autoLog ?? []), line]
+      appendFile(task, answersName(task), `## Decided on ${task.auto} auto\n\n${line}\n`)
+      this.log(`task ${task.id}: auto: ${line}`)
+      return line
+    }
+    const tell = async (line: string, next: Promise<string>) => `AUTO (${task.auto}): ${decided(line)}. Tell the user this in one line.\n\n${await next}`
+    switch (task.phase) {
+      case "checks":
+        this.skipChecks(task)
+        task.phase = "running"
+        save(task)
+        return tell("skipped build and test (no commands configured)", this.step(task, signal))
+      case "questions": {
+        const n = task.questions?.length ?? 0
+        const from = task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"
+        const answer =
+          "The user runs this task on auto mode and isn't asked: take your recommended option for each question (where you gave none, the option you'd recommend), and note each choice as an assumption."
+        appendFile(task, answersName(task), `## Answer (auto)\n\n${answer}\n`)
+        this.answered(task, answer)
+        save(task)
+        return tell(`took the recommended answer${n === 1 ? "" : "s"} to ${n} question${n === 1 ? "" : "s"} from ${from}`, this.step(task, signal))
+      }
+      case "brief":
+        return tell(`approved the ${task.workflow === "research" ? "research" : "concept"} brief`, this.approve(task, signal))
+      case "approval": {
+        const what = draftIsDoc(task) ? docName(task) : `plan ${task.plan}${task.planRisk ? " (destructive or irreversible steps)" : ""}`
+        if (task.auto === "full" && task.workflow === "plan" && task.stage === "how")
+          return tell(`approved the ${what} and started implementing it`, this.implement(task, signal))
+        return tell(`approved the ${what}`, this.approve(task, signal))
+      }
+    }
+    return undefined
   }
 
   // ---- task lookup and manager usage ----
@@ -397,6 +457,8 @@ export class Team {
     const task = newTask(this.root, managerSession, this.ctx.location.directory, text, this.config.limits.taskAttempts)
     if (opts.plan === true) task.forcePlan = true
     if (opts.review === true) task.reviewFirst = true
+    const auto = opts.auto ?? this.config.auto
+    if (auto === "safe" || auto === "full") task.auto = auto
     const workflow = WORKFLOWS.includes(opts.workflow as Workflow) ? opts.workflow : "code"
     if (workflow !== "code") {
       task.workflow = workflow
@@ -583,6 +645,13 @@ export class Team {
     const { polished, note: answer } = await this.withOriginal(task, text, "answer")
     if (!polished) return 'answer needs text: the user\'s answer. NEXT ACTION: call team with action "answer".'
     appendFile(task, answersName(task), `## Answer\n\n${answer}\n`)
+    this.answered(task, answer)
+    save(task)
+    return this.step(task, signal)
+  }
+
+  /** Sends the answer to the agent that asked. */
+  private answered(task: TaskState, answer: string) {
     const note = `The user answered your questions:\n${answer}`
     const from = task.questionsFrom
     task.pending =
@@ -595,8 +664,6 @@ export class Team {
             : { mode: "architect", note }
     task.phase = "running"
     task.questions = undefined
-    save(task)
-    return this.step(task, signal)
   }
 
   private async change(task: TaskState, input: TeamInput, signal: AbortSignal): Promise<string> {
@@ -752,7 +819,7 @@ export class Team {
         `Implement the plan in ${task.output}. The user approved that plan document; read it first and follow it.`,
         `The planning request was:\n${request}`,
       )
-      return join(note, await this.start(task.managerSession, text, signal, { plan: true, workflow: "code" }))
+      return join(note, await this.start(task.managerSession, text, signal, { plan: true, workflow: "code", auto: task.auto ?? "off" }))
     }
     // The approved how-document is the plan: Developer carries it out; the Architect steps in only if a step fails.
     const text = join(`Implement the approved plan (${howOutput(task.output)}) for the what-document ${task.output}.`, `The planning request was:\n${request}`)
@@ -779,7 +846,7 @@ export class Team {
       code.history.push({ n: 0, mode: "architect", role: "architect", status: "PLAN", summary: `approved in plan task ${task.id}`, file: "plan-1.md", plan: 1, stageRun: 1 })
       code.pending = { mode: "fix", fresh: true }
     }
-    return join(note, await this.start(task.managerSession, text, signal, { workflow: "code" }, seed))
+    return join(note, await this.start(task.managerSession, text, signal, { workflow: "code", auto: task.auto ?? "off" }, seed))
   }
 
   private wrongPhase(task: TaskState, action: string) {
@@ -789,6 +856,8 @@ export class Team {
   // ---- running one agent ----
 
   private async step(task: TaskState, signal: AbortSignal): Promise<string> {
+    const auto = await this.autoStep(task, signal)
+    if (auto !== undefined) return auto
     if (task.phase !== "running" || !task.pending) return render(task)
     if (task.attempts >= task.attemptLimit) {
       task.phase = "budget"

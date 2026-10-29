@@ -138,6 +138,15 @@ To update later, run `git pull` in the clone and restart OpenCode.
   shown to you as "also changed S9 (…)". Each version says what changed ("revised S5, S6 ·
   fine-tuned S8 · new S12"). A round of fine-tunes only goes straight to the writer (no
   revision brief from the Lead) and doesn't count toward the escalation rounds.
+- **Auto mode (no questions):** say "just do it" or "don't ask me" for **safe auto**, or "full
+  auto". The team takes the recommended answer to every question, approves every brief,
+  document and plan, and skips build/test when none is configured. Each decision shows as one
+  "AUTO" line, is logged in the task's answers file, and is listed under "Decided on auto" at
+  the end. Safe auto still stops at a plan with destructive or irreversible steps and after a
+  finished plan document (you choose [Implement it]); full auto approves those and implements
+  the plan. Both stop when the team is stuck or the attempt budget runs out. Switch during a
+  task with "go auto", "full auto" or "stop auto". `"auto": "safe"` or `"full"` in the config
+  makes it the default for new tasks (default `"off"`).
 
 ### Plan documents (`plan-manager`)
 

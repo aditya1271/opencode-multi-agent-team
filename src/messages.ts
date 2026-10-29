@@ -4,7 +4,7 @@ import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
 import { needInfoLimit } from "./report.ts"
 import { annotate, ensureIndex, idRanges, split, type SectionIndex } from "./sections.ts"
-import { answerFiles, answersName, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
+import { answerFiles, answersName, autoDecides, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
 import { report as usageReport } from "./usage.ts"
 
 export const fileBlock = (task: TaskState, name: string) => {
@@ -553,6 +553,18 @@ export function render(task: TaskState): string {
   const files = task.editedFiles.length ? task.editedFiles.map((f) => `- ${f}`).join("\n") : "(none)"
   const attempts = `Attempts: ${task.attempts}/${task.attemptLimit}.`
   const usage = () => usageReport(task.usage, Math.max(1, task.planSteps))
+  if (autoDecides(task)) {
+    const next =
+      task.phase === "checks"
+        ? "skip build and test"
+        : task.phase === "questions"
+          ? `answer ${MODE_ROLE[task.questionsFrom ?? "lead"]}'s questions with the recommended options`
+          : task.phase === "brief"
+            ? "approve the brief"
+            : `approve the ${draftIsDoc(task) ? docName(task) : "plan"}`
+    return `PROGRESS: ${lastLine}. Next, on ${task.auto} auto: ${next}. ${attempts}\nNEXT ACTION: show this progress line to the user in one line, then call team with action "continue".`
+  }
+  const decided = task.autoLog?.length ? `**Decided on auto:**\n${task.autoLog.map((l) => `- ${l}`).join("\n")}` : ""
   switch (task.phase) {
     case "running": {
       const progress =
@@ -634,6 +646,8 @@ export function render(task: TaskState): string {
         `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}`,
         changeLine(task),
         principalBlock(task),
+        task.auto === "safe" && task.planRisk && "**Safe auto stopped here:** this plan has destructive or irreversible steps, so it needs your approval.",
+        decided,
         adviceLine(task),
         `**Plan file:** ${howDoc ?? path.join(task.dir, `plan-${task.plan}.md`)}`,
       )
@@ -649,6 +663,7 @@ export function render(task: TaskState): string {
         `STUCK: ${task.stuckReason}`,
         `What was tried: ${task.plan} plan(s), ${task.planFailures} plan failure(s), round ${task.rounds} on step ${task.step}.`,
         lastErrors(task),
+        decided,
         `Files changed so far (kept, not reverted):\n${files}`,
         usage(),
         attempts,
@@ -659,6 +674,7 @@ export function render(task: TaskState): string {
         `ATTEMPT BUDGET USED UP: ${task.attempts} agent calls. Last: ${lastLine}.`,
         task.pending ? `Left to do: ${task.pending.mode}${task.planSteps ? `, step ${task.step} of ${task.planSteps}` : ""}.` : "",
         `Files changed so far:\n${files}`,
+        decided,
         usage(),
         `NEXT ACTION: show this to the user and ask [Continue +10 attempts] [Stop]. Continue → team "extend". Stop → team "stop".`,
       )
@@ -669,6 +685,7 @@ export function render(task: TaskState): string {
             ? `DONE: the plan is approved. What-document: ${task.output}${task.plan ? `\nHow-document: ${howOutput(task.output)}` : ""}`
             : `DONE: the ${docName(task)} is approved: ${task.output}`,
           task.workflow === "plan" && task.stage === "how" ? task.planSummary : task.docSummary,
+          decided,
           usage(),
           `Task folder: ${task.dir}`,
           task.workflow === "plan"
@@ -679,6 +696,7 @@ export function render(task: TaskState): string {
         `DONE: ${task.doneSummary ?? lastLine}`,
         task.skipChecks ? "Not built or tested: build and test were skipped." : "",
         `Changed files:\n${files}`,
+        decided,
         usage(),
         `Task folder: ${task.dir}`,
         "NEXT ACTION: tell the user the result. The task is finished.",
