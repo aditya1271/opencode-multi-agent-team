@@ -46,7 +46,7 @@ const num = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `
 const dur = (ms: number) => (ms >= 3600e3 ? `${(ms / 3600e3).toFixed(1)}h` : ms >= 60e3 ? `${Math.round(ms / 60e3)}m` : `${Math.round(ms / 1e3)}s`)
 
 export function table(usage: Partial<Record<Role, AgentUsage>>, share = false): string {
-  const rows: string[][] = [["agent", "calls", "prompts", "tools", "input", "cache", "output", "time", "model"]]
+  const rows: string[][] = [["agent", "calls", "prompts", "tools", "input", "output", "time", "model"]]
   const present = ROLES.filter((r) => usage[r])
   const sum: Partial<Record<Role, AgentUsage>> = {}
   for (const role of present) add(sum, "manager", { ...usage[role]!, model: undefined })
@@ -60,13 +60,12 @@ export function table(usage: Partial<Record<Role, AgentUsage>>, share = false): 
       String(u.prompts) + (share ? pct(u.prompts, total.prompts) : ""),
       String(toolTotal(u)),
       num(u.input),
-      num(u.cacheRead),
-      num(u.output) + (share ? pct(u.input + u.cacheRead + u.output, total.input + total.cacheRead + total.output) : ""),
+      num(u.output) + (share ? pct(u.input + u.output, total.input + total.output) : ""),
       role === "manager" && !u.ms ? "-" : dur(u.ms),
       u.models.join(", "),
     ])
   }
-  rows.push(["total", String(total.calls), String(total.prompts), String(toolTotal(total)), num(total.input), num(total.cacheRead), num(total.output), dur(total.ms), ""])
+  rows.push(["total", String(total.calls), String(total.prompts), String(toolTotal(total)), num(total.input), num(total.output), dur(total.ms), ""])
   const widths = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)))
   return rows.map((r) => r.map((c, i) => (i === 0 || i === r.length - 1 ? c.padEnd(widths[i]) : c.padStart(widths[i]))).join("  ").trimEnd()).join("\n")
 }

@@ -93,7 +93,7 @@ export const DEFAULTS: Config = {
     needInfoPerTask: 6,
     leadSearchRounds: 3,
     questionsPerTask: 4,
-    toolCalls: { lead: 15, architect: 25, intern: 30, developer: 150, reviewer: 30, principal: 20 },
+    toolCalls: { lead: 15, architect: 25, intern: 100, developer: 150, reviewer: 30, principal: 20 },
     callMinutes: { default: 30, developer: 240 },
     stallMinutes: 15,
     modelRetryWaits: 2,

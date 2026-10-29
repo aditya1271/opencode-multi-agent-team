@@ -237,6 +237,8 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
   yellow when it switched). The last lines total the task and the whole session (all tasks and
   code questions). Click **▶ Models** to list every role's configured main and backup models.
   Click the header to collapse the section. Child sessions show their manager's numbers.
+- **Token counts** are uncached input plus output. Cache reads (a few percent of the input
+  price) are left out, so the numbers track what you pay.
 
   ```
   ▼ Team running · 7/40 attempts
@@ -270,7 +272,7 @@ Edits are never reverted automatically. Every result lists the changed files.
 | Your comment rounds on one draft before advice | 3 (next adviser), 5 (the one above) |
 | Searches / question rounds per task | 6 / 4 |
 | Lead's search rounds (handed to the Intern) before each report | 3 |
-| Tool calls per agent call | lead 15, architect 25, intern 30, developer 150, reviewer 30, principal 20 |
+| Tool calls per agent call | lead 15, architect 25, intern 100, developer 150, reviewer 30, principal 20 |
 | Time per agent call | 30 min (developer 240), or 15 min without activity |
 
 All limits are in the config file under `limits`.

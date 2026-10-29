@@ -349,8 +349,10 @@ describe("plan and research workflows", () => {
       expect(allowedStatuses(DEFAULTS, "lead", t)).toContain("NEED_INFO")
       // While answering the Architect's questions: the findings return to the same answer.
       const answer = { mode: "lead_answer", ids: ["Q1"], asker: "architect", note: "Q1: who calls nextLevel?" }
-      team.apply(t, answer, report("NEED_INFO", { content: "1. Callers of nextLevel" }), {})
+      team.apply(t, answer, report("NEED_INFO", { content: "Queries:", questions: ["Callers of nextLevel"] }), {})
       expect([t.pending.mode, t.pending.then.mode]).toEqual(["intern", "lead_answer"])
+      // Queries put in the questions list reach the Intern.
+      expect(t.pending.note).toBe("Queries:\n\n1. Callers of nextLevel")
       team.apply(t, t.pending, report("FOUND", { content: "`a.cpp:3`" }), {})
       expect([t.pending.mode, t.pending.ids, t.pending.files.length]).toEqual(["lead_answer", ["Q1"], 1])
       expect(t.pending.note).toContain("Q1: who calls nextLevel?")
@@ -804,7 +806,9 @@ describe("usage", () => {
     add(usage, "developer", { calls: 2, prompts: 30, tools: { edit: 5, build: 20 }, input: 160000, cacheRead: 1200000, output: 12000, model: "c/d" })
     const t = table(usage)
     expect(t).toContain("manager")
-    expect(t).toContain("1.2M")
+    // Cache reads are left out: the table shows the tokens that cost money.
+    expect(t).not.toContain("1.2M")
+    expect(t).toContain("160k")
     expect(t.split("\n").pop()).toMatch(/^total\s+3\s+33\s+27/)
     expect(hints(usage)).toContain("manager used 2 read/search/shell/edit calls (expected 0)")
   })
@@ -889,7 +893,7 @@ describe("sidebar", () => {
       const developer = s.task!.rows[1]!
       expect([developer.calls, developer.prompts, developer.tools, developer.input, developer.cacheRead, developer.output]).toEqual([0, 2, 1, 100, 500, 30])
       expect(s.session.tasks).toBe(2)
-      expect(s.session.total).toEqual({ calls: 2, prompts: 8, tools: 9, tokens: 300 + 630 + 1000 })
+      expect(s.session.total).toEqual({ calls: 2, prompts: 8, tools: 9, tokens: 300 + 130 + 1000 })
       expect("task" in (await team.sidebar("ses_other"))).toBe(false)
     } finally {
       runs.delete("ses_fix")

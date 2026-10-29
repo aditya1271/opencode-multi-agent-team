@@ -19,7 +19,7 @@ const resolveColor = (theme: unknown, tokenPath: string, fallback: string) => {
   return value ?? fallback
 }
 
-const tokensOf = (r: StatsRow) => r.input + r.cacheRead + r.output
+const tokensOf = (r: StatsRow) => r.input + r.output
 
 /** RPC errors are plain objects ({ type, message }), not Error instances. */
 const errorText = (e: unknown): string => {

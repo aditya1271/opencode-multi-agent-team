@@ -35,6 +35,9 @@ import {
   type Phase,
   type TaskState,
 } from "./state.ts"
+/** A NEED_INFO report's queries: content plus any questions list (models put queries in either). */
+const queries = (r: Report) => join(r.content, (r.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"))
+
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
 export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status"] as const
@@ -154,7 +157,7 @@ export class Team {
         session.total.calls += u.calls
         session.total.prompts += u.prompts
         session.total.tools += toolTotal(u)
-        session.total.tokens += u.input + u.cacheRead + u.output
+        session.total.tokens += u.input + u.output
       }
     }
     sum(asked.usage)
@@ -1016,7 +1019,7 @@ export class Team {
         if (r.status === "NEED_INFO") {
           task.leadSearches = (task.leadSearches ?? 0) + 1
           this.record(task, p.mode, r)
-          task.pending = { mode: "intern", note: r.content, asker: "lead" }
+          task.pending = { mode: "intern", note: queries(r), asker: "lead" }
           return
         }
         task.leadSearches = 0
@@ -1067,7 +1070,7 @@ export class Team {
         if (r.status === "NEED_INFO") {
           task.leadSearches = (task.leadSearches ?? 0) + 1
           this.record(task, p.mode, r)
-          task.pending = { mode: "intern", note: r.content, asker: "lead", then: p }
+          task.pending = { mode: "intern", note: queries(r), asker: "lead", then: p }
           return
         }
         task.leadSearches = 0
@@ -1110,7 +1113,7 @@ export class Team {
         if (r.status === "NEED_INFO") {
           task.needInfo++
           this.record(task, p.mode, r)
-          task.pending = { mode: "intern", note: r.content, afterReview: p.afterReview }
+          task.pending = { mode: "intern", note: queries(r), afterReview: p.afterReview }
           return
         }
         if (r.status === "ESCALATE") {
