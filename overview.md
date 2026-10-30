@@ -39,6 +39,7 @@ without a plan or review.
 | **Developer** | The only agent that edits files and runs builds and tests. Iterates on errors until done or stuck. | cheap |
 | **Reviewer** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | mid |
 | **Architect** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
+| **Operator** | Runs commands, scripts, API calls and web fetches for the user and returns the output, outside any task. Changes no code. | cheap |
 
 Each agent's code-search tools (a code graph, clangd, a docs RAG, …) and working
 instructions are set in the config. Its role, its report outcomes and the safety rules are
@@ -69,6 +70,9 @@ user ─► Manager ─► [Send] [Edit] [Cancel]
                        ├─ plan is wrong    ─► Planner writes a new plan
                        └─ unclear          ─► Architect advice ─► Planner
 ```
+
+**Requests to run something** (a command, script, curl, web page) go straight to the
+Operator, and its output comes back to the user; no task is started.
 
 **Code questions** go straight to Intern, and the answer comes back to the user. A
 question asked **while a task waits on the user** goes to the agent the task waits on

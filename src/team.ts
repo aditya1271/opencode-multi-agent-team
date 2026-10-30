@@ -55,7 +55,7 @@ const queries = (r: Report) => join(r.content, (r.questions ?? []).map((q, i) =>
 
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
-export const TEAM_ACTIONS = ["start", "ask", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status", "details"] as const
+export const TEAM_ACTIONS = ["start", "ask", "run", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status", "details"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
 
 export type TeamMode = "off" | AutoLevel
@@ -97,6 +97,7 @@ export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
   "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Architect to review the plan or document; auto = polished, safe or full when the user asked for an auto mode),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
+  "run (text = the confirmed request to run or fetch something and return the result: a command, script, API call or web page; the Operator does it, changes no code and starts no task; an open task doesn't move),",
   "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), section (going through the waiting brief, document or plan one section at a time: verdict = start, ok, skip, finetune or revise with text = the confirmed comment, or rest to show the remaining sections at once), review (Architect critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status,",
@@ -353,6 +354,8 @@ export class Team {
       case "ask":
         if (task && !TERMINAL.includes(task.phase)) return this.reply(task, input.text ?? "", signal)
         return this.ask(managerSession, input.text ?? "", signal)
+      case "run":
+        return this.run(managerSession, input.text ?? "", signal)
       case "stats":
         return this.stats(managerSession, input.last)
     }
@@ -797,6 +800,35 @@ export class Team {
       res.report.content,
       "```\n" + table(usage as never) + "\n```",
       "NEXT ACTION: show the answer to the user. No task was started.",
+    )
+  }
+
+  /** Something to run for the user (a command, script, API call, web page): the Operator does it outside any task. */
+  private async run(managerSession: string, request: string, signal: AbortSignal): Promise<string> {
+    if (!request.trim()) return 'run needs text: what to run. NEXT ACTION: call team with action "run" and the confirmed request.'
+    const role = "operator"
+    const res = await runAgent(
+      this.ctx,
+      this.config,
+      {
+        role,
+        mode: "operator",
+        parentID: managerSession,
+        title: `team: ${role}`,
+        prompt: join("MODE: run. Carry out the user's request below and report RESULT with the output, or FAILED.", `<request>\n${request}\n</request>`),
+        signal,
+      },
+      this.log,
+    )
+    const usage: Partial<Record<string, AgentUsage>> = {}
+    add(usage as never, role, res.usage)
+    appendUsage(this.root, { task: "run", session: managerSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
+    if (!res.report) return `The ${role} couldn't finish: ${res.failure ?? res.end}.\nNEXT ACTION: tell the user.`
+    return join(
+      `${res.report.status} from ${role}:`,
+      `<show>\n${res.report.content}\n</show>`,
+      "```\n" + table(usage as never) + "\n```",
+      "NEXT ACTION: show the result to the user. No task was started.",
     )
   }
 

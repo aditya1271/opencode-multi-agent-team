@@ -25,6 +25,12 @@ now means the new Architect: rename it to `planner`.
 | `team-developer` | Edits, builds and tests. The only agent that changes files. |
 | `team-reviewer` | Diagnoses failures and reviews finished work. |
 | `team-architect` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
+| `team-operator` | Runs things for you and returns the output: commands, scripts, API calls (curl), web pages. Changes no code (no edit tool); dangerous commands ask you first. Uses the Intern's model unless `agents.operator.model` is set. |
+
+Ask for something to run ("run scripts/list-models and show me the output", "curl the
+models endpoint") and the manager sends it to the Operator with the `run` action, outside any
+task; an open task doesn't move. No agent copies secret values (API keys, tokens) into
+briefs, reports or answers: they name the variable or file instead.
 
 The three front agents (switch with Tab) rewrite your request, ask you to confirm it, and drive
 the team. They can't read, edit or run anything, and they share the `manager` entry of the
@@ -328,7 +334,7 @@ Edits are never reverted automatically. Every result lists the changed files.
 | Your comment rounds on one draft before advice | 3 (next adviser), 5 (the one above) |
 | Searches / question rounds per task | 6 / 4 |
 | Analyst's search rounds (handed to the Intern) before each report | 3 |
-| Tool calls per agent call | analyst 15, planner 25, intern 100, developer 150, reviewer 30, architect 20 |
+| Tool calls per agent call | analyst 15, planner 25, intern 100, developer 150, reviewer 30, architect 20, operator 30 |
 | Time per agent call | 30 min (developer 240), or 15 min without activity |
 
 All limits are in the config file under `limits`.

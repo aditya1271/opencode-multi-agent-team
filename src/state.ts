@@ -48,6 +48,7 @@ export type Mode =
   | "architect_draft_advice"
   | "planner_consult"
   | "planner_stepfix"
+  | "operator"
 
 /** Who asks the Planner a question mid-work (status CONSULT); each has its own pair session with the Planner. */
 export type ConsultSide = "developer" | "analyst"
@@ -95,6 +96,7 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   architect_draft_advice: "architect",
   planner_consult: "planner",
   planner_stepfix: "planner",
+  operator: "operator",
 }
 
 /** code: change files (the default). plan: write a plan document. research: write a findings report. */

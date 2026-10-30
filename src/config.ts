@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { migrateNames } from "./state.ts"
 
-export const ROLES = ["manager", "analyst", "planner", "intern", "developer", "reviewer", "architect"] as const
+export const ROLES = ["manager", "analyst", "planner", "intern", "developer", "reviewer", "architect", "operator"] as const
 export type Role = (typeof ROLES)[number]
 export type WorkerRole = Exclude<Role, "manager">
 
@@ -108,7 +108,7 @@ export const DEFAULTS: Config = {
     consultsPerStep: 2,
     consultsPerBrief: 3,
     consultsPerSession: 6,
-    toolCalls: { analyst: 15, planner: 25, intern: 100, developer: 150, reviewer: 30, architect: 20 },
+    toolCalls: { analyst: 15, planner: 25, intern: 100, developer: 150, reviewer: 30, architect: 20, operator: 30 },
     callMinutes: { default: 30, developer: 240 },
     stallMinutes: 15,
     modelRetryWaits: 2,
@@ -212,6 +212,8 @@ export function parseModel(spec: string, variant?: string): ModelRef {
 
 /** Models for a role, main first. Empty when the user configured none. */
 export function modelsFor(config: Config, role: Role): ModelRef[] {
+  // The Operator runs on the Intern's model unless it has its own.
+  if (role === "operator" && !config.agents.operator?.model) return modelsFor(config, "intern")
   const entry = config.agents[role]
   if (!entry?.model) return []
   const list = Array.isArray(entry.model) ? entry.model : [entry.model]

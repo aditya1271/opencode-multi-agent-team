@@ -37,6 +37,7 @@ const BASE: Record<Mode, string[]> = {
   architect_draft_advice: ["ADVICE", "ASK"],
   planner_consult: ["ANSWER"],
   planner_stepfix: ["STEP", "REPLAN"],
+  operator: ["RESULT", "FAILED"],
 }
 
 /** A plan step's first line: `N. **Title**: <what the step achieves>`. */

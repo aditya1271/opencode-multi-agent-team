@@ -21,6 +21,7 @@ export const DESCRIPTIONS: Record<Role, string> = {
   developer: "Team: edits, builds and tests",
   reviewer: "Team: diagnoses failures and reviews finished work",
   architect: "Team: reviews destructive plans and advises when stuck",
+  operator: "Team: runs commands, scripts and web requests for the user and returns the output",
 }
 
 /** The front agents, one per workflow; they share the manager role (model, permissions, engine). */
@@ -92,6 +93,9 @@ export function permissionsFor(config: Config, role: Role): Rule[] {
         ...askList,
         allow("report"),
       ]
+    case "operator":
+      // Runs things for the user (commands, scripts, API calls, web pages); changes no code, so no edit tool.
+      return [...base, ...readSearch, allow("shell"), allow("webfetch"), allow("websearch"), ...addonRules(config, role), ...askList, allow("report")]
   }
 }
 
@@ -171,9 +175,13 @@ export function systemPrompt(config: Config, role: Role): string {
   const body = core.includes("{{instructions}}")
     ? core.replace("{{instructions}}", instructions)
     : [core, instructions].join("\n\n")
-  const parts = [body, toolsNote(config, role), a.append ? textOrFile(a.append) : ""]
+  const parts = [body, toolsNote(config, role), SECRETS, a.append ? textOrFile(a.append) : ""]
   return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")
 }
+
+/** Every worker: task files and reports are plain text on disk, so secrets stay out of them. */
+const SECRETS =
+  "Never copy a secret's value (API key, token, password, private key) into a report, brief, plan, answer or file you write, even when you read it in a file or command output: name the variable or file instead (e.g. `API_KEY` in `.env`). Pass secrets to commands by reference (`source .env`, `$API_KEY`), not by pasting them."
 
 /**
  * A front agent's prompt: the shared manager core (fixed), its workflow's part (fixed) and its

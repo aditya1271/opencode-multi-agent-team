@@ -23,6 +23,8 @@
     "developer": { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"] },
     "reviewer": { "model": ["openai/gpt-5", "anthropic/claude-sonnet-4-5"] },
     "architect": { "model": ["anthropic/claude-opus-4-5", "openai/gpt-5"], "variant": "high" }
+    // "operator" runs commands, scripts and web requests for you; without a model it uses the intern's:
+    // , "operator": { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"] }
   },
 
   // "manager" sets the model of the three front agents (build-manager, plan-manager,
@@ -70,7 +72,7 @@
     "consultsPerStep": 2,     // questions Developer may ask the Planner mid-step (not failed attempts)
     "consultsPerBrief": 3,    // questions Analyst may ask the Planner while writing one brief
     "consultsPerSession": 6,  // questions one pair session with the Planner takes before a fresh one starts
-    "toolCalls": { "analyst": 15, "planner": 25, "intern": 100, "developer": 150, "reviewer": 30, "architect": 20 },
+    "toolCalls": { "analyst": 15, "planner": 25, "intern": 100, "developer": 150, "reviewer": 30, "architect": 20, "operator": 30 },
     "callMinutes": { "default": 30, "developer": 240 },
     "stallMinutes": 15
   },

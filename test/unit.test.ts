@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
-import { buildPatterns, DEFAULTS, merge, parseModel, stripJsonc } from "../src/config.ts"
+import { buildPatterns, DEFAULTS, merge, modelsFor, parseModel, stripJsonc } from "../src/config.ts"
 import { analystReadProblem, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
@@ -190,6 +190,27 @@ describe("permissions", () => {
     expect(toolVisible(permissionsFor(DEFAULTS, "intern"), "shell")).toBe(true)
     expect(toolVisible(permissionsFor(DEFAULTS, "analyst"), "write")).toBe(false)
     expect(toolVisible(permissionsFor(DEFAULTS, "developer"), "write")).toBe(true)
+  })
+  test("operator runs commands and fetches, can't edit, and asks before destructive commands", async () => {
+    const operator = permissionsFor(DEFAULTS, "operator")
+    expect(evaluate(operator, "shell", ["curl -s https://example.com/v1/models"])).toBe("allow")
+    expect(evaluate(operator, "shell", ["bash scripts/list-models"])).toBe("allow")
+    expect(evaluate(operator, "shell", ["git reset --hard"])).toBe("ask")
+    expect(evaluate(operator, "webfetch", ["https://example.com"])).toBe("allow")
+    expect(evaluate(operator, "edit", ["a.ts"])).toBe("deny")
+    expect(toolVisible(operator, "write")).toBe(false)
+    // No model of its own: the Intern's.
+    const config = merge(DEFAULTS, { agents: { intern: { model: "fuse/luna", variant: "low" } } })
+    expect(modelsFor(config, "operator")).toEqual(modelsFor(config, "intern"))
+    expect(modelsFor(merge(config, { agents: { operator: { model: "fuse/kimi" } } }), "operator")[0]?.id).toBe("kimi")
+    const team = new Team({} as never, merge(DEFAULTS, { taskDir: mkdtempSync(path.join(tmpdir(), "omat-run-")) }), () => {}) as any
+    expect(await team.handle({ action: "run", text: " " }, "ses_r", new AbortController().signal)).toContain("run needs text")
+    expect(await team.handle({ action: "run", text: "curl x" }, "ses_r", new AbortController().signal)).toContain('No model configured for the "operator" role')
+  })
+  test("every worker is told to keep secrets out of what it writes", () => {
+    for (const role of ["analyst", "planner", "intern", "developer", "reviewer", "architect", "operator"] as const)
+      expect(systemPrompt(DEFAULTS, role)).toContain("Never copy a secret's value")
+    expect(managerPrompt(DEFAULTS, "code")).toContain("action `run`")
   })
   test("developer asks before destructive commands", () => {
     const rules = permissionsFor(DEFAULTS, "developer")
@@ -1437,7 +1458,7 @@ describe("sidebar", () => {
       expect(modelsText(s.task!.rows[0]!.models)).toBe("fuse/glm → siemens/claude (backup)")
       expect(s.task?.workflow).toBe("code")
       expect(s.models.find((m) => m.role === "analyst")?.models).toEqual(["fuse/glm", "siemens/claude"])
-      expect(s.models).toHaveLength(7)
+      expect(s.models).toHaveLength(8)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -421,6 +421,9 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       if (!freshSession) return join(unseen.length > 0 && join("New information since your last call:", ...unseen.map(f)), ask)
       return join(ask, f("request.md"), f("checks.md"), whatDoc(), stageBrief(), answers(), f(`plan-${task.plan}.md`), ...unseen.map(f))
     }
+    case "operator":
+      // Runs outside tasks; Team.run builds its prompt.
+      return p.note ?? ""
     case "intern":
       if (task.workflow === "research") return join(INTERN_RESEARCH, `<queries>\n${p.note ?? ""}\n</queries>`)
       return join(
