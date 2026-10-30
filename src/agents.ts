@@ -15,12 +15,12 @@ const PROMPT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..",
 
 export const DESCRIPTIONS: Record<Role, string> = {
   manager: "Team: changes code (plans, edits, builds and tests through the team)",
-  lead: "Team: sorts a request, searches the code, writes the brief",
-  architect: "Team: writes plans and documents",
+  analyst: "Team: sorts a request, searches the code, writes the brief",
+  planner: "Team: writes plans and documents",
   intern: "Team: searches the code and answers code questions",
   developer: "Team: edits, builds and tests",
   reviewer: "Team: diagnoses failures and reviews finished work",
-  principal: "Team: reviews destructive plans and advises when stuck",
+  architect: "Team: reviews destructive plans and advises when stuck",
 }
 
 /** The front agents, one per workflow; they share the manager role (model, permissions, engine). */
@@ -71,12 +71,12 @@ export function permissionsFor(config: Config, role: Role): Rule[] {
   switch (role) {
     case "manager":
       return [deny("*"), allow("team"), allow("question")]
-    case "lead":
-      // Read only: every search goes to the Intern (NEED_INFO), so search output never piles up in Lead's long session.
+    case "analyst":
+      // Read only: every search goes to the Intern (NEED_INFO), so search output never piles up in Analyst's long session.
       return [...base, allow("read"), ...addonRules(config, role), allow("report")]
+    case "planner":
     case "architect":
-    case "principal":
-      // No file or code access: they know only what Lead's brief and answers tell them.
+      // No file or code access: they know only what Analyst's brief and answers tell them.
       return [deny("*"), ...(config.agents[role]?.skills ?? []).map((s) => allow("skill", s)), allow("report")]
     case "intern":
       return [...base, ...readSearch, ...readOnly, ...addonRules(config, role), allow("report")]
@@ -126,14 +126,14 @@ function textOrFile(value: string): string {
 }
 
 /** Roles with no file or code access. */
-export const BRIEF_ONLY: Role[] = ["architect", "principal"]
+export const BRIEF_ONLY: Role[] = ["planner", "architect"]
 
 /** Configured tools a brief-only role can't use; the plugin ignores them and logs a warning. */
 export function ignoredTools(config: Config): string[] {
   return BRIEF_ONLY.flatMap((role) => {
     const a = config.agents[role] ?? {}
     const extra = [...(a.mcps ?? []), ...(a.tools ?? []), ...(a.commands ?? [])]
-    return extra.length ? [`agents.${role}: ${extra.join(", ")} ignored (${role} has no tool access; Lead answers its questions)`] : []
+    return extra.length ? [`agents.${role}: ${extra.join(", ")} ignored (${role} has no tool access; Analyst answers its questions)`] : []
   })
 }
 

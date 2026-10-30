@@ -17,45 +17,45 @@ const SECTION_EDIT = {
 }
 
 const BASE: Record<Mode, string[]> = {
-  lead: ["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "INFEASIBLE", "STUCK"],
-  lead_fail: ["ESCALATE"],
+  analyst: ["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "INFEASIBLE", "STUCK"],
+  analyst_fail: ["ESCALATE"],
   fix_trivial: ["DONE", "FAILED", "BLOCKED"],
   review_trivial: ["PASS", "ISSUES"],
-  architect: ["PLAN", "ASK", "QUESTIONS", "ESCALATE", "INFEASIBLE", "STUCK"],
+  planner: ["PLAN", "ASK", "QUESTIONS", "ESCALATE", "INFEASIBLE", "STUCK"],
   intern: ["FOUND", "NOT_FOUND"],
-  principal_review: ["APPROVE", "CHANGES", "ASK"],
+  architect_review: ["APPROVE", "CHANGES", "ASK"],
   fix: ["DONE", "FAILED", "BLOCKED", "CONSULT"],
   diagnose: ["LOCAL", "REPLAN", "ESCALATE"],
   review: ["PASS", "ISSUES"],
-  principal_advice: ["ADVICE", "QUESTIONS", "ASK"],
-  lead_reply: ["ANSWER"],
+  architect_advice: ["ADVICE", "QUESTIONS", "ASK"],
+  analyst_reply: ["ANSWER"],
+  planner_reply: ["ANSWER"],
   architect_reply: ["ANSWER"],
-  principal_reply: ["ANSWER"],
-  principal_doc_review: ["APPROVE", "CHANGES", "ASK"],
-  lead_answer: ["ANSWER", "NEED_INFO"],
-  architect_advice: ["ADVICE", "ASK"],
-  principal_draft_advice: ["ADVICE", "ASK"],
-  architect_consult: ["ANSWER"],
-  architect_stepfix: ["STEP", "REPLAN"],
+  architect_doc_review: ["APPROVE", "CHANGES", "ASK"],
+  analyst_answer: ["ANSWER", "NEED_INFO"],
+  planner_advice: ["ADVICE", "ASK"],
+  architect_draft_advice: ["ADVICE", "ASK"],
+  planner_consult: ["ANSWER"],
+  planner_stepfix: ["STEP", "REPLAN"],
 }
 
 /** A plan step's first line: `N. **Title**: <what the step achieves>`. */
 const STEP_LINE = /^\d+\.\s+\*\*.+?\*\*:?\s*\S/
 
-/** CONSULT needs the facts the question rests on: the Architect can't look them up. */
+/** CONSULT needs the facts the question rests on: the Planner can't look them up. */
 const EVIDENCE = /```|\S+:\d+/
 
-const ADVICE_MODES: Mode[] = ["architect_advice", "principal_draft_advice"]
+const ADVICE_MODES: Mode[] = ["planner_advice", "architect_draft_advice"]
 
-/** STUCK: the writer can't resolve the user's comments (Lead on its brief, the Architect on its draft). */
+/** STUCK: the writer can't resolve the user's comments (Analyst on its brief, the Planner on its draft). */
 const mayBeStuck = (mode: Mode, task: TaskState) =>
-  !!task.commentRounds && (mode === "architect" || (mode === "lead" && !task.revising && !task.doc && !task.plan))
+  !!task.commentRounds && (mode === "planner" || (mode === "analyst" && !task.revising && !task.doc && !task.plan))
 
-/** Code task, Lead's first sort: ESCALATE must say whether the request already fixes the behaviour. */
+/** Code task, Analyst's first sort: ESCALATE must say whether the request already fixes the behaviour. */
 const needsWhat = (mode: Mode, task?: TaskState) =>
-  mode === "lead" && !!task && !task.workflow && !task.stage && !task.revising && !task.trivialFailed
+  mode === "analyst" && !!task && !task.workflow && !task.stage && !task.revising && !task.trivialFailed
 
-/** Rounds of questions to Lead (or the Intern, in research): per research depth, else the task-wide limit. */
+/** Rounds of questions to Analyst (or the Intern, in research): per research depth, else the task-wide limit. */
 export function needInfoLimit(config: Config, task: TaskState): number {
   if (task.workflow === "research" && task.depth) return config.workflows.research.internRounds[task.depth]
   return config.limits.needInfoPerTask
@@ -83,19 +83,19 @@ export function checkProblem(checkCommand: string, shells: ShellRun[]): string |
 export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): string[] {
   let list = BASE[mode]
   if (task) {
-    if (task.trivialFailed && mode === "lead") list = ["ESCALATE"]
-    if ((task.forcePlan || isDocWorkflow(task) || task.stage) && mode === "lead") list = list.filter((s) => s !== "TRIVIAL")
+    if (task.trivialFailed && mode === "analyst") list = ["ESCALATE"]
+    if ((task.forcePlan || isDocWorkflow(task) || task.stage) && mode === "analyst") list = list.filter((s) => s !== "TRIVIAL")
     // Only the how stage can find an approved what-decision unworkable.
     if (task.stage !== "how" || !task.doc || task.revising) list = list.filter((s) => s !== "INFEASIBLE")
     if (!mayBeStuck(mode, task)) list = list.filter((s) => s !== "STUCK")
-    if (task.workflow === "research" && mode === "architect") list = list.map((s) => (s === "ASK" ? "NEED_INFO" : s))
-    if (draftIsDoc(task) && mode === "architect") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
+    if (task.workflow === "research" && mode === "planner") list = list.map((s) => (s === "ASK" ? "NEED_INFO" : s))
+    if (draftIsDoc(task) && mode === "planner") list = list.map((s) => (s === "PLAN" ? "DOC" : s))
     if (task.questionRounds >= config.limits.questionsPerTask) list = list.filter((s) => s !== "QUESTIONS")
     const side = consultSide(mode)
     if (side && consultsUsed(task, side) >= (side === "developer" ? config.limits.consultsPerStep : config.limits.consultsPerBrief))
       list = list.filter((s) => s !== "CONSULT")
-    if (mode === "lead" || mode === "lead_answer") {
-      if ((task.leadSearches ?? 0) >= config.limits.leadSearchRounds) list = list.filter((s) => s !== "NEED_INFO")
+    if (mode === "analyst" || mode === "analyst_answer") {
+      if ((task.analystSearches ?? 0) >= config.limits.analystSearchRounds) list = list.filter((s) => s !== "NEED_INFO")
     } else if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
   } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK" && s !== "CONSULT")
   return list
@@ -107,14 +107,14 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     summary: { type: "string", description: "At most 5 lines, shown to the user." },
     content: { type: "string", description: "Markdown. The plugin writes it to the task folder." },
   }
-  const asks = [statuses.includes("QUESTIONS") && "QUESTIONS (to the user)", statuses.includes("ASK") && "ASK (to Lead)", statuses.includes("CONSULT") && "CONSULT (to the Architect)"].filter(Boolean)
+  const asks = [statuses.includes("QUESTIONS") && "QUESTIONS (to the user)", statuses.includes("ASK") && "ASK (to Analyst)", statuses.includes("CONSULT") && "CONSULT (to the Planner)"].filter(Boolean)
   if (asks.length)
     properties.questions = { type: "array", items: { type: "string" }, description: `Required for ${asks.join(" and ")}: one question per item.` }
   if (needsWhat(mode, task) && statuses.includes("ESCALATE"))
     properties.what = { type: "string", enum: ["settled", "open"], description: "Required for ESCALATE: settled when the request already fixes the behaviour, else open." }
-  if (mode === "lead" && task?.workflow === "research")
+  if (mode === "analyst" && task?.workflow === "research")
     properties.depth = { type: "string", enum: ["quick", "breadth", "depth"], description: "Required for ESCALATE: how big the research is." }
-  if (mode === "architect" && statuses.includes("PLAN")) {
+  if (mode === "planner" && statuses.includes("PLAN")) {
     properties.risk = { type: "string", enum: ["yes", "no"], description: "Required for PLAN: yes only for destructive or irreversible steps." }
     properties.steps = { type: "integer", minimum: 1, description: "Required for PLAN: number of plan steps." }
   }
@@ -122,7 +122,7 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     properties.risk = { type: "string", enum: ["yes", "no"], description: "Required for STEP: yes only if the new step(s) are destructive or irreversible." }
   if (ADVICE_MODES.includes(mode))
     properties.items = { type: "array", items: { type: "string" }, description: "Required for ADVICE: one concrete instruction per item, unnumbered." }
-  if ((mode === "lead" || mode === "architect") && task?.pending?.adviceIds?.length)
+  if ((mode === "analyst" || mode === "planner") && task?.pending?.adviceIds?.length)
     properties.addressed = { type: "string", description: `Required for your draft: how you handled each advice item, one line per id (${task.pending.adviceIds.join(", ")}).` }
   if (isScopedWriter(mode, task))
     properties.sections = {
@@ -164,8 +164,8 @@ export const REPORT_DESCRIPTION =
  * is checked as merged into the previous version.
  */
 function recommendProblem(role: string, input: Report, task: TaskState | undefined, scoped: boolean): string | undefined {
-  const lead = role === "lead" && input.status === "ESCALATE"
-  if (!lead && !(role === "architect" && (input.status === "DOC" || input.status === "PLAN"))) return undefined
+  const analyst = role === "analyst" && input.status === "ESCALATE"
+  if (!analyst && !(role === "planner" && (input.status === "DOC" || input.status === "PLAN"))) return undefined
   let text = input.content
   // A scoped revision answers only for the sections it returns: the others it may not touch.
   let returned: Set<string> | undefined
@@ -178,7 +178,7 @@ function recommendProblem(role: string, input: Report, task: TaskState | undefin
     returned = new Set(input.sections.flatMap((e) => split(e.content, true).sections.map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))))
   }
   const check = (f: (text: string, under?: string) => string[]) =>
-    (lead ? [...f(text, "Concept brief"), ...f(text, "Research brief")] : f(text)).filter((t) => !returned || returned.has(t))
+    (analyst ? [...f(text, "Concept brief"), ...f(text, "Research brief")] : f(text)).filter((t) => !returned || returned.has(t))
   const missing = check(missingRecommendations)
   const unsummed = check(missingSummaries)
   if (!missing.length && !unsummed.length) return undefined
@@ -204,14 +204,14 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (typeof input.summary !== "string" || typeof input.content !== "string") throw new Error("summary and content are required.")
   if ((input.status === "QUESTIONS" || input.status === "ASK" || input.status === "CONSULT") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
   if (input.status === "CONSULT" && !EVIDENCE.test(input.content))
-    throw new Error("CONSULT needs the evidence in content: the Architect has no file access. Quote the code (`path:line` and the lines, in a code block) and the exact output or facts the question rests on.")
+    throw new Error("CONSULT needs the evidence in content: the Planner has no file access. Quote the code (`path:line` and the lines, in a code block) and the exact output or facts the question rests on.")
   if (input.status === "ESCALATE" && needsWhat(run.mode, run.task)) {
     if (input.what !== "settled" && input.what !== "open") throw new Error('ESCALATE needs what: "settled" or "open".')
     if (input.what === "settled" && !/^#+\s*Why the behaviour is settled/im.test(input.content))
       throw new Error('what "settled" needs a "## Why the behaviour is settled" section at the top of content.')
   }
   if (input.status === "ADVICE" && ADVICE_MODES.includes(run.mode) && !input.items?.length) throw new Error("ADVICE needs a non-empty items list.")
-  const adviceIds = run.mode === "lead" || run.mode === "architect" ? (run.task?.pending?.adviceIds ?? []) : []
+  const adviceIds = run.mode === "analyst" || run.mode === "planner" ? (run.task?.pending?.adviceIds ?? []) : []
   if (adviceIds.length && ["ESCALATE", "DOC", "PLAN"].includes(input.status)) {
     const missing = adviceIds.filter((id) => !new RegExp(`\\b${id}\\b`).test(input.addressed ?? ""))
     if (missing.length) throw new Error(`addressed must say how you handled every advice item by id; missing: ${missing.join(", ")}.`)
@@ -225,7 +225,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   }
   const recommendErr = recommendProblem(run.role, input, task, !whole && isScopedWriter(run.mode, task))
   if (recommendErr) throw new Error(recommendErr)
-  if (run.mode === "lead_answer") {
+  if (run.mode === "analyst_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))
     if (missing.length) throw new Error(`Answer every question by its id; missing: ${missing.join(", ")}.`)
   }
@@ -241,7 +241,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (input.risk !== "yes" && input.risk !== "no") throw new Error('PLAN needs risk: "yes" or "no".')
     if (!Number.isInteger(input.steps) || (input.steps ?? 0) < 1) throw new Error("PLAN needs steps: the number of plan steps.")
   }
-  if (input.status === "ESCALATE" && run.mode === "lead" && run.task?.workflow === "research" && !run.task.revising && !["quick", "breadth", "depth"].includes(input.depth ?? ""))
+  if (input.status === "ESCALATE" && run.mode === "analyst" && run.task?.workflow === "research" && !run.task.revising && !["quick", "breadth", "depth"].includes(input.depth ?? ""))
     throw new Error('ESCALATE needs depth: "quick", "breadth" or "depth".')
   const skip = run.task?.skipChecks
   if (input.status === "DONE" && !skip && !input.checkCommand?.trim()) throw new Error("DONE needs checkCommand: the check command you ran.")

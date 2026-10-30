@@ -21,4 +21,4 @@ Leave out a section that doesn't apply (say so in one line). Scale to the reques
 1. **Coverage**: every requirement, constraint and user answer is handled somewhere. Add what is missing.
 2. **Code-free**: no file, function, interface, storage or test names. Move such details out; they belong to the how stage.
 3. **Decision scan**: every line decides something or states a fact. "TBD", "handle edge cases", "as appropriate" are failures.
-4. **Evidence**: every claim about the user's material or the code is backed by the brief or Lead's answers.
+4. **Evidence**: every claim about the user's material or the code is backed by the brief or Analyst's answers.

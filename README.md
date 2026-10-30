@@ -8,7 +8,9 @@ See [overview.md](overview.md) for the workflow, and [plan.md](plan.md) for the 
 
 The agents are named after coding-team roles. Earlier versions used polisher, triage,
 senior, explorer, fixer, analyser and oracle; configs and saved tasks with those names still
-work.
+work. Later, lead became analyst, architect became planner and principal became architect;
+configs and saved tasks still using `lead` or `principal` work, but an old `architect` entry
+now means the new Architect: rename it to `planner`.
 
 ## Agents
 
@@ -17,12 +19,12 @@ work.
 | `build-manager` | Front agent for code changes: the team plans, edits, builds and tests. |
 | `plan-manager` | Front agent for plan documents: the team writes a plan for you to review. No code changes. |
 | `research-manager` | Front agent for research: the team investigates and writes a findings report. No code changes. |
-| `team-lead` | Has the Intern search the code and reads only what it cites (no search tools), then decides between a trivial fix and a plan. Writes the brief. |
-| `team-architect` | Writes plans and documents. You approve each one. Advises Lead when you keep sending its brief back. |
-| `team-intern` | Does code searches for Lead and the Architect, and answers your code questions. |
+| `team-analyst` | Has the Intern search the code and reads only what it cites (no search tools), then decides between a trivial fix and a plan. Writes the brief. |
+| `team-planner` | Writes plans and documents. You approve each one. Advises Analyst when you keep sending its brief back. |
+| `team-intern` | Does code searches for Analyst and the Planner, and answers your code questions. |
 | `team-developer` | Edits, builds and tests. The only agent that changes files. |
 | `team-reviewer` | Diagnoses failures and reviews finished work. |
-| `team-principal` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
+| `team-architect` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
 
 The three front agents (switch with Tab) rewrite your request, ask you to confirm it, and drive
 the team. They can't read, edit or run anything, and they share the `manager` entry of the
@@ -102,26 +104,26 @@ To update later, run `git pull` in the clone and restart OpenCode.
   the output"), the plan starts with a short Behaviour section instead. Trivial fixes go
   straight to the edit. If the how stage finds that a decision of the what-document can't work
   in the code, you get the what-document back with the evidence and decide.
-- **Want a plan, not a quick fix?** Say so ("plan it first"). The Lead still writes the
-  brief but can't take the quick path, so the Architect always plans.
-- **Who knows what:** Lead reads the code and your files. The Architect and Principal have no
-  file or code access: they work from Lead's brief and ask Lead (numbered questions A1, A2, …,
+- **Want a plan, not a quick fix?** Say so ("plan it first"). The Analyst still writes the
+  brief but can't take the quick path, so the Planner always plans.
+- **Who knows what:** Analyst reads the code and your files. The Planner and Architect have no
+  file or code access: they work from Analyst's brief and ask Analyst (numbered questions A1, A2, …,
   answered in `brief-answer-N.md`) when they need more. Code-search tools configured for them
   are ignored, with a warning in the log.
 - **Ask during a task:** while the team waits on you, a question goes to the agent the task
-  waits on (Architect, or Lead before there's a plan), in its own session with the full
+  waits on (Planner, or Analyst before there's a plan), in its own session with the full
   context. The task doesn't move; you then answer or decide.
 - **Plans:** you see what you get once you approve, the step titles, the risk and the plan file,
-  and reply in your own words (approve, ask for changes, ask a question, ask for Principal's
+  and reply in your own words (approve, ask for changes, ask a question, ask for Architect's
   review, or stop). Any feedback on the plan is sent as Change.
-- **Principal's review:** say "have Principal review it" while a plan or document waits for
-  you, or ask for it in the request. Principal checks whether it can be built as written and
-  whether it is the right design. On CHANGES the Architect revises once, and you see the review
-  next to the revised version. At most `limits.principalReviews` (2) per task.
+- **Architect's review:** say "have Architect review it" while a plan or document waits for
+  you, or ask for it in the request. Architect checks whether it can be built as written and
+  whether it is the right design. On CHANGES the Planner revises once, and you see the review
+  next to the revised version. At most `limits.architectReviews` (2) per task.
 - **When a draft keeps coming back:** the writer revises alone at first. At your 3rd round of
   comments on the same brief or document, the next adviser up reads the draft and all your
-  comments and gives numbered advice (ADV1, …); at the 5th, the one above it. Lead's brief is
-  advised by the Architect, then Principal; the Architect's drafts by Principal. The writer
+  comments and gives numbered advice (ADV1, …); at the 5th, the one above it. Analyst's brief is
+  advised by the Planner, then Architect; the Planner's drafts by Architect. The writer
   still writes the next version and must say how it handled each item; you see "Revised
   following …'s advice" on it. A writer that reports STUCK gets the next adviser right away,
   and when none is left the task comes to you. Set the rounds in `limits.escalateAfterComments`.
@@ -137,7 +139,7 @@ To update later, run `git pull` in the clone and restart OpenCode.
   marks just saves them. A section left unchanged this round may change only with a reason,
   shown to you as "also changed S9 (…)". Each version says what changed ("revised S5, S6 ·
   fine-tuned S8 · new S12"). A round of fine-tunes only goes straight to the writer (no
-  revision brief from the Lead) and doesn't count toward the escalation rounds.
+  revision brief from the Analyst) and doesn't count toward the escalation rounds.
 - **One section at a time:** long briefs, documents and plans are hard to take in at once.
   At every review stop the manager asks [All at once] [One section at a time]. One at a
   time shows a section per turn (`S3 · Concerns (3 of 9)`). Every section you review ends
@@ -217,10 +219,10 @@ written, with no confirmation, in any mode.
 
 ### Plan documents (`plan-manager`)
 
-A plan task has two approvals. First the Lead reads your files and the code and writes a
+A plan task has two approvals. First the Analyst reads your files and the code and writes a
 **concept brief**: the concerns that decide whether the result is good (yours first, in your
 framing), approaches for each, feasibility notes only where an idea could fail, and
-assumptions. You see it and can adjust it (`workflows.plan.confirmBrief`). The Architect then
+assumptions. You see it and can adjust it (`workflows.plan.confirmBrief`). The Planner then
 writes the **what-document** to `prompts/plan.instructions.md`. Once you approve it, the
 **how-document** (the change plan, `prompts/how.instructions.md`) is written in fresh sessions
 and saved next to it as `<name>.how.md`. Nobody edits code, and there is no build or test.
@@ -231,52 +233,52 @@ in place. If
 sidebar in your session shows the saved document, every file the team writes in the task folder
 (brief, answers, drafts, advice, …; not `state.json` or `logs/`), and the code Developer changed.
 
-You reply in your own words. Comments on any plan or document go to the Lead first, who turns
+You reply in your own words. Comments on any plan or document go to the Analyst first, who turns
 them into a revision brief (including places with the same problem that you didn't name); the
-Architect then revises it. Once you approve the how-document, an **[Implement it]** button
+Planner then revises it. Once you approve the how-document, an **[Implement it]** button
 switches the session to `build-manager` and starts a code task in which Developer carries out
 that plan directly.
 
 ### Research reports (`research-manager`)
 
-The Lead sizes the research (quick, breadth or depth) and writes a research brief. Unless the
+The Analyst sizes the research (quick, breadth or depth) and writes a research brief. Unless the
 research is quick, you see the brief first and can adjust it (`workflows.research.confirmBrief`).
 The Intern collects evidence (claim, source, verbatim excerpt) in a capped number of rounds
-(`workflows.research.internRounds`). The Architect writes the report from that evidence, to
+(`workflows.research.internRounds`). The Planner writes the report from that evidence, to
 `prompts/research.instructions.md`. A follow-up question on a finished report is appended to
 it as a new section.
 
 To change what a good document looks like ("make plans verbose", "always list
 alternatives"), set `workflows.plan.instructions` (what-document), `workflows.plan.howInstructions`
 (how-document and code plans) or `workflows.research.instructions` (inline text or a file). The
-Architect writes to it and Principal reviews against it. Code tasks use the same what and how
+Planner writes to it and Architect reviews against it. Code tasks use the same what and how
 standards; `workflows.code.confirmBrief` (default off) shows the concept brief there too.
-- **Questions:** Lead, Architect and Principal may ask you questions. Answer in your own words.
+- **Questions:** Analyst, Planner and Architect may ask you questions. Answer in your own words.
   Your answer goes back to the agent that asked, in its own session, so it keeps its context.
-- **Asking the Architect mid-work:** before failing or reporting blocked, Developer can ask
-  the Architect a question (status CONSULT), and Lead can too while writing a brief. The
-  Architect has no file access, so the question must carry the evidence (`path:line` and
+- **Asking the Planner mid-work:** before failing or reporting blocked, Developer can ask
+  the Planner a question (status CONSULT), and Analyst can too while writing a brief. The
+  Planner has no file access, so the question must carry the evidence (`path:line` and
   the code, or the exact output); the plugin refuses one without it. The answer goes back to
   the asker's session, which carries on; it isn't a failed attempt. Each pair (Developer ↔
-  Architect, Lead ↔ Architect) has its own session, apart from the Architect's planning
-  session. Developer's starts fresh with each new plan, Lead's with each stage, brief and
+  Planner, Analyst ↔ Planner) has its own session, apart from the Planner's planning
+  session. Developer's starts fresh with each new plan, Analyst's with each stage, brief and
   round of your comments, and either after `limits.consultsPerSession` (6) questions.
-  Limits: `consultsPerStep` (2) per plan step, `consultsPerBrief` (3) per brief. Principal
+  Limits: `consultsPerStep` (2) per plan step, `consultsPerBrief` (3) per brief. Architect
   never answers these.
-- **Step fix:** when Developer reports a step blocked, the Architect first tries to fix just
+- **Step fix:** when Developer reports a step blocked, the Planner first tries to fix just
   that step: it returns a replacement step, or two (a new step first, then the revised one).
   The plugin swaps them into a copy of the plan; finished steps and the rest stay as they
   are. You approve a one-line "Step N changed: …" (destructive or irreversible changes show
-  the full step text, and Principal reviews them first, as for a risky plan); safe and full
+  the full step text, and Architect reviews them first, as for a risky plan); safe and full
   auto approve it themselves (safe still stops at a risky one). Developer then carries on at
   that step. One fix per step: if the fixed step blocks again, the plan counts as failed.
-  When one step can't be patched, the Architect says so and writes a new plan as before.
+  When one step can't be patched, the Planner says so and writes a new plan as before.
 - **Attempts** are failed tries: the team's own work failed and has to be redone. That
   means a Developer step that fails its check or is blocked, a review that sends the work
-  back, Principal requesting changes to a plan, or an agent call that crashed, timed out or
-  never reported. Info requests, Intern searches, questions to the Architect, your questions
+  back, Architect requesting changes to a plan, or an agent call that crashed, timed out or
+  never reported. Info requests, Intern searches, questions to the Planner, your questions
   and answers, and revisions from your comments aren't attempts; their own limits bound them
-  (`needInfoPerTask`, `leadSearchRounds`, `consultsPerStep`, `consultsPerBrief`,
+  (`needInfoPerTask`, `analystSearchRounds`, `consultsPerStep`, `consultsPerBrief`,
   `questionsPerTask`, `escalateAfterComments`). `limits.taskAttempts`
   (default 10) caps failed attempts per task. `limits.taskAgentCalls` (default 100) caps all
   agent calls as a silent runaway guard.
@@ -299,7 +301,7 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
    agent    call prmt tool   tok    %
    manager     0    6    5   41k  12%
      fuse/kimi-k2.6
-   lead        1   14   22   88k  26%
+   analyst        1   14   22   88k  26%
      fuse/kimi-k2.6
   ●developer   2   31   58  190k  57%
      fuse/kimi-k2.6 → github-copil…
@@ -322,11 +324,11 @@ Edits are never reverted automatically. Every result lists the changed files.
 |---|---|
 | Agent calls per task | 40, then [Continue +10] |
 | Developer rounds per plan step | 2 |
-| Failed plans before Principal advice | 2 (Principal advice: once per task) |
+| Failed plans before Architect advice | 2 (Architect advice: once per task) |
 | Your comment rounds on one draft before advice | 3 (next adviser), 5 (the one above) |
 | Searches / question rounds per task | 6 / 4 |
-| Lead's search rounds (handed to the Intern) before each report | 3 |
-| Tool calls per agent call | lead 15, architect 25, intern 100, developer 150, reviewer 30, principal 20 |
+| Analyst's search rounds (handed to the Intern) before each report | 3 |
+| Tool calls per agent call | analyst 15, planner 25, intern 100, developer 150, reviewer 30, architect 20 |
 | Time per agent call | 30 min (developer 240), or 15 min without activity |
 
 All limits are in the config file under `limits`.
@@ -349,7 +351,7 @@ Use the exact commands you would type. For a remote build, give the whole comman
 `"build": "ssh buildhost \"cd /work/view3 && make -j16\""`. Leave out what doesn't exist
 (e.g. only `build`).
 
-- The commands go to Lead, Architect, Developer and the Reviewer, with the rule to use only these.
+- The commands go to Analyst, Planner, Developer and the Reviewer, with the rule to use only these.
   Plans use them as check commands. A step is done only when its check really ran and passed.
 - They count as builds: long timeout (`buildCommands.timeoutMin`), and the output goes to
   `logs/`.
@@ -392,9 +394,9 @@ with whatever you use to explore code (a code graph, clangd, a docs RAG, ...):
 }
 ```
 
-Give code-search tools to the Intern, not Lead. Lead doesn't search: it can read only the files
+Give code-search tools to the Intern, not Analyst. Analyst doesn't search: it can read only the files
 the request, your material or the Intern's findings name, and sends every search to the Intern.
-Tools you add to Lead still work, so a code-search MCP there lets it search again; add only
+Tools you add to Analyst still work, so a code-search MCP there lets it search again; add only
 tools that fetch your material (an issue tracker, a wiki).
 
 Code-search tools often skip some files. A code graph indexes only the languages it knows,
@@ -425,9 +427,9 @@ error-detective, code-reviewer and architect-reviewer subagents.
 
 Each task writes to `~/.cache/opencode-multi-agent-team/<task-id>/` (`taskDir`):
 - `request.md`, `brief.md`, `plan-N.md`, `doc-N.md`, `findings-N.md`, `report-N.md`,
-  `analysis-N.md`, `principal-N.md`, `answers.md`, `existing.md` (the document as it was
+  `analysis-N.md`, `architect-N.md`, `answers.md`, `existing.md` (the document as it was
   before a task edited it)
-- how stage: `how-brief.md`, `how-answers.md`; Lead's answers to the Architect or Principal:
+- how stage: `how-brief.md`, `how-answers.md`; Analyst's answers to the Planner or Architect:
   `brief-answer-N.md` / `how-brief-answer-N.md`; `infeasible-N.md`; `advice-N.md` (with how
   the writer handled each item), `stuck-N.md`
 - `logs/`: full build and long command output

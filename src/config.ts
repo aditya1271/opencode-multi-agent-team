@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { migrateNames } from "./state.ts"
 
-export const ROLES = ["manager", "lead", "architect", "intern", "developer", "reviewer", "principal"] as const
+export const ROLES = ["manager", "analyst", "planner", "intern", "developer", "reviewer", "architect"] as const
 export type Role = (typeof ROLES)[number]
 export type WorkerRole = Exclude<Role, "manager">
 
@@ -43,25 +43,25 @@ export interface Config {
   agentPrefix: string
   defaultAgent: boolean
   limits: {
-    /** Failed tries per task before the team stops and asks: a failed Developer step, a review sending work back, Principal requesting changes, an agent call that broke. */
+    /** Failed tries per task before the team stops and asks: a failed Developer step, a review sending work back, Architect requesting changes, an agent call that broke. */
     taskAttempts: number
     /** Agent calls per task, failed or not: a runaway guard. */
     taskAgentCalls: number
     developerRounds: number
     planFailures: number
-    principalAdvice: number
-    /** The user's comment rounds on one brief or document after which the next adviser up is consulted (Architect, then Principal). */
+    architectAdvice: number
+    /** The user's comment rounds on one brief or document after which the next adviser up is consulted (Planner, then Architect). */
     escalateAfterComments: number[]
-    /** Principal reviews of a plan or document the user can ask for per task. */
-    principalReviews: number
+    /** Architect reviews of a plan or document the user can ask for per task. */
+    architectReviews: number
     needInfoPerTask: number
-    /** Rounds of search queries Lead may hand to the Intern before each report. */
-    leadSearchRounds: number
+    /** Rounds of search queries Analyst may hand to the Intern before each report. */
+    analystSearchRounds: number
     questionsPerTask: number
-    /** Questions Developer may ask the Architect per plan step, and Lead per brief (status CONSULT). */
+    /** Questions Developer may ask the Planner per plan step, and Analyst per brief (status CONSULT). */
     consultsPerStep: number
     consultsPerBrief: number
-    /** Questions one pair session with the Architect takes before the next starts fresh. */
+    /** Questions one pair session with the Planner takes before the next starts fresh. */
     consultsPerSession: number
     toolCalls: Record<WorkerRole, number>
     callMinutes: { default: number; developer: number }
@@ -72,7 +72,7 @@ export interface Config {
   /**
    * `output` is relative to the project ({task} = the task name). `instructions` / `howInstructions` replace the built-in
    * standards (inline text or a file): the what-document and how-document standards apply to code tasks too.
-   * `confirmBrief`: the user sees Lead's brief before the Architect writes.
+   * `confirmBrief`: the user sees Analyst's brief before the Planner writes.
    */
   workflows: {
     code: { confirmBrief: boolean }
@@ -99,16 +99,16 @@ export const DEFAULTS: Config = {
     taskAgentCalls: 100,
     developerRounds: 2,
     planFailures: 2,
-    principalAdvice: 1,
+    architectAdvice: 1,
     escalateAfterComments: [3, 5],
-    principalReviews: 2,
+    architectReviews: 2,
     needInfoPerTask: 6,
-    leadSearchRounds: 3,
+    analystSearchRounds: 3,
     questionsPerTask: 4,
     consultsPerStep: 2,
     consultsPerBrief: 3,
     consultsPerSession: 6,
-    toolCalls: { lead: 15, architect: 25, intern: 100, developer: 150, reviewer: 30, principal: 20 },
+    toolCalls: { analyst: 15, planner: 25, intern: 100, developer: 150, reviewer: 30, architect: 20 },
     callMinutes: { default: 30, developer: 240 },
     stallMinutes: 15,
     modelRetryWaits: 2,

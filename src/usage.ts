@@ -78,23 +78,23 @@ export function hints(usage: Partial<Record<Role, AgentUsage>>, steps = 1): stri
     const work = (p.tools.read ?? 0) + (p.tools.search ?? 0) + (p.tools.shell ?? 0) + (p.tools.edit ?? 0) + (p.tools.build ?? 0)
     if (work) out.push(`manager used ${work} read/search/shell/edit calls (expected 0)`)
   }
-  for (const role of ["architect", "principal"] as const) {
+  for (const role of ["planner", "architect"] as const) {
     const s = usage[role]
     if (!s) continue
     const k = s.tools
     const work = (k.read ?? 0) + (k.search ?? 0) + (k.index ?? 0) + (k.shell ?? 0) + (k.edit ?? 0) + (k.build ?? 0)
-    if (work) out.push(`${role} used ${work} file or code tool calls (expected 0: it asks Lead)`)
+    if (work) out.push(`${role} used ${work} file or code tool calls (expected 0: it asks Analyst)`)
   }
-  const s = usage.architect
-  if (s?.calls && s.prompts / s.calls > 15) out.push(`architect: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
-  for (const role of ["lead", "architect", "intern", "reviewer", "principal"] as const) {
+  const s = usage.planner
+  if (s?.calls && s.prompts / s.calls > 15) out.push(`planner: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
+  for (const role of ["analyst", "planner", "intern", "reviewer", "architect"] as const) {
     const edits = usage[role]?.tools.edit ?? 0
     if (edits) out.push(`${role} made ${edits} edit calls (only developer edits)`)
   }
   const a = usage.reviewer
   if (a && a.calls > Math.max(3, steps * 2)) out.push(`reviewer: ${a.calls} calls for ${steps} step(s)`)
-  const o = usage.principal
-  if (o && o.calls > 2) out.push(`principal: ${o.calls} calls (expected rare)`)
+  const o = usage.architect
+  if (o && o.calls > 2) out.push(`architect: ${o.calls} calls (expected rare)`)
   const f = usage.developer
   const all = ROLES.reduce((n, r) => n + (usage[r] ? toolTotal(usage[r]!) : 0), 0)
   if (f && all >= 60 && toolTotal(f) < all * 0.3) out.push(`developer did only ${Math.round((100 * toolTotal(f)) / all)}% of tool calls (expected most)`)

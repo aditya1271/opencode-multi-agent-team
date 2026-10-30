@@ -33,12 +33,12 @@ without a plan or review.
 | Agent | Job | Model tier |
 |---|---|---|
 | **Managers** (build / plan / research) | Talk to the user. The front agent the user picks fixes the workflow: code change, plan document or research report. Rewrites the request and asks for confirmation. | cheap |
-| **Lead** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | cheap |
-| **Architect** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | strong |
-| **Intern** | Does larger code searches for Architect, and answers the user's code questions. | cheap |
+| **Analyst** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | cheap |
+| **Planner** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | strong |
+| **Intern** | Does larger code searches for Planner, and answers the user's code questions. | cheap |
 | **Developer** | The only agent that edits files and runs builds and tests. Iterates on errors until done or stuck. | cheap |
 | **Reviewer** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | mid |
-| **Principal** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
+| **Architect** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
 
 Each agent's code-search tools (a code graph, clangd, a docs RAG, …) and working
 instructions are set in the config. Its role, its report outcomes and the safety rules are
@@ -50,13 +50,13 @@ fixed.
 user ─► Manager ─► [Send] [Edit] [Cancel]
                        │
                        ▼
-                    Lead ──── trivial ───► Developer ─► done
+                    Analyst ──── trivial ───► Developer ─► done
                        │                       (more than 1 file touched → quick review)
                        │ needs a plan
                        ▼
-                    Architect ⇄ Intern (searches)
+                    Planner ⇄ Intern (searches)
                        │ plan
-                       ├── destructive? ─► Principal review
+                       ├── destructive? ─► Architect review
                        ▼
                  user approves the plan (free reply)
                        │
@@ -66,20 +66,20 @@ user ─► Manager ─► [Send] [Edit] [Cancel]
                        ▼
                     Reviewer
                        ├─ fixable here     ─► back to Developer (max 2 rounds per step)
-                       ├─ plan is wrong    ─► Architect writes a new plan
-                       └─ unclear          ─► Principal advice ─► Architect
+                       ├─ plan is wrong    ─► Planner writes a new plan
+                       └─ unclear          ─► Architect advice ─► Planner
 ```
 
 **Code questions** go straight to Intern, and the answer comes back to the user. A
 question asked **while a task waits on the user** goes to the agent the task waits on
-(Architect, or Lead before there's a plan), which knows the task. The task doesn't move.
-The user can ask for a plan, which takes the trivial path away from Lead. The Manager
+(Planner, or Analyst before there's a plan), which knows the task. The task doesn't move.
+The user can ask for a plan, which takes the trivial path away from Analyst. The Manager
 never answers the user itself; it only rewrites and forwards.
 
 **Plan and research workflows** (plan-manager, research-manager) use the same agents without
-Developer, build or test: Lead writes the brief (for research: a research brief the user may
-adjust, and the depth), Architect writes the document from the evidence (Intern searches in
-capped rounds), and the user approves it. Principal reviews it critically when the user asks.
+Developer, build or test: Analyst writes the brief (for research: a research brief the user may
+adjust, and the depth), Planner writes the document from the evidence (Intern searches in
+capped rounds), and the user approves it. Architect reviews it critically when the user asks.
 The document is saved in the project. After an approved plan, **[Implement it]** switches to
 build-manager and starts a code task from it.
 
@@ -91,8 +91,8 @@ build-manager and starts a code task from it.
 - **Build and test commands** are set per project. Agents never work out how to build. If
   none are set, the task first asks the user for them, or the user skips build and test
   (the result then says "not built or tested").
-- **Answer questions.** Only Lead, Architect and Principal can ask them.
-- **Approve every plan,** together with Principal's notes on destructive plans.
+- **Answer questions.** Only Analyst, Planner and Architect can ask them.
+- **Approve every plan,** together with Architect's notes on destructive plans.
 - **Allow or deny dangerous commands** (reset, clean, delete, revert, submit) when they run.
 - **Decide when stuck:** retry, continue with more attempts, or stop.
 - **Stop at any time.** Edits are kept and listed, never reverted automatically.
@@ -120,7 +120,7 @@ Every task ends as **done**, **stopped** or **stuck**:
   [Continue +10] or [Stop]. Tokens and time are not limited, only shown.
 - **Developer rounds:** at most 2 fix-ups per step from the Reviewer. After that, the plan
   counts as failed.
-- **Failed plans:** 2, then Principal advice once, then one more plan, then the user decides.
+- **Failed plans:** 2, then Architect advice once, then one more plan, then the user decides.
 - **Circling:** the Reviewer sees every attempt on a step. If the same error comes back
   or a fix undoes an earlier one, it sends the step back for a new plan instead of
   another round.
@@ -137,7 +137,7 @@ A totals view over the last N tasks shows each agent's share. This makes it visi
 whether the work is divided as intended. For example:
 - the Manager should do no searching or editing
 - Developer should carry most of the tool calls
-- the Reviewer and Principal should be called rarely
+- the Reviewer and Architect should be called rarely
 
 Agents far outside their expected share are pointed out. The report is for information
 only and never stops a task.
@@ -148,7 +148,7 @@ only and never stops a task.
 |---|---|---|
 | Trivial | 2–3 | 0 |
 | Planned, going well | about 5–7 | 1 (the plan) |
-| Destructive plan | +2 (Principal review, final review) | +1 (Principal review) |
+| Destructive plan | +2 (Architect review, final review) | +1 (Architect review) |
 
 Measured on the sandbox: a trivial change took 2 agent calls, and a 3-step plan took 5. A
 destructive 4-step plan with one round of user changes took 9.

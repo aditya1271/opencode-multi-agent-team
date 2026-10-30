@@ -11,7 +11,7 @@ export interface Report {
   steps?: number
   checkCommand?: string
   depth?: "quick" | "breadth" | "depth"
-  /** Code task, Lead's ESCALATE: is the behaviour already fixed by the request? */
+  /** Code task, Analyst's ESCALATE: is the behaviour already fixed by the request? */
   what?: "settled" | "open"
   /** ADVICE in an advice mode: one instruction per item. */
   items?: string[]
@@ -36,7 +36,7 @@ export interface SessionRun {
   task?: TaskState
   toolLimit: number
   toolCalls: number
-  /** Lead's reads the plugin refused (they don't count toward toolLimit). */
+  /** Analyst's reads the plugin refused (they don't count toward toolLimit). */
   refused?: number
   tools: Partial<Record<ToolKind, number>>
   prompts: number

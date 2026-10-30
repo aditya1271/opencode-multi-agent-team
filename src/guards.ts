@@ -44,10 +44,10 @@ function resultText(result: unknown): string {
 const ASK_INTERN = "Send the Intern a NEED_INFO with precise queries; its findings come back to you, and then you can read the files they cite."
 
 /**
- * Lead doesn't search: it reads only files whose path appears in what it was given (the request, the user's answers
+ * Analyst doesn't search: it reads only files whose path appears in what it was given (the request, the user's answers
  * and material, the Intern's findings, briefs and drafts: the task folder). Why a read is refused, or undefined.
  */
-export function leadReadProblem(task: TaskState, input: unknown): string | undefined {
+export function analystReadProblem(task: TaskState, input: unknown): string | undefined {
   const i = (input ?? {}) as Record<string, unknown>
   const given = i.filePath ?? i.path ?? i.file_path
   if (typeof given !== "string") return undefined
@@ -154,10 +154,10 @@ export async function registerGuards(ctx: Context, config: Config) {
       )
     if (run.task?.skipChecks && kind === "build")
       throw new Error("Build and test are skipped for this task (the user chose this). Don't build or test; finish the edits and report.")
-    if (run.role === "lead" && event.tool === "read" && run.task) {
-      const problem = leadReadProblem(run.task, event.input)
+    if (run.role === "analyst" && event.tool === "read" && run.task) {
+      const problem = analystReadProblem(run.task, event.input)
       if (problem) {
-        // Refused reads don't use up the tool calls; from the third one on, Lead is told to stop trying.
+        // Refused reads don't use up the tool calls; from the third one on, Analyst is told to stop trying.
         run.refused = (run.refused ?? 0) + 1
         throw new Error(run.refused >= 3 ? `${problem} Stop reading now: report NEED_INFO with all your queries in one round.` : problem)
       }
