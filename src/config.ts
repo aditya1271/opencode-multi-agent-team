@@ -25,7 +25,7 @@ export interface TierConfig {
 export const DEFAULT_TIERS: Record<Role, Tier> = {
   manager: "cheap",
   analyst: "normal",
-  planner: "normal",
+  planner: "good",
   intern: "cheap",
   developer: "normal",
   reviewer: "good",

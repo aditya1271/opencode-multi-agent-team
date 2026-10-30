@@ -211,17 +211,17 @@ describe("permissions", () => {
       good: { model: "fuse/terra", variant: "high" },
       expensive: { model: ["siemens/opus", "copilot/opus"] },
     }
-    const config = merge(DEFAULTS, { tiers, agents: { planner: { tier: "good" }, developer: { model: "fuse/glm" }, reviewer: { variant: "max" } } })
+    const config = merge(DEFAULTS, { tiers, agents: { intern: { tier: "normal" }, developer: { model: "fuse/glm" }, reviewer: { variant: "max" } } })
     const ids = (role: Role) => modelsFor(config, role).map(modelLabel)
     expect(ids("operator")).toEqual(["fuse/luna#low", "copilot/luna#low"])
-    expect(ids("intern")).toEqual(["fuse/luna#low", "copilot/luna#low"])
+    expect(ids("intern")).toEqual(["fuse/kimi"])
     expect(ids("manager")).toEqual(["fuse/luna#low", "copilot/luna#low"])
     expect(ids("analyst")).toEqual(["fuse/kimi"])
     expect(ids("planner")).toEqual(["fuse/terra#high"])
     expect(ids("developer")).toEqual(["fuse/glm"])
     expect(ids("reviewer")).toEqual(["fuse/terra#max"])
     expect(ids("architect")).toEqual(["siemens/opus", "copilot/opus"])
-    expect(tierOf(config, "planner")).toBe("good")
+    expect([tierOf(config, "planner"), tierOf(config, "intern")]).toEqual(["good", "normal"])
     // A tier with no models leaves its roles unconfigured.
     expect(modelsFor(merge(DEFAULTS, { tiers: { normal: { model: "fuse/kimi" } } }), "architect")).toEqual([])
   })

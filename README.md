@@ -393,8 +393,8 @@ You name models per tier once; each role uses its default tier:
 | Tier | Roles (default) |
 |---|---|
 | `cheap` | manager (the front agents), intern, operator |
-| `normal` | analyst, planner, developer |
-| `good` | reviewer |
+| `normal` | analyst, developer |
+| `good` | planner, reviewer |
 | `expensive` | architect |
 
 ```jsonc
@@ -405,7 +405,7 @@ You name models per tier once; each role uses its default tier:
   "expensive": { "model": ["anthropic/claude-opus-4-5", "openai/gpt-5"], "variant": "high" }
 },
 "agents": {
-  "planner": { "tier": "good" },                  // another tier for this role
+  "intern": { "tier": "normal" },                 // another tier for this role
   "developer": { "model": "openai/gpt-5-codex" }  // its own model always wins
 }
 ```

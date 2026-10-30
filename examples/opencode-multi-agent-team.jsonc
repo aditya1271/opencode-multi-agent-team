@@ -1,7 +1,7 @@
 // Copy to ~/.config/opencode/opencode-multi-agent-team.json (or <project>/.opencode/).
 // Models: name the models of each tier once. Each role uses its default tier:
-//   cheap: manager, intern, operator   normal: analyst, planner, developer
-//   good: reviewer                     expensive: architect
+//   cheap: manager, intern, operator   normal: analyst, developer
+//   good: planner, reviewer            expensive: architect
 // agents.<role>.tier picks another tier; agents.<role>.model always wins (its "variant" wins
 // over the tier's). List a backup from a different provider after the main model.
 // "provider/model#variant" or a separate "variant" both work.
@@ -23,7 +23,6 @@
     "expensive": { "model": ["anthropic/claude-opus-4-5", "openai/gpt-5"], "variant": "high" }
   },
   "agents": {
-    "planner": { "tier": "good" },
     "intern": {
       // "mcps": ["codebase-memory"], "skills": ["codebase-memory"], "commands": ["graphify *"]
     }
