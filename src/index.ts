@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs"
 import path from "node:path"
 import { agentId, DESCRIPTIONS, FRONT_AGENTS, FRONT_DESCRIPTIONS, ignoredTools, managerPrompt, permissionsFor, systemPrompt, workflowOf } from "./agents.ts"
 import { WORKFLOWS } from "./state.ts"
-import { expandHome, loadConfig, modelsFor, ROLES } from "./config.ts"
+import { expandHome, loadConfig, modelsFor, ROLES, tierOf, TIERS } from "./config.ts"
 import { registerFallback } from "./fallback.ts"
 import { registerGuards } from "./guards.ts"
 import { acceptReport, REPORT_DESCRIPTION, REPORT_INPUT } from "./report.ts"
@@ -23,7 +23,8 @@ export default Plugin.define({
       } catch {}
     }
     const missing = ROLES.filter((r) => modelsFor(config, r).length === 0)
-    if (missing.length) log(`no model configured for: ${missing.join(", ")} (set agents.<role>.model)`)
+    if (missing.length) log(`no model configured for: ${missing.map((r) => `${r} (tier ${tierOf(config, r)})`).join(", ")} (set tiers.<tier>.model or agents.<role>.model)`)
+    for (const [role, a] of Object.entries(config.agents)) if (a && "tier" in a && a.tier && !TIERS.includes(a.tier)) log(`warning: agents.${role}.tier "${a.tier}" is not one of ${TIERS.join(", ")}`)
     for (const warning of ignoredTools(config)) log(`warning: ${warning}`)
 
     await ctx.agent.transform((editor) => {

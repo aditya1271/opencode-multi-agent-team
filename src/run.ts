@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { agentId } from "./agents.ts"
-import { modelLabel, modelsFor, type Config, type WorkerRole } from "./config.ts"
+import { modelLabel, modelsFor, tierOf, type Config, type WorkerRole } from "./config.ts"
 import { beginRun, runs, type Report, type SessionRun } from "./runtime.ts"
 import type { Mode, TaskState } from "./state.ts"
 import type { UsageDelta } from "./usage.ts"
@@ -45,7 +45,11 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
   const zero: UsageDelta = { prompts: 0, tools: {}, input: 0, cacheRead: 0, output: 0 }
   const models = modelsFor(config, input.role)
   if (!models.length)
-    return { end: "config", failure: `No model configured for the "${input.role}" role. Set agents.${input.role}.model in opencode-multi-agent-team.json.`, usage: zero }
+    return {
+      end: "config",
+      failure: `No model configured for the "${input.role}" role. Set tiers.${tierOf(config, input.role)}.model (its tier) or agents.${input.role}.model in opencode-multi-agent-team.json.`,
+      usage: zero,
+    }
 
   let sessionID = input.sessionID
   if (!sessionID) {

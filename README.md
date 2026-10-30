@@ -25,7 +25,7 @@ now means the new Architect: rename it to `planner`.
 | `team-developer` | Edits, builds and tests. The only agent that changes files. |
 | `team-reviewer` | Diagnoses failures and reviews finished work. |
 | `team-architect` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
-| `team-operator` | Runs things for you (and for Analyst and Developer mid-task) and returns the output: commands, scripts, API calls (curl), web pages. Changes no code (no edit tool); dangerous commands ask you first. Uses the Intern's model unless `agents.operator.model` is set. |
+| `team-operator` | Runs things for you (and for Analyst and Developer mid-task) and returns the output: commands, scripts, API calls (curl), web pages. Changes no code (no edit tool); dangerous commands ask you first. Uses the cheap tier by default. |
 
 Ask for something to run ("run scripts/list-models and show me the output", "curl the
 models endpoint") and the manager sends it to the Operator with the `run` action, outside any
@@ -78,9 +78,10 @@ runs the TypeScript source directly. Requires OpenCode 2.2 or later.
    cp ~/opencode-multi-agent-team/examples/opencode-multi-agent-team.jsonc ~/.config/opencode/opencode-multi-agent-team.json
    ```
 
-   (or to `<project>/.opencode/opencode-multi-agent-team.json` for one project). Then set a
-   model for every role. The plugin ships no default models. List a backup model from a
-   different provider after the main one; the plugin switches to it when the main model fails.
+   (or to `<project>/.opencode/opencode-multi-agent-team.json` for one project). Then set the
+   models of the four tiers (`tiers.cheap`, `normal`, `good`, `expensive`). The plugin ships no
+   default models. List a backup model from a different provider after the main one; the
+   plugin switches to it when the main model fails. See [Models](#models).
 
 5. **Set each project's build and test commands** (see
    [Build and test commands](#build-and-test-commands)). Without them, every task first asks
@@ -384,6 +385,34 @@ or tested". There is no extra review, so check the changes yourself.
 
 To skip in one project only, set `"checks": { "whenMissing": "skip" }` in that project's
 config.
+
+## Models
+
+You name models per tier once; each role uses its default tier:
+
+| Tier | Roles (default) |
+|---|---|
+| `cheap` | manager (the front agents), intern, operator |
+| `normal` | analyst, planner, developer |
+| `good` | reviewer |
+| `expensive` | architect |
+
+```jsonc
+"tiers": {
+  "cheap":     { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"], "variant": "low" },
+  "normal":    { "model": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"] },
+  "good":      { "model": ["openai/gpt-5", "anthropic/claude-sonnet-4-5"] },
+  "expensive": { "model": ["anthropic/claude-opus-4-5", "openai/gpt-5"], "variant": "high" }
+},
+"agents": {
+  "planner": { "tier": "good" },                  // another tier for this role
+  "developer": { "model": "openai/gpt-5-codex" }  // its own model always wins
+}
+```
+
+Order of preference: `agents.<role>.model`, then `agents.<role>.tier`, then the role's default
+tier. `agents.<role>.variant` wins over the tier's `variant`. A role whose tier has no models
+and that has no model of its own can't run; the plugin log lists such roles at startup.
 
 ## Per-agent tools and instructions
 

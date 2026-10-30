@@ -13,9 +13,33 @@ export interface ModelRef {
   variant?: string
 }
 
-export interface AgentConfig {
+/** Model tiers: the user names models per tier once; each role uses its default tier unless agents.<role>.tier or .model says otherwise. */
+export const TIERS = ["cheap", "normal", "good", "expensive"] as const
+export type Tier = (typeof TIERS)[number]
+
+export interface TierConfig {
   model?: string | string[]
   variant?: string
+}
+
+export const DEFAULT_TIERS: Record<Role, Tier> = {
+  manager: "cheap",
+  analyst: "normal",
+  planner: "normal",
+  intern: "cheap",
+  developer: "normal",
+  reviewer: "good",
+  architect: "expensive",
+  operator: "cheap",
+}
+
+export interface AgentConfig {
+  /** Wins over the tier. */
+  model?: string | string[]
+  /** Wins over the tier's variant. */
+  variant?: string
+  /** The tier whose models the role uses when it has no model of its own (default: DEFAULT_TIERS). */
+  tier?: Tier
   /** Skills the agent loads first. */
   skills?: string[]
   /** MCP servers, used through Code Mode (`execute`). */
@@ -34,6 +58,7 @@ export interface AgentConfig {
 export type FrontAgent = "build-manager" | "plan-manager" | "research-manager"
 
 export interface Config {
+  tiers: Partial<Record<Tier, TierConfig>>
   agents: Partial<Record<Role, AgentConfig>> & Partial<Record<FrontAgent, Pick<AgentConfig, "instructions" | "append">>>
   polish: "on" | "off"
   /** Mode for new tasks unless the user asks otherwise: off (interactive), polished, safe or full auto. */
@@ -92,6 +117,7 @@ export interface Config {
 }
 
 export const DEFAULTS: Config = {
+  tiers: {},
   agents: {},
   polish: "on",
   auto: "off",
@@ -216,14 +242,16 @@ export function parseModel(spec: string, variant?: string): ModelRef {
   return ref
 }
 
-/** Models for a role, main first. Empty when the user configured none. */
+/** The tier a role uses when it has no model of its own. */
+export const tierOf = (config: Config, role: Role): Tier => config.agents[role]?.tier ?? DEFAULT_TIERS[role]
+
+/** Models for a role, main first: its own model, else its tier's. Empty when neither is configured. */
 export function modelsFor(config: Config, role: Role): ModelRef[] {
-  // The Operator runs on the Intern's model unless it has its own.
-  if (role === "operator" && !config.agents.operator?.model) return modelsFor(config, "intern")
   const entry = config.agents[role]
-  if (!entry?.model) return []
-  const list = Array.isArray(entry.model) ? entry.model : [entry.model]
-  return list.map((m) => parseModel(m, entry.variant))
+  const source = entry?.model ? entry : config.tiers[tierOf(config, role)]
+  if (!source?.model) return []
+  const list = Array.isArray(source.model) ? source.model : [source.model]
+  return list.map((m) => parseModel(m, entry?.variant ?? source.variant))
 }
 
 export const modelLabel = (m?: ModelRef) => (m ? `${m.providerID}/${m.id}${m.variant ? "#" + m.variant : ""}` : "?")

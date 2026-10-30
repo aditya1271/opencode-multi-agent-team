@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
-import { buildPatterns, DEFAULTS, merge, modelsFor, parseModel, stripJsonc } from "../src/config.ts"
+import { buildPatterns, DEFAULTS, merge, modelLabel, modelsFor, parseModel, stripJsonc, tierOf, type Role } from "../src/config.ts"
 import { analystReadProblem, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
@@ -200,13 +200,30 @@ describe("permissions", () => {
     expect(evaluate(operator, "webfetch", ["https://example.com"])).toBe("allow")
     expect(evaluate(operator, "edit", ["a.ts"])).toBe("deny")
     expect(toolVisible(operator, "write")).toBe(false)
-    // No model of its own: the Intern's.
-    const config = merge(DEFAULTS, { agents: { intern: { model: "fuse/luna", variant: "low" } } })
-    expect(modelsFor(config, "operator")).toEqual(modelsFor(config, "intern"))
-    expect(modelsFor(merge(config, { agents: { operator: { model: "fuse/kimi" } } }), "operator")[0]?.id).toBe("kimi")
     const team = new Team({} as never, merge(DEFAULTS, { taskDir: mkdtempSync(path.join(tmpdir(), "omat-run-")) }), () => {}) as any
     expect(await team.handle({ action: "run", text: " " }, "ses_r", new AbortController().signal)).toContain("run needs text")
     expect(await team.handle({ action: "run", text: "curl x" }, "ses_r", new AbortController().signal)).toContain('No model configured for the "operator" role')
+  })
+  test("model tiers: own model, then the role's tier, then its default tier; the agent's variant wins", () => {
+    const tiers = {
+      cheap: { model: ["fuse/luna", "copilot/luna"], variant: "low" },
+      normal: { model: "fuse/kimi" },
+      good: { model: "fuse/terra", variant: "high" },
+      expensive: { model: ["siemens/opus", "copilot/opus"] },
+    }
+    const config = merge(DEFAULTS, { tiers, agents: { planner: { tier: "good" }, developer: { model: "fuse/glm" }, reviewer: { variant: "max" } } })
+    const ids = (role: Role) => modelsFor(config, role).map(modelLabel)
+    expect(ids("operator")).toEqual(["fuse/luna#low", "copilot/luna#low"])
+    expect(ids("intern")).toEqual(["fuse/luna#low", "copilot/luna#low"])
+    expect(ids("manager")).toEqual(["fuse/luna#low", "copilot/luna#low"])
+    expect(ids("analyst")).toEqual(["fuse/kimi"])
+    expect(ids("planner")).toEqual(["fuse/terra#high"])
+    expect(ids("developer")).toEqual(["fuse/glm"])
+    expect(ids("reviewer")).toEqual(["fuse/terra#max"])
+    expect(ids("architect")).toEqual(["siemens/opus", "copilot/opus"])
+    expect(tierOf(config, "planner")).toBe("good")
+    // A tier with no models leaves its roles unconfigured.
+    expect(modelsFor(merge(DEFAULTS, { tiers: { normal: { model: "fuse/kimi" } } }), "architect")).toEqual([])
   })
   test("every worker is told to keep secrets out of what it writes", () => {
     for (const role of ["analyst", "planner", "intern", "developer", "reviewer", "architect", "operator"] as const)
