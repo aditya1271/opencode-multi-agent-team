@@ -44,6 +44,9 @@
   // Start new sessions in build-manager.
   "defaultAgent": false,
 
+  // Analyst and Developer may have the Operator run something mid-task (web search, API call, script output).
+  "operatorCalls": true,
+
   // Plan and research documents. output: relative to the project ({task} = task name).
   // instructions: replaces the built-in document standard (text or file), e.g. "make plans
   // verbose; always weigh alternatives". The Planner writes to it; Architect reviews against it.
@@ -72,6 +75,7 @@
     "consultsPerStep": 2,     // questions Developer may ask the Planner mid-step (not failed attempts)
     "consultsPerBrief": 3,    // questions Analyst may ask the Planner while writing one brief
     "consultsPerSession": 6,  // questions one pair session with the Planner takes before a fresh one starts
+    "runsPerTask": 6,         // Operator runs Analyst and Developer may ask for per task (not failed attempts)
     "toolCalls": { "analyst": 15, "planner": 25, "intern": 100, "developer": 150, "reviewer": 30, "architect": 20, "operator": 30 },
     "callMinutes": { "default": 30, "developer": 240 },
     "stallMinutes": 15

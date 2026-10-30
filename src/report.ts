@@ -17,14 +17,14 @@ const SECTION_EDIT = {
 }
 
 const BASE: Record<Mode, string[]> = {
-  analyst: ["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "INFEASIBLE", "STUCK"],
+  analyst: ["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "RUN", "INFEASIBLE", "STUCK"],
   analyst_fail: ["ESCALATE"],
   fix_trivial: ["DONE", "FAILED", "BLOCKED"],
   review_trivial: ["PASS", "ISSUES"],
   planner: ["PLAN", "ASK", "QUESTIONS", "ESCALATE", "INFEASIBLE", "STUCK"],
   intern: ["FOUND", "NOT_FOUND"],
   architect_review: ["APPROVE", "CHANGES", "ASK"],
-  fix: ["DONE", "FAILED", "BLOCKED", "CONSULT"],
+  fix: ["DONE", "FAILED", "BLOCKED", "CONSULT", "RUN"],
   diagnose: ["LOCAL", "REPLAN", "ESCALATE"],
   review: ["PASS", "ISSUES"],
   architect_advice: ["ADVICE", "QUESTIONS", "ASK"],
@@ -95,10 +95,11 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
     const side = consultSide(mode)
     if (side && consultsUsed(task, side) >= (side === "developer" ? config.limits.consultsPerStep : config.limits.consultsPerBrief))
       list = list.filter((s) => s !== "CONSULT")
+    if (!config.operatorCalls || (task.runs ?? 0) >= config.limits.runsPerTask) list = list.filter((s) => s !== "RUN")
     if (mode === "analyst" || mode === "analyst_answer") {
       if ((task.analystSearches ?? 0) >= config.limits.analystSearchRounds) list = list.filter((s) => s !== "NEED_INFO")
     } else if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
-  } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK" && s !== "CONSULT")
+  } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK" && s !== "CONSULT" && s !== "RUN")
   return list
 }
 

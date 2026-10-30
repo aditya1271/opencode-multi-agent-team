@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
+import { buildPrompt, checksText, detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, operatorPrompt, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
 import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
 import { EditedFilesTrack, type ReviewProgress, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
@@ -815,7 +815,7 @@ export class Team {
         mode: "operator",
         parentID: managerSession,
         title: `team: ${role}`,
-        prompt: join("MODE: run. Carry out the user's request below and report RESULT with the output, or FAILED.", `<request>\n${request}\n</request>`),
+        prompt: operatorPrompt(request),
         signal,
       },
       this.log,
@@ -1273,6 +1273,15 @@ export class Team {
         }
         return
       }
+      case "operator": {
+        const file = writeNumbered(task, "run-result", `# The Operator's ${r.status} (${(p.files ?? []).join(", ")})\n\n${r.summary}\n\n${r.content}`)
+        this.record(task, p.mode, r, file)
+        task.pending = {
+          ...(p.then ?? { mode: "fix" }),
+          note: join(`The Operator ran your request (${r.status}, ${file}):`, `<result>\n${r.content}\n</result>`, "Carry on with your work; report as usual when done."),
+        }
+        return
+      }
       case "planner_stepfix": {
         if (r.status === "STEP" && this.fixStep(task, r)) return
         const file = this.reportFile(task, "analysis", p.mode, r)
@@ -1282,6 +1291,7 @@ export class Team {
       case "analyst":
       case "analyst_fail": {
         if (r.status === "CONSULT") return this.consult(task, p, r)
+        if (r.status === "RUN") return this.runFor(task, p, r)
         if (r.status === "NEED_INFO") {
           task.analystSearches = (task.analystSearches ?? 0) + 1
           this.record(task, p.mode, r)
@@ -1469,6 +1479,7 @@ export class Team {
       }
       case "fix": {
         if (r.status === "CONSULT") return this.consult(task, p, r)
+        if (r.status === "RUN") return this.runFor(task, p, r)
         const file = this.reportFile(task, "report", p.mode, r)
         this.record(task, p.mode, r, file)
         task.plannerUnseen.push(file)
@@ -1655,6 +1666,16 @@ export class Team {
     this.record(task, p.mode, r, file)
     const back: Pending = side === "developer" ? { mode: "fix" } : { mode: p.mode, adviceIds: p.adviceIds }
     task.pending = { mode: "planner_consult", asker: p.mode, files: [file], then: back }
+  }
+
+  /** Analyst or Developer has the Operator run something (status RUN): not a failed attempt; the result comes back to the same session. */
+  private runFor(task: TaskState, p: Pending, r: Report) {
+    task.runs = (task.runs ?? 0) + 1
+    const asker = p.mode === "fix" ? "Developer" : "Analyst"
+    const file = writeNumbered(task, "run", `# ${asker} asks the Operator to run\n\n${r.content}`)
+    this.record(task, p.mode, r, file)
+    const back: Pending = p.mode === "fix" ? { mode: "fix" } : { mode: p.mode, adviceIds: p.adviceIds }
+    task.pending = { mode: "operator", asker: p.mode, files: [file], note: operatorPrompt(r.content, asker), then: back }
   }
 
   /**

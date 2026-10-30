@@ -87,7 +87,7 @@ export function hints(usage: Partial<Record<Role, AgentUsage>>, steps = 1): stri
   }
   const s = usage.planner
   if (s?.calls && s.prompts / s.calls > 15) out.push(`planner: ${Math.round(s.prompts / s.calls)} prompts per call (expected a few)`)
-  for (const role of ["analyst", "planner", "intern", "reviewer", "architect"] as const) {
+  for (const role of ["analyst", "planner", "intern", "reviewer", "architect", "operator"] as const) {
     const edits = usage[role]?.tools.edit ?? 0
     if (edits) out.push(`${role} made ${edits} edit calls (only developer edits)`)
   }

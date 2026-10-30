@@ -25,7 +25,7 @@ now means the new Architect: rename it to `planner`.
 | `team-developer` | Edits, builds and tests. The only agent that changes files. |
 | `team-reviewer` | Diagnoses failures and reviews finished work. |
 | `team-architect` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
-| `team-operator` | Runs things for you and returns the output: commands, scripts, API calls (curl), web pages. Changes no code (no edit tool); dangerous commands ask you first. Uses the Intern's model unless `agents.operator.model` is set. |
+| `team-operator` | Runs things for you (and for Analyst and Developer mid-task) and returns the output: commands, scripts, API calls (curl), web pages. Changes no code (no edit tool); dangerous commands ask you first. Uses the Intern's model unless `agents.operator.model` is set. |
 
 Ask for something to run ("run scripts/list-models and show me the output", "curl the
 models endpoint") and the manager sends it to the Operator with the `run` action, outside any
@@ -271,6 +271,14 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
   round of your comments, and either after `limits.consultsPerSession` (6) questions.
   Limits: `consultsPerStep` (2) per plan step, `consultsPerBrief` (3) per brief. Architect
   never answers these.
+- **Having the Operator run something mid-task:** Analyst and Developer can report status
+  RUN to have the Operator run something they need: a web search or page, an API call, a
+  script whose output they need (Developer still runs builds and tests itself). Each run is a
+  separate Operator call you can see in the sidebar and the task folder (`run-N.md`,
+  `run-result-N.md`); the result goes back to the asker's session, which carries on. It
+  isn't a failed attempt. This is how research reaches the web: Analyst gathers web sources
+  for the research brief. Limit: `limits.runsPerTask` (6). Turn it off with
+  `"operatorCalls": false`.
 - **Step fix:** when Developer reports a step blocked, the Planner first tries to fix just
   that step: it returns a replacement step, or two (a new step first, then the revised one).
   The plugin swaps them into a copy of the plan; finished steps and the rest stay as they
@@ -285,7 +293,7 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
   never reported. Info requests, Intern searches, questions to the Planner, your questions
   and answers, and revisions from your comments aren't attempts; their own limits bound them
   (`needInfoPerTask`, `analystSearchRounds`, `consultsPerStep`, `consultsPerBrief`,
-  `questionsPerTask`, `escalateAfterComments`). `limits.taskAttempts`
+  `runsPerTask`, `questionsPerTask`, `escalateAfterComments`). `limits.taskAttempts`
   (default 10) caps failed attempts per task. `limits.taskAgentCalls` (default 100) caps all
   agent calls as a silent runaway guard.
 - **Stuck or out of attempts:** you get a report (what was tried, the last errors, the

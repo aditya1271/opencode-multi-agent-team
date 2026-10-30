@@ -42,6 +42,8 @@ export interface Config {
   reviewStyle: "ask" | "all" | "sections"
   agentPrefix: string
   defaultAgent: boolean
+  /** Analyst and Developer may have the Operator run something for them mid-task (status RUN). */
+  operatorCalls: boolean
   limits: {
     /** Failed tries per task before the team stops and asks: a failed Developer step, a review sending work back, Architect requesting changes, an agent call that broke. */
     taskAttempts: number
@@ -63,6 +65,8 @@ export interface Config {
     consultsPerBrief: number
     /** Questions one pair session with the Planner takes before the next starts fresh. */
     consultsPerSession: number
+    /** Operator runs Analyst and Developer may ask for per task (status RUN). */
+    runsPerTask: number
     toolCalls: Record<WorkerRole, number>
     callMinutes: { default: number; developer: number }
     stallMinutes: number
@@ -94,6 +98,7 @@ export const DEFAULTS: Config = {
   reviewStyle: "ask",
   agentPrefix: "team-",
   defaultAgent: false,
+  operatorCalls: true,
   limits: {
     taskAttempts: 10,
     taskAgentCalls: 100,
@@ -108,6 +113,7 @@ export const DEFAULTS: Config = {
     consultsPerStep: 2,
     consultsPerBrief: 3,
     consultsPerSession: 6,
+    runsPerTask: 6,
     toolCalls: { analyst: 15, planner: 25, intern: 100, developer: 150, reviewer: 30, architect: 20, operator: 30 },
     callMinutes: { default: 30, developer: 240 },
     stallMinutes: 15,

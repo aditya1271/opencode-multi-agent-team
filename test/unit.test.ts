@@ -69,10 +69,10 @@ describe("report statuses", () => {
   })
   test("stages pick the Planner's statuses; only the how stage after a what-document may report INFEASIBLE", () => {
     const t = newTask("/tmp/opencode/omat-test", "ses_s", "/tmp", "Goal\nadd a feature", 40)
-    expect(allowedStatuses(DEFAULTS, "analyst", t)).toEqual(["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT"])
+    expect(allowedStatuses(DEFAULTS, "analyst", t)).toEqual(["TRIVIAL", "ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "RUN"])
     t.stage = "what"
     expect(allowedStatuses(DEFAULTS, "planner", t)).toEqual(["DOC", "ASK", "QUESTIONS", "ESCALATE"])
-    expect(allowedStatuses(DEFAULTS, "analyst", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT"])
+    expect(allowedStatuses(DEFAULTS, "analyst", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "RUN"])
     t.stage = "how"
     expect(allowedStatuses(DEFAULTS, "planner", t)).toEqual(["PLAN", "ASK", "QUESTIONS", "ESCALATE"])
     t.doc = 1
@@ -1159,6 +1159,44 @@ describe("plan and research workflows", () => {
     }
   })
 
+  test("Developer and Analyst have the Operator run something: no failed attempt, the result comes back, limited per task, can be turned off", async () => {
+    const { team, cleanup } = setup()
+    try {
+      await team.handle({ action: "start", text: "use the models API" }, "ses_run", signal)
+      const t = team.task("ses_run")
+      Object.assign(t, { phase: "running", plan: 1, planSteps: 1, step: 1, rounds: 0 })
+      expect(allowedStatuses(DEFAULTS, "fix", t)).toContain("RUN")
+      const run = report("RUN", { content: "curl -s https://example.com/v1/models in /w; return the JSON" })
+
+      team.apply(t, { mode: "fix" }, run, {})
+      expect(t.attempts).toBe(0)
+      expect(t.pending).toMatchObject({ mode: "operator", asker: "fix", then: { mode: "fix" } })
+      const prompt = buildPrompt(DEFAULTS, t, t.pending, true)
+      expect(prompt).toContain("MODE: run for Developer")
+      expect(prompt).toContain("curl -s https://example.com/v1/models")
+      team.apply(t, t.pending, report("RESULT", { content: '{"data":[]}' }), {})
+      expect(t.pending.mode).toBe("fix")
+      expect(t.pending.note).toContain('{"data":[]}')
+      expect(t.history.at(-1)).toMatchObject({ mode: "operator", status: "RESULT", file: "run-result-1.md" })
+
+      // Analyst's run resumes its own hand-off.
+      team.apply(t, { mode: "analyst", adviceIds: ["ADV1"] }, run, {})
+      expect(buildPrompt(DEFAULTS, t, t.pending, true)).toContain("MODE: run for Analyst")
+      team.apply(t, t.pending, report("FAILED", { content: "curl: (6) Could not resolve host" }), {})
+      expect(t.pending).toMatchObject({ mode: "analyst", adviceIds: ["ADV1"] })
+      expect(t.pending.note).toContain("Could not resolve host")
+      expect(t.attempts).toBe(0)
+
+      t.runs = DEFAULTS.limits.runsPerTask
+      expect(allowedStatuses(DEFAULTS, "fix", t)).not.toContain("RUN")
+      t.runs = 0
+      expect(allowedStatuses(merge(DEFAULTS, { operatorCalls: false }), "analyst", t)).not.toContain("RUN")
+      expect(allowedStatuses(DEFAULTS, "analyst", t)).toContain("RUN")
+    } finally {
+      cleanup()
+    }
+  })
+
   test("a blocked step: the Planner fixes that step, the user approves one line, Developer carries on; a fixed step blocking again fails the plan", async () => {
     const { team, cleanup } = setup()
     try {
@@ -1442,7 +1480,7 @@ describe("sidebar", () => {
     const t = newTask("/tmp/x", "ses_p", "/w", "x", 40)
     expect(allowedStatuses(DEFAULTS, "analyst", t)).toContain("TRIVIAL")
     t.forcePlan = true
-    expect(allowedStatuses(DEFAULTS, "analyst", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT"])
+    expect(allowedStatuses(DEFAULTS, "analyst", t)).toEqual(["ESCALATE", "QUESTIONS", "NEED_INFO", "CONSULT", "RUN"])
   })
   test("sidebar lists each row's models and the configured models", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "omat-models-"))

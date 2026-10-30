@@ -242,6 +242,8 @@ export interface TaskState {
   adviceSeq?: number
   /** Questions Developer and Analyst asked the Planner mid-work, counted per step or brief (see consultKey). */
   consults?: Partial<Record<ConsultSide, { key: string; n: number }>>
+  /** Operator runs Analyst and Developer asked for (status RUN). */
+  runs?: number
   /**
    * The Planner's latest step fix: in plan `plan` (the spliced copy), steps `from`..`to` replace the blocked one.
    * A fixed step that blocks again fails the plan. `waiting`: the user approves it (approval phase).

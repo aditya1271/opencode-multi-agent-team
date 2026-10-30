@@ -214,9 +214,10 @@ const ANALYST_RESEARCH = [
     "- the question, and the sub-questions that together answer it",
     "- every detail and preference the user gave; dimensions they didn't state are open-ended, not invented",
     "- mode: **descriptive** (document what exists; the default) or **evaluative** (compare and recommend; only when the user asked to compare, choose or recommend)",
-    "- where to look (paths, the user's files; the web only if you have web tools) and what is out of scope",
-    "Then `## Findings so far`: what you found, with `path:line` and short verbatim excerpts.",
+    "- where to look (paths, the user's files, the web) and what is out of scope",
+    "Then `## Findings so far`: what you found, with `path:line` or the URL and short verbatim excerpts.",
   ].join("\n"),
+  "When the question reaches beyond the code (libraries, APIs, standards, other projects, anything on the web), have the Operator search the web and open the pages (RUN, when offered) and put what you use in Findings so far, with the URL and a verbatim excerpt: the agents after you search only the code.",
   "Report ESCALATE with `depth`. Report QUESTIONS (one round at most) only when the question itself is unclear: unknown terms or acronyms, or a choice only the user can make. Don't ask for what the user already gave.",
 ].join("\n\n")
 
@@ -246,6 +247,15 @@ export const SKIP_CHECKS = [
   "Plans and the trivial instruction give `none` as the check. Developer reports DONE once the edits are made (checkCommand `none`).",
 ].join("\n\n")
 
+
+/** The Operator's task message: the user's request (team action run), or what Analyst or Developer needs run mid-task. */
+export const operatorPrompt = (request: string, asker?: string) =>
+  join(
+    asker
+      ? `MODE: run for ${asker}, who needs this run to carry on with its task. Carry out the request below and report RESULT with the output ${asker} needs, or FAILED.`
+      : "MODE: run. Carry out the user's request below and report RESULT with the output, or FAILED.",
+    `<request>\n${request}\n</request>`,
+  )
 
 export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSession: boolean): string {
   const f = (name: string) => fileBlock(task, name)
@@ -422,7 +432,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       return join(ask, f("request.md"), f("checks.md"), whatDoc(), stageBrief(), answers(), f(`plan-${task.plan}.md`), ...unseen.map(f))
     }
     case "operator":
-      // Runs outside tasks; Team.run builds its prompt.
+      // Team.run and Team.runFor build the message (operatorPrompt).
       return p.note ?? ""
     case "intern":
       if (task.workflow === "research") return join(INTERN_RESEARCH, `<queries>\n${p.note ?? ""}\n</queries>`)
@@ -484,7 +494,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       )
     }
     case "review": {
-      const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.status !== "CONSULT" && h.file).map((h) => f(h.file!))
+      const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.status !== "CONSULT" && h.status !== "RUN" && h.file).map((h) => f(h.file!))
       return join(
         `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Developer.`,
         f("request.md"),
