@@ -413,6 +413,12 @@ the request, your material or the Intern's findings name, and sends every search
 Tools you add to Analyst still work, so a code-search MCP there lets it search again; add only
 tools that fetch your material (an issue tracker, a wiki).
 
+Every agent's first message starts with the working directory and its version control,
+detected once per folder: a Perforce workspace (the `p4 info` client whose root contains the
+folder), git, or none. Outside Perforce it also says not to use p4. So Perforce instructions
+you append for all projects can apply only where they fit: start them with "Only when the
+first message says this is a Perforce workspace; otherwise ignore this section."
+
 Code-search tools often skip some files. A code graph indexes only the languages it knows,
 so SWIG `.i` files, scripts or generated sources may be missing. When its search finds
 nothing, the Intern falls back to glob, grep and find before reporting NOT_FOUND. To close a

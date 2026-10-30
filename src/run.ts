@@ -5,6 +5,7 @@ import { modelLabel, modelsFor, type Config, type WorkerRole } from "./config.ts
 import { beginRun, runs, type Report, type SessionRun } from "./runtime.ts"
 import type { Mode, TaskState } from "./state.ts"
 import type { UsageDelta } from "./usage.ts"
+import { detectVcs, vcsLine } from "./vcs.ts"
 
 export type RunEnd = "report" | "no_report" | "timeout" | "stall" | "aborted" | "model" | "config"
 
@@ -93,7 +94,8 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
 
   let end: RunEnd = "no_report"
   let failure: string | undefined
-  let text = input.prompt
+  const dir = input.task?.workspace ?? ctx.location.directory
+  let text = input.sessionID ? input.prompt : `${vcsLine(dir, await detectVcs(dir))}\n\n${input.prompt}`
   let reprompted = false
   try {
     for (;;) {

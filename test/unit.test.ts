@@ -13,6 +13,7 @@ import { annotate, checkEdits, idRanges, indexOf, missingSummaries, shortView, s
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { detectVcs, vcsLine } from "../src/vcs.ts"
 import path from "node:path"
 
 describe("config", () => {
@@ -1505,5 +1506,21 @@ describe("sidebar", () => {
     expect([compact(950), compact(1234), compact(56_000), compact(2_500_000)]).toEqual(["950", "1.2k", "56k", "2.5M"])
     expect(line("●", "developer", 1, 22, 333, "4.4k", "50%")).toHaveLength(35)
     expect(line(" ", "architect", 12, 1, 1, "1k", "1%")).toContain("architect  12")
+  })
+})
+
+describe("version control", () => {
+  test("git, none, and the line agents get", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "omat-vcs-"))
+    mkdirSync(path.join(base, "repo", ".git"), { recursive: true })
+    mkdirSync(path.join(base, "repo", "src"), { recursive: true })
+    mkdirSync(path.join(base, "plain"))
+    const g = await detectVcs(path.join(base, "repo", "src"))
+    expect(g).toEqual({ kind: "git", root: path.join(base, "repo") })
+    expect(vcsLine("/w", g)).toContain("not a Perforce workspace")
+    expect(await detectVcs(path.join(base, "plain"))).toEqual({ kind: "none" })
+    const p = vcsLine("/p4/ws/src", { kind: "perforce", client: "me_ws", root: "/p4/ws" })
+    expect(p).toContain("Version control: Perforce workspace (client me_ws, root /p4/ws)")
+    expect(p).not.toContain("p4_* tools")
   })
 })
