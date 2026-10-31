@@ -33,12 +33,12 @@ without a plan or review.
 | Agent | Job | Model tier |
 |---|---|---|
 | **Managers** (build / plan / research) | Talk to the user. The front agent the user picks fixes the workflow: code change, plan document or research report. Rewrites the request and asks for confirmation. | cheap |
-| **Analyst** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | cheap |
-| **Planner** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | strong |
+| **Analyst** | Searches the code and decides: trivial, or needs a plan. Writes a brief including the relevant code excerpts. | normal |
+| **Planner** | Writes plans with exact file locations and a check command for each step. Flags destructive plans. | good |
 | **Intern** | Does larger code searches for Planner, and answers the user's code questions. | cheap |
-| **Developer** | The only agent that edits files and runs builds and tests. Iterates on errors until done or stuck. | cheap |
-| **Reviewer** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | mid |
-| **Architect** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | strongest |
+| **Developer** | The only agent that edits files and runs builds and tests. Iterates on errors until done or stuck. | normal |
+| **Reviewer** | Diagnoses failures, looking at all attempts on the step. Reviews finished work when needed. | good |
+| **Architect** | Reviews destructive plans. Gives expert advice when stuck, at most once per task. | expensive |
 | **Operator** | Runs commands, scripts, API calls and web searches and returns the output: for the user, outside any task, or for Analyst and Developer mid-task (status RUN). Changes no code. | cheap |
 
 Each agent's code-search tools (a code graph, clangd, a docs RAG, …) and working

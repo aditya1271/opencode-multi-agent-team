@@ -14,18 +14,18 @@ now means the new Architect: rename it to `planner`.
 
 ## Agents
 
-| Agent | Job |
-|---|---|
-| `build-manager` | Front agent for code changes: the team plans, edits, builds and tests. |
-| `plan-manager` | Front agent for plan documents: the team writes a plan for you to review. No code changes. |
-| `research-manager` | Front agent for research: the team investigates and writes a findings report. No code changes. |
-| `team-analyst` | Has the Intern search the code and reads only what it cites (no search tools), then decides between a trivial fix and a plan. Writes the brief. |
-| `team-planner` | Writes plans and documents. You approve each one. Advises Analyst when you keep sending its brief back. |
-| `team-intern` | Does code searches for Analyst and the Planner, and answers your code questions. |
-| `team-developer` | Edits, builds and tests. The only agent that changes files. |
-| `team-reviewer` | Diagnoses failures and reviews finished work. |
-| `team-architect` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. |
-| `team-operator` | Runs things for you (and for Analyst and Developer mid-task) and returns the output: commands, scripts, API calls (curl), web pages. Changes no code (no edit tool); dangerous commands ask you first. Uses the cheap tier by default. |
+| Agent | Job | Default [tier](#models) |
+|---|---|---|
+| `build-manager` | Front agent for code changes: the team plans, edits, builds and tests. | cheap |
+| `plan-manager` | Front agent for plan documents: the team writes a plan for you to review. No code changes. | cheap |
+| `research-manager` | Front agent for research: the team investigates and writes a findings report. No code changes. | cheap |
+| `team-analyst` | Has the Intern search the code and reads only what it cites (no search tools), then decides between a trivial fix and a plan. Writes the brief. | normal |
+| `team-planner` | Writes plans and documents. You approve each one. Advises Analyst when you keep sending its brief back. | good |
+| `team-intern` | Does code searches for Analyst and the Planner, and answers your code questions. | cheap |
+| `team-developer` | Edits, builds and tests. The only agent that changes files. | normal |
+| `team-reviewer` | Diagnoses failures and reviews finished work. | good |
+| `team-architect` | Reviews destructive plans, reviews a plan or document critically when you ask, and advises when the team is stuck or you keep sending a draft back. | expensive |
+| `team-operator` | Runs things for you (and for Analyst and Developer mid-task) and returns the output: commands, scripts, API calls (curl), web pages. Changes no code (no edit tool); dangerous commands ask you first. | cheap |
 
 Ask for something to run ("run scripts/list-models and show me the output", "curl the
 models endpoint") and the manager sends it to the Operator with the `run` action, outside any
