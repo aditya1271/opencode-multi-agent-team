@@ -82,6 +82,8 @@ export interface Config {
     /** Architect reviews of a plan or document the user can ask for per task. */
     architectReviews: number
     needInfoPerTask: number
+    /** Rounds of questions the Planner may ask before each draft (within needInfoPerTask). */
+    askRoundsPerDraft: number
     /** Rounds of search queries Analyst may hand to the Intern before each report. */
     analystSearchRounds: number
     questionsPerTask: number
@@ -134,6 +136,7 @@ export const DEFAULTS: Config = {
     escalateAfterComments: [3, 5],
     architectReviews: 2,
     needInfoPerTask: 6,
+    askRoundsPerDraft: 2,
     analystSearchRounds: 3,
     questionsPerTask: 4,
     consultsPerStep: 2,
@@ -252,6 +255,23 @@ export function modelsFor(config: Config, role: Role): ModelRef[] {
   if (!source?.model) return []
   const list = Array.isArray(source.model) ? source.model : [source.model]
   return list.map((m) => parseModel(m, entry?.variant ?? source.variant))
+}
+
+/**
+ * The models to try in order when one fails or returns nothing: the role's own (main, backup),
+ * then those of the tier one level down. The cheap tier has nothing below it.
+ */
+export function fallbackModels(config: Config, role: Role): ModelRef[] {
+  const own = modelsFor(config, role)
+  const below = TIERS[TIERS.indexOf(tierOf(config, role)) - 1]
+  const lower = below && config.tiers[below]?.model ? [config.tiers[below]!.model].flat().map((m) => parseModel(m, config.tiers[below]!.variant)) : []
+  const seen = new Set<string>()
+  return [...own, ...lower].filter((m) => {
+    const key = `${m.providerID}/${m.id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 export const modelLabel = (m?: ModelRef) => (m ? `${m.providerID}/${m.id}${m.variant ? "#" + m.variant : ""}` : "?")

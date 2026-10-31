@@ -59,7 +59,7 @@ export default Plugin.define({
         execute: async (input, context) => {
           try {
             const workflow = workflowOf(context.agent)
-            const content = await team.handle({ ...(input as TeamInput), workflow }, context.sessionID, context.signal)
+            const content = await team.handle({ ...(input as TeamInput), workflow, confirmed: undefined }, context.sessionID, context.signal)
             return { content: await team.withDialog(context.sessionID, content) }
           } catch (e) {
             log(`team error: ${(e as Error).stack ?? String(e)}`)

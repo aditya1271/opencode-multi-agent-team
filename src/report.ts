@@ -98,7 +98,8 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
     if (!config.operatorCalls || (task.runs ?? 0) >= config.limits.runsPerTask) list = list.filter((s) => s !== "RUN")
     if (mode === "analyst" || mode === "analyst_answer") {
       if ((task.analystSearches ?? 0) >= config.limits.analystSearchRounds) list = list.filter((s) => s !== "NEED_INFO")
-    } else if (task.needInfo >= needInfoLimit(config, task)) list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
+    } else if (task.needInfo >= needInfoLimit(config, task) || (mode === "planner" && task.workflow !== "research" && (task.draftAsks ?? 0) >= config.limits.askRoundsPerDraft))
+      list = list.filter((s) => s !== "NEED_INFO" && s !== "ASK")
   } else list = list.filter((s) => s !== "INFEASIBLE" && s !== "STUCK" && s !== "CONSULT" && s !== "RUN")
   return list
 }
@@ -197,6 +198,14 @@ function recommendProblem(role: string, input: Report, task: TaskState | undefin
     .join(" ")
 }
 
+/** QUESTIONS content is copied into answers.md, which every later writer reads. */
+const QUESTIONS_CONTEXT_WORDS = 200
+
+/** The option a question recommends (its `Recommended:` line), if any. */
+export function recommendationOf(question: string): string | undefined {
+  return /^\W*Recommended\W*:\s*(.+)$/im.exec(question)?.[1].replace(/\**\s*$/, "").trim() || undefined
+}
+
 /** Validates and stores the report for the session. Throws a message the model sees. */
 export function acceptReport(config: Config, sessionID: string, input: Report): string {
   const run = runs.get(sessionID)
@@ -207,6 +216,14 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if ((input.status === "QUESTIONS" || input.status === "ASK" || input.status === "CONSULT") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
   if (input.status === "CONSULT" && !EVIDENCE.test(input.content))
     throw new Error("CONSULT needs the evidence in content: the Planner has no file access. Quote the code (`path:line` and the lines, in a code block) and the exact output or facts the question rests on.")
+  if (input.status === "QUESTIONS") {
+    const missing = input.questions!.map((q, i) => (recommendationOf(q) ? 0 : i + 1)).filter(Boolean)
+    if (missing.length) throw new Error(`Every question needs a line \`Recommended: <option>\` (the option you would pick, and why); missing in item ${missing.join(", ")}.`)
+    if (input.content.split(/\s+/).length > QUESTIONS_CONTEXT_WORDS)
+      throw new Error(`QUESTIONS content is context for the questions (at most ${QUESTIONS_CONTEXT_WORDS} words), not your draft: you write the draft after the answers. Put what each question needs into the question itself.`)
+  }
+  if (input.status === "FOUND" && !input.content.includes("```"))
+    throw new Error("FOUND needs the lines that prove each finding, quoted exactly in a code block with `path:line`: the asker passes them to agents who see no files.")
   if (input.status === "ESCALATE" && needsWhat(run.mode, run.task)) {
     if (input.what !== "settled" && input.what !== "open") throw new Error('ESCALATE needs what: "settled" or "open".')
     if (input.what === "settled" && !/^#+\s*Why the behaviour is settled/im.test(input.content))

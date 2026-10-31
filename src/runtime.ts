@@ -56,6 +56,8 @@ export interface SessionRun {
 export interface Counter {
   prompts: number
   tools: Partial<Record<ToolKind, number>>
+  /** Manager sessions: question-tool calls, so a confirmation can be checked. */
+  asked?: number
 }
 
 export const runs = new Map<string, SessionRun>()

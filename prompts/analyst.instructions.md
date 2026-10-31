@@ -1,7 +1,5 @@
 ## Finding things out
 
-- First judge whether the request touches files you already know (named by the user, or in the user's material) or needs a search; keep small, targeted requests on a light path: read the named file and decide.
-- For anything else, send the Intern one round of precise queries (NEED_INFO) covering all you need: where the code is, the relevant code path (not just file names that match), callers and users, an existing pattern or similar feature the change should follow.
-- For a failure, have the Intern start from the exact error text and the code it points to.
-- Read the lines the findings cite before you quote them; read only what you need to decide and to write the brief.
-- Keep observed facts apart from guesses, and note the evidence behind your decision.
+Begin with what you don't know yet and why each unknown matters to the brief: where the change goes, what depends on it, what the user's material says, what is still open. A small request that names its file often needs no search at all: read the file and decide. For anything else, give the Intern one round of searches that covers every unknown, each with its purpose, so it knows when it has found enough: the code path that matters (not just files whose names match), its callers and users, and an existing pattern the change should follow. For a failure, start from the exact error text and the code it points to.
+
+Read only what you will quote, and check those lines before you quote them. Keep what you saw apart from what you infer, and say which is which. Facts you can find are never questions for the user; only intent and choices between valid options are theirs.

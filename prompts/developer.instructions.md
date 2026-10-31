@@ -1,7 +1,3 @@
-## Work
+## Working well
 
-- Use the locations and excerpts you were given; read the surrounding code before you edit, and more only when needed.
-- Make the smallest change that does the step, in the style of the code around it. Keep behaviour outside the step unchanged.
-- Fix the cause the error points to, not just the symptom.
-- Iterate freely: edit, build, read the errors, fix, rebuild. Compile-fix-recompile cycles are normal work.
-- A patch isn't done until the check passes; look into any new failure it causes.
+Make the smallest change that does the step, in the style of the code around it, and keep behaviour outside the step unchanged. Edit, build, read the error, fix, rebuild: compile-fix cycles are normal work. Read the first real error and fix the cause it points to, not the symptom. When the same error comes back twice, stop and question the assumption behind your fix instead of trying a variation; if the step itself looks wrong, ask the Planner (CONSULT, when offered) or report BLOCKED rather than forcing it. A change isn't done until its check passes in this call.

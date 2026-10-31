@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
-import { buildPatterns, DEFAULTS, merge, modelLabel, modelsFor, parseModel, stripJsonc, tierOf, type Role } from "../src/config.ts"
+import { buildPatterns, DEFAULTS, fallbackModels, merge, modelLabel, modelsFor, parseModel, stripJsonc, tierOf, type Role } from "../src/config.ts"
 import { analystReadProblem, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
-import { beginRun, runs } from "../src/runtime.ts"
+import { beginRun, counter, runs } from "../src/runtime.ts"
 import { appendFile, loadTask, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
@@ -14,6 +14,7 @@ import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { detectVcs, vcsLine } from "../src/vcs.ts"
+import { runAgent } from "../src/run.ts"
 import path from "node:path"
 
 describe("config", () => {
@@ -200,7 +201,7 @@ describe("permissions", () => {
     expect(evaluate(operator, "webfetch", ["https://example.com"])).toBe("allow")
     expect(evaluate(operator, "edit", ["a.ts"])).toBe("deny")
     expect(toolVisible(operator, "write")).toBe(false)
-    const team = new Team({} as never, merge(DEFAULTS, { taskDir: mkdtempSync(path.join(tmpdir(), "omat-run-")) }), () => {}) as any
+    const team = new Team({} as never, merge(DEFAULTS, { polish: "off", taskDir: mkdtempSync(path.join(tmpdir(), "omat-run-")) }), () => {}) as any
     expect(await team.handle({ action: "run", text: " " }, "ses_r", new AbortController().signal)).toContain("run needs text")
     expect(await team.handle({ action: "run", text: "curl x" }, "ses_r", new AbortController().signal)).toContain('No model configured for the "operator" role')
   })
@@ -224,11 +225,50 @@ describe("permissions", () => {
     expect([tierOf(config, "planner"), tierOf(config, "intern")]).toEqual(["good", "normal"])
     // A tier with no models leaves its roles unconfigured.
     expect(modelsFor(merge(DEFAULTS, { tiers: { normal: { model: "fuse/kimi" } } }), "architect")).toEqual([])
+    // When a model fails or returns nothing: the role's own models, then the tier one level down, each once.
+    const chain = (role: Role) => fallbackModels(config, role).map(modelLabel)
+    expect(chain("architect")).toEqual(["siemens/opus", "copilot/opus", "fuse/terra#high"])
+    expect(chain("planner")).toEqual(["fuse/terra#high", "fuse/kimi"])
+    expect(chain("analyst")).toEqual(["fuse/kimi", "fuse/luna#low", "copilot/luna#low"])
+    expect(chain("operator")).toEqual(["fuse/luna#low", "copilot/luna#low"])
+    expect(chain("intern")).toEqual(["fuse/kimi", "fuse/luna#low", "copilot/luna#low"])
+  })
+  test("an empty reply counts as a model failure: the runner switches down the chain", async () => {
+    const config = merge(DEFAULTS, { tiers: { normal: { model: "fuse/kimi" }, good: { model: ["fuse/terra", "siemens/sonnet"] } } })
+    const dir = mkdtempSync(path.join(tmpdir(), "omat-fb-"))
+    const used: string[] = []
+    let model = "fuse/terra"
+    let last: object = {}
+    const ctx = {
+      location: { directory: dir },
+      session: {
+        create: async () => ({ id: "ses_fb" }),
+        get: async () => ({ tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, model: { providerID: "fuse", id: "terra" }, outcome: "succeeded" }),
+        prompt: async () => {
+          used.push(model)
+          // The first two models return nothing; the next one reports.
+          if (model === "fuse/kimi") runs.get("ses_fb")!.report = { status: "PLAN", summary: "s", content: "c" } as never
+          last = { type: "assistant", content: model === "fuse/kimi" ? [{ type: "tool" }] : [] }
+        },
+        wait: async () => undefined,
+        context: async () => [{ type: "user", text: "x" }, last],
+        switchModel: async (i: { model: { providerID: string; id: string } }) => void (model = `${i.model.providerID}/${i.model.id}`),
+        interrupt: async () => undefined,
+      },
+    }
+    const logs: string[] = []
+    try {
+      const r = await runAgent(ctx as never, config, { role: "planner", mode: "planner", parentID: "p", title: "t", prompt: "go", signal: new AbortController().signal }, (m) => void logs.push(m))
+      expect([r.end, used]).toEqual(["report", ["fuse/terra", "siemens/sonnet", "fuse/kimi"]])
+      expect(logs[0]).toContain("planner: fuse/terra returned an empty reply, switching to siemens/sonnet")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
   test("every worker is told to keep secrets out of what it writes", () => {
     for (const role of ["analyst", "planner", "intern", "developer", "reviewer", "architect", "operator"] as const)
       expect(systemPrompt(DEFAULTS, role)).toContain("Never copy a secret's value")
-    expect(managerPrompt(DEFAULTS, "code")).toContain("action `run`")
+    expect(managerPrompt(DEFAULTS, "code")).toContain("→ `run`")
   })
   test("developer asks before destructive commands", () => {
     const rules = permissionsFor(DEFAULTS, "developer")
@@ -256,10 +296,34 @@ describe("permissions", () => {
 })
 
 describe("prompts", () => {
+  // Fixed text costs context on every call; it must stay small enough not to crowd out the task.
+  test("prompts stay within their size budget", () => {
+    const tok = (s: string) => Math.round(s.split(/\s+/).filter(Boolean).length * 1.35)
+    const system: Record<string, number> = { analyst: 1100, planner: 1200, architect: 1000, intern: 600, developer: 600, reviewer: 600, operator: 600 }
+    for (const [role, max] of Object.entries(system)) expect(tok(systemPrompt(DEFAULTS, role as Role))).toBeLessThanOrEqual(max)
+    for (const w of WORKFLOWS) expect(tok(managerPrompt(DEFAULTS, w))).toBeLessThanOrEqual(1200)
+    // System prompt plus the task message's fixed text, per call.
+    const root = mkdtempSync(path.join(tmpdir(), "omat-size-"))
+    const t = newTask(root, "ses_x", "/tmp", "req", 5)
+    const calls: [Role, object, object, number][] = [
+      ["analyst", {}, { mode: "analyst" }, 2300],
+      ["analyst", { workflow: "plan" }, { mode: "analyst" }, 2000],
+      ["planner", { workflow: "plan", stage: "how", doc: 1 }, { mode: "planner" }, 2000],
+      ["architect", { workflow: "plan", stage: "how", plan: 1 }, { mode: "architect_doc_review" }, 1600],
+      ["developer", { plan: 1, step: 1, planSteps: 2 }, { mode: "fix" }, 1000],
+      ["intern", {}, { mode: "intern", note: "" }, 700],
+    ]
+    try {
+      for (const [role, patch, p, max] of calls)
+        expect(tok(systemPrompt(DEFAULTS, role)) + tok(buildPrompt(DEFAULTS, { ...structuredClone(t), ...patch }, p as never, true))).toBeLessThanOrEqual(max)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
   test("default instructions fill the core prompt", () => {
     const p = systemPrompt(DEFAULTS, "intern")
     expect(p).toContain("You are the Intern")
-    expect(p).toContain("## How to search")
+    expect(p).toContain("## Searching well")
     expect(p).not.toContain("{{instructions}}")
     expect(p).not.toContain("## Your tools\n\n-")
   })
@@ -269,8 +333,8 @@ describe("prompts", () => {
     })
     const p = systemPrompt(config, "intern")
     expect(p).toContain("Use the RAG docs first.")
-    expect(p).not.toContain("## How to search")
-    expect(p).toContain("Report **FOUND**")
+    expect(p).not.toContain("## Searching well")
+    expect(p).toContain("Call `report` once")
     expect(p).toContain("- Tools: docs_search.")
     expect(p.trimEnd().endsWith("Answer in English.")).toBe(true)
   })
@@ -285,7 +349,7 @@ describe("front agents", () => {
     expect(plan).toContain("`implement`")
     expect(research).toContain("A follow-up question on a finished report")
     for (const p of [build, plan, research]) {
-      expect(p).toContain("## You only polish and forward")
+      expect(p).toContain("## Sending the user's messages")
       expect(p).not.toMatch(/\{\{\w+\}\}/)
     }
     expect(plan).toContain("think critically")
@@ -376,7 +440,7 @@ describe("plan and research workflows", () => {
       session: { context: async () => [], get: async () => undefined, switchAgent: async (i: { agent: string }) => void switched.push(i.agent) },
     }
     // Drafts shown whole; the section-by-section test sets its own review style.
-    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root, reviewStyle: "all" }), () => {}) as any
+    const team = new Team(ctx as never, merge(DEFAULTS, { polish: "off", taskDir: root, reviewStyle: "all" }), () => {}) as any
     team.step = async (t: any) => t.pending
     const cleanup = () => {
       rmSync(root, { recursive: true, force: true })
@@ -386,22 +450,33 @@ describe("plan and research workflows", () => {
   }
   const report = (status: string, extra: object = {}) => ({ status, summary: "Approving this gives you a design.", content: "# Design\n\n## Options\n\nA or B", ...extra })
 
-  test("polished auto: replies are sent without confirmation, the user still decides", async () => {
-    const { team, cleanup } = setup()
+  test("default mode: the plugin holds a polished text until the user chose Send; auto modes send it at once", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-cf-"))
+    const ctx = { location: { directory: root }, session: { context: async () => [], get: async () => undefined } }
+    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root, reviewStyle: "all" }), () => {}) as any
+    team.step = async (t: any) => t.pending
     try {
-      await team.handle({ action: "start", text: "design the cache", workflow: "plan", auto: "polished" }, "ses_p", signal)
-      const t = team.task("ses_p")
-      team.apply(t, { mode: "analyst" }, report("QUESTIONS", { questions: ["LRU or LFU?"] }), {})
+      const held = await team.handle({ action: "start", text: "design the cache", workflow: "plan" }, "ses_cf", signal)
+      expect(held).toContain("Held for the user's confirmation")
+      expect(team.task("ses_cf")).toBeUndefined()
+      // Send without asking the user is refused; the model can't mark a text confirmed itself.
+      expect(await team.handle({ action: "send" }, "ses_cf", signal)).toContain("hasn't confirmed it yet")
+      counter("ses_cf").asked = (counter("ses_cf").asked ?? 0) + 1
+      await team.handle({ action: "send" }, "ses_cf", signal)
+      expect(team.task("ses_cf").workflow).toBe("plan")
+      expect(await team.handle({ action: "send" }, "ses_cf", signal)).toContain("Nothing waits to be sent")
+      expect(await team.handle({ action: "cancel" }, "ses_cf", signal)).toContain("Not sent")
+      // Polished auto: sent right away, and nothing about confirming reaches the manager.
+      await team.handle({ action: "start", text: "design the store", workflow: "plan", auto: "polished" }, "ses_cf2", signal)
+      const t = team.task("ses_cf2")
+      expect(t.auto).toBe("polished")
+      team.apply(t, { mode: "analyst" }, report("QUESTIONS", { questions: ["LRU or LFU?\nRecommended: LRU"] }), {})
       expect(await team.autoStep(t, signal)).toBeUndefined()
-      const shown = render(t)
-      expect(shown).toContain("QUESTIONS from analyst")
-      expect(shown).toContain("AUTO-SEND (polished auto)")
-      await team.handle({ action: "auto", auto: "off" }, "ses_p", signal)
-      expect(render(t)).not.toContain("AUTO-SEND")
-      expect(managerPrompt(merge(DEFAULTS, { auto: "polished" }), "code")).toContain("default mode is **polished auto**")
-      expect(managerPrompt(DEFAULTS, "code")).not.toContain("default mode is")
+      expect(render(t)).toContain("QUESTIONS from analyst")
+      expect(render(t)).not.toContain("[Send]")
+      expect(JSON.stringify(await team.handle({ action: "answer", text: "LRU" }, "ses_cf2", signal))).not.toContain("Held")
     } finally {
-      cleanup()
+      rmSync(root, { recursive: true, force: true })
     }
   })
 
@@ -487,12 +562,12 @@ describe("plan and research workflows", () => {
       await team.handle({ action: "start", text: "design the cache", workflow: "plan", auto: "safe" }, "ses_a", signal)
       const t = team.task("ses_a")
       expect(t.auto).toBe("safe")
-      team.apply(t, { mode: "analyst" }, report("QUESTIONS", { questions: ["LRU or LFU? (recommended: LRU)"] }), {})
+      team.apply(t, { mode: "analyst" }, report("QUESTIONS", { questions: ["LRU or LFU?\nRecommended: LRU"] }), {})
       expect(t.phase).toBe("questions")
       expect(render(t)).toContain("Next, on safe auto: answer analyst's questions with the recommended options")
       expect(await team.autoStep(t, signal)).toContain("AUTO (safe): took the recommended answer to 1 question from analyst")
       expect([t.phase, t.pending.mode]).toEqual(["running", "analyst"])
-      expect(t.pending.note).toContain("take your recommended option for each question")
+      expect(t.pending.note).toContain("1. LRU (auto)")
       t.pending = undefined
       team.apply(t, { mode: "analyst" }, report("ESCALATE", { content: "## Concept brief\n\n**Concerns**: speed" }), {})
       expect(await team.autoStep(t, signal)).toContain("approved the concept brief")
@@ -643,7 +718,7 @@ describe("plan and research workflows", () => {
       session: { context: async () => [], get: async () => undefined },
       rpc: () => ({ track: async (i: any) => void tracked.push(...i.files.map((f: any) => ({ session: i.sessionID, ...f }))) }),
     }
-    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    const team = new Team(ctx as never, merge(DEFAULTS, { polish: "off", taskDir: root }), () => {}) as any
     team.step = async (t: any) => t.pending
     try {
       await team.handle({ action: "start", text: "design it", workflow: "plan" }, "ses_t", signal)
@@ -930,6 +1005,20 @@ describe("plan and research workflows", () => {
       expect(() => check("planner", "planner", { status: "PLAN", content: planOk, risk: "no", steps: 2 })).not.toThrow()
       expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Test**: it is proven", "**Test**"), risk: "no", steps: 2 })).toThrow("Missing in: 2. Test.")
       expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Summary:** Low risk.\n\n", ""), risk: "no", steps: 2 })).toThrow("Missing in: Risks.")
+      // Every question to the user carries a recommendation (auto mode answers from it); findings quote the lines.
+      expect(() => check("planner", "planner", { status: "QUESTIONS", content: "", questions: ["A or B?\nRecommended: A", "C or D?"] })).toThrow("missing in item 2")
+      expect(() => check("planner", "planner", { status: "QUESTIONS", content: "", questions: ["A or B?\n**Recommended:** A, simpler"] })).not.toThrow()
+      expect(() => check("planner", "planner", { status: "QUESTIONS", content: "word ".repeat(300), questions: ["A or B?\nRecommended: A"] })).toThrow("not your draft")
+      expect(() => check("intern", "intern", { status: "FOUND", content: "see `a.ts:10`" })).toThrow("quoted exactly in a code block")
+      expect(() => check("intern", "intern", { status: "FOUND", content: "`a.ts:10`\n```\nx = 1\n```" })).not.toThrow()
+      // The Planner asks at most askRoundsPerDraft rounds before each draft; a draft resets the count.
+      t.pending = undefined
+      t.needInfo = 0
+      for (const _ of [1, 2]) team.apply(t, { mode: "planner" }, { status: "ASK", summary: "s", content: "", questions: ["who calls f?"] }, {})
+      expect(allowedStatuses(DEFAULTS, "planner", t)).not.toContain("ASK")
+      expect(buildPrompt(DEFAULTS, t, { mode: "planner" }, false)).not.toContain("**ASK**")
+      team.apply(t, { mode: "planner" }, { status: "PLAN", summary: "s", content: planOk, risk: "no", steps: 2 }, {})
+      expect(allowedStatuses(DEFAULTS, "planner", t)).toContain("ASK")
     } finally {
       cleanup()
     }
@@ -1276,7 +1365,7 @@ describe("plan and research workflows", () => {
       expect(risky).toContain("rm -f old.c")
       expect(risky).toContain("Safe auto stopped here")
       t.stepFix.risk = false
-      expect(render(t)).toContain("AUTO")
+      expect(render(t)).toContain("on safe auto: approve")
     } finally {
       cleanup()
     }
@@ -1319,7 +1408,7 @@ describe("usage", () => {
 describe("start while the task waits on the user", () => {
   test("goes to the waiting task instead of asking [Stop task] [Wait]", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "omat-redirect-"))
-    const team = new Team({ session: { context: async () => [] } } as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    const team = new Team({ session: { context: async () => [] } } as never, merge(DEFAULTS, { polish: "off", taskDir: root }), () => {}) as any
     team.step = async (t: any) => t.pending
     try {
       save(newTask(root, "ses_r", "/w", "x", 40))
@@ -1389,7 +1478,7 @@ describe("sidebar", () => {
     const root = mkdtempSync(path.join(tmpdir(), "omat-sidebar-"))
     const tokens = (input: number, read: number, output: number) => ({ input, output, reasoning: 0, cache: { read, write: 0 } })
     const ctx = { session: { get: async ({ sessionID }: { sessionID: string }) => ({ tokens: sessionID === "ses_fix" ? tokens(150, 500, 30) : tokens(0, 0, 0) }) } }
-    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root }), () => {})
+    const team = new Team(ctx as never, merge(DEFAULTS, { polish: "off", taskDir: root }), () => {})
     try {
       const old = newTask(root, "ses_p", "/w", "a old task", 40)
       old.phase = "done"
@@ -1425,7 +1514,7 @@ describe("sidebar", () => {
       { type: "user", text: "old request", time: { created: 1 } },
       { type: "user", text: "lets keep option a", time: { created: 20 } },
     ]
-    const team = new Team({ session: { context: async () => context } } as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    const team = new Team({ session: { context: async () => context } } as never, merge(DEFAULTS, { polish: "off", taskDir: root }), () => {}) as any
     try {
       const t = newTask(root, "ses_p", "/w", "x", 40)
       t.phase = "questions"
@@ -1478,7 +1567,7 @@ describe("sidebar", () => {
   })
   test("an answer to Architect's questions goes back to its session", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "omat-architect-"))
-    const team = new Team({ session: { context: async () => [] } } as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    const team = new Team({ session: { context: async () => [] } } as never, merge(DEFAULTS, { polish: "off", taskDir: root }), () => {}) as any
     team.step = async (t: any) => t.pending
     try {
       save(newTask(root, "ses_p", "/w", "x", 40))
@@ -1502,7 +1591,7 @@ describe("sidebar", () => {
   })
   test("sidebar lists each row's models and the configured models", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "omat-models-"))
-    const config = merge(DEFAULTS, { taskDir: root, agents: { analyst: { model: ["fuse/glm", "siemens/claude"] } } })
+    const config = merge(DEFAULTS, { polish: "off", taskDir: root, agents: { analyst: { model: ["fuse/glm", "siemens/claude"] } } })
     const team = new Team({ session: { get: async () => undefined } } as never, config, () => {})
     try {
       const t = newTask(root, "ses_m", "/w", "x", 40)

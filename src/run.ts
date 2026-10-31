@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { agentId } from "./agents.ts"
-import { modelLabel, modelsFor, tierOf, type Config, type WorkerRole } from "./config.ts"
+import { fallbackModels, modelLabel, modelsFor, tierOf, type Config, type WorkerRole } from "./config.ts"
 import { beginRun, runs, type Report, type SessionRun } from "./runtime.ts"
 import type { Mode, TaskState } from "./state.ts"
 import type { UsageDelta } from "./usage.ts"
@@ -41,10 +41,20 @@ export const tokenCounts = (t: Tokens) => ({
   output: t.output + t.reasoning,
 })
 
+type Part = { type?: string; text?: string }
+
+/** The session's last assistant message holds no text and no tool call. */
+export async function lastReplyEmpty(ctx: Context, sessionID: string): Promise<boolean> {
+  const messages = (await ctx.session.context({ sessionID }).catch(() => [])) as unknown as Array<{ type?: string; content?: Part[] }>
+  const last = messages.findLast((m) => m.type === "assistant")
+  if (!last) return false
+  return !(last.content ?? []).some((p) => p.type === "tool" || (p.type === "text" && !!p.text?.trim()))
+}
+
 export async function runAgent(ctx: Context, config: Config, input: RunInput, log: (msg: string) => void): Promise<RunResult> {
   const zero: UsageDelta = { prompts: 0, tools: {}, input: 0, cacheRead: 0, output: 0 }
-  const models = modelsFor(config, input.role)
-  if (!models.length)
+  const models = fallbackModels(config, input.role)
+  if (!modelsFor(config, input.role).length)
     return {
       end: "config",
       failure: `No model configured for the "${input.role}" role. Set tiers.${tierOf(config, input.role)}.model (its tier) or agents.${input.role}.model in opencode-multi-agent-team.json.`,
@@ -122,18 +132,20 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
         break
       }
       const info = await ctx.session.get({ sessionID: sid })
-      if (info.outcome === "failed") {
+      // An empty reply (no text, no tool call) is a model problem too, e.g. a rate limit or exhausted tokens.
+      const problem = info.outcome === "failed" ? "failed" : (await lastReplyEmpty(ctx, sid)) ? "returned an empty reply" : undefined
+      if (problem) {
         if (modelIndex + 1 < models.length) {
           modelIndex++
           const next = models[modelIndex]
-          log(`${input.role}: model failed, switching to ${modelLabel(next)}`)
+          log(`${input.role}: ${modelLabel(models[modelIndex - 1])} ${problem}, switching to ${modelLabel(next)}`)
           await ctx.session.switchModel({ sessionID: sid, model: next })
           await sleep(500)
-          text = "The previous model request failed. Continue the task where it stopped, and finish by calling `report`."
+          text = `The previous model ${problem === "failed" ? "request failed" : "returned nothing"}. Continue the task where it stopped, and finish by calling \`report\`.`
           continue
         }
         end = "model"
-        failure = `all models for ${input.role} failed (${models.map(modelLabel).join(", ")})`
+        failure = `all models for ${input.role} failed or returned nothing (${models.map(modelLabel).join(", ")})`
         break
       }
       if (!reprompted) {

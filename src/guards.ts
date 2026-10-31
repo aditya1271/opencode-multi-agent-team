@@ -137,6 +137,7 @@ export async function registerGuards(ctx: Context, config: Config) {
       if (roleOf(config, event.agent) === "manager" && event.tool !== "team") {
         const c = counter(event.sessionID)
         c.tools[kind] = (c.tools[kind] ?? 0) + 1
+        if (event.tool === "question") c.asked = (c.asked ?? 0) + 1
         if (!toolVisible(rules.manager, event.tool))
           throw new Error(`The manager doesn't use ${event.tool}. Send code questions and changes through the team tool.`)
       }

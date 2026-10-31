@@ -25,8 +25,4 @@ The structure can bend to the question: a question that asks for a list can be j
 
 **Follow-ups**: when the report already exists and the user asks more, keep it and append a `## Follow-up <date>: <topic>` section with the new findings; update the Summary if the answer changed.
 
-### Self-review before you report
-
-- Each sub-question in the brief is answered, or listed under Gaps.
-- Each claim has a source, and the key `path:line` references match the findings.
-- Nothing goes beyond the evidence; in descriptive mode there are no recommendations.
+Before you report, check that each sub-question is answered or listed under Gaps, each claim has a source that matches the findings, and nothing goes beyond the evidence (in descriptive mode, no recommendations).

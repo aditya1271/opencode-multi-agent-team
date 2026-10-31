@@ -6,6 +6,7 @@ import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
 import { buildPrompt, checksText, detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, operatorPrompt, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
 import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
+import { recommendationOf } from "./report.ts"
 import { EditedFilesTrack, type ReviewProgress, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
 import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
@@ -55,8 +56,11 @@ const queries = (r: Report) => join(r.content, (r.questions ?? []).map((q, i) =>
 
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
-export const TEAM_ACTIONS = ["start", "ask", "run", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status", "details"] as const
+export const TEAM_ACTIONS = ["start", "ask", "run", "send", "cancel", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status", "details"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
+
+/** Actions whose text the user confirms on default mode. */
+const CONFIRMED_ACTIONS: TeamAction[] = ["start", "ask", "run", "answer", "change", "section", "review"]
 
 export type TeamMode = "off" | AutoLevel
 
@@ -77,6 +81,8 @@ export interface TeamInput {
   plan?: boolean
   /** Set by the plugin from the calling front agent, not by the model. */
   workflow?: Workflow
+  /** Set by the plugin: the user chose [Send] for this text. */
+  confirmed?: boolean
   output?: string
   review?: boolean
   /** start and auto: auto mode (off = interactive). */
@@ -95,10 +101,11 @@ export interface TeamInput {
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
-  "Actions: start (text = the confirmed request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Architect to review the plan or document; auto = polished, safe or full when the user asked for an auto mode),",
+  "Actions: start (text = the polished request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Architect to review the plan or document; auto = polished, safe or full when the user asked for an auto mode),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
-  "run (text = the confirmed request to run or fetch something and return the result: a command, script, API call or web page; the Operator does it, changes no code and starts no task; an open task doesn't move),",
-  "continue, answer (text = the user's confirmed answer), approve, change (text = the user's confirmed comments; finetune, revise, final, reopen = section ids, add = titles of new sections), section (going through the waiting brief, document or plan one section at a time: verdict = start, ok, skip, finetune or revise with text = the confirmed comment, or rest to show the remaining sections at once), review (Architect critically reviews the waiting plan or document; text = what to look at),",
+  "run (text = the polished request to run or fetch something and return the result: a command, script, API call or web page; the Operator does it, changes no code and starts no task; an open task doesn't move),",
+  "send, cancel (the user's choice when the team asked you to confirm a text first),",
+  "continue, answer (text = the user's polished answer), approve, change (text = the user's polished comments; finetune, revise, final, reopen = section ids, add = titles of new sections), section (going through the waiting brief, document or plan one section at a time: verdict = start, ok, skip, finetune or revise with text = the polished comment, or rest to show the remaining sections at once), review (Architect critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status,",
   "details (the stored full text of the waiting brief, document or plan; ids = sections, none = all; no agent runs).",
@@ -109,7 +116,7 @@ export const TEAM_SCHEMA = {
   type: "object",
   properties: {
     action: { type: "string", enum: [...TEAM_ACTIONS] },
-    text: { type: "string", description: "The confirmed request, question, answer or comments. Build/test commands word for word." },
+    text: { type: "string", description: "The polished request, question, answer or comments. Build/test commands word for word." },
     last: { type: "integer", minimum: 1, description: "stats only: totals over the last N tasks." },
     plan: { type: "boolean", description: "start only: the user wants a plan, not a quick fix." },
     output: { type: "string", description: "start only, plan/research: the document path the user named." },
@@ -161,6 +168,8 @@ export class Team {
   private sessionDirs?: Map<string, string[]>
   /** Code questions per manager session (they have no task folder). */
   private questions = new Map<string, { count: number; usage: Partial<Record<Role, AgentUsage>> }>()
+  /** A polished text waiting for the user's [Send] [Edit] [Cancel] (default mode), with the question count when it was held. */
+  private drafts = new Map<string, { input: TeamInput; asked: number }>()
   /** Called when a session's numbers change (the sidebar refreshes). */
   onChange: (managerSession: string) => void = () => {}
   /** Tells the TUIs a review waits in this session; one showing it opens the dialog. Unset: chat only. */
@@ -345,8 +354,44 @@ export class Team {
     return q
   }
 
+  /** The mode a text from the manager is sent under: the open task's, else the one the new task gets. */
+  private modeFor(managerSession: string, task: TaskState | undefined, input: TeamInput): TeamMode {
+    if (input.action === "start" && input.auto) return input.auto
+    if (task && !TERMINAL.includes(task.phase)) return task.auto ?? "off"
+    return this.sessionModes.get(managerSession) ?? this.config.auto
+  }
+
+  /** Default mode: a polished text goes to the team only after the user chose [Send]. */
+  private needsConfirm(managerSession: string, task: TaskState | undefined, input: TeamInput): boolean {
+    if (this.config.polish === "off" || !input.text?.trim()) return false
+    if (!CONFIRMED_ACTIONS.includes(input.action)) return false
+    if (input.action === "section" && input.verdict !== "finetune" && input.verdict !== "revise") return false
+    return this.modeFor(managerSession, task, input) === "off"
+  }
+
+  /** send and cancel, and holding a text for confirmation. Undefined: handle the input as usual. */
+  private async confirmStep(input: TeamInput, managerSession: string, task: TaskState | undefined, signal: AbortSignal): Promise<string | undefined> {
+    const draft = this.drafts.get(managerSession)
+    if (input.action === "cancel") {
+      this.drafts.delete(managerSession)
+      return "Not sent. NEXT ACTION: ask the user what they want instead."
+    }
+    if (input.action === "send") {
+      if (!draft) return "Nothing waits to be sent. NEXT ACTION: polish the user's message and call team with the matching action."
+      if ((counter(managerSession).asked ?? 0) <= draft.asked)
+        return 'The user hasn\'t confirmed it yet. NEXT ACTION: show the polished text and ask with the question tool: [Send] [Edit] [Cancel]. Send → team "send".'
+      this.drafts.delete(managerSession)
+      return this.handle({ ...draft.input, confirmed: true }, managerSession, signal)
+    }
+    if (input.confirmed || !this.needsConfirm(managerSession, task, input)) return undefined
+    this.drafts.set(managerSession, { input, asked: counter(managerSession).asked ?? 0 })
+    return `Held for the user's confirmation (default mode). NEXT ACTION: show the user the polished text as one block and ask with the question tool: [Send] [Edit] [Cancel]. Send → call team with action "send". Edit → take their changes, revise the text and call team "${input.action}" again with it. Cancel → call team with action "cancel".`
+  }
+
   async handle(input: TeamInput, managerSession: string, signal: AbortSignal): Promise<string> {
     const task = this.task(managerSession)
+    const held = await this.confirmStep(input, managerSession, task, signal)
+    if (held !== undefined) return held
     if (task) task.usage.manager = { ...(task.usage.manager ?? this.emptyManager()), calls: (task.usage.manager?.calls ?? 0) + 1 }
     switch (input.action) {
       case "start":
@@ -427,7 +472,7 @@ export class Team {
         key: "team-mode" as never,
         value: {
           mode: modeName(mode),
-          rule: `The user chose ${modeName(mode)} with /team-${mode === "off" ? "mode-default" : `mode-${mode}`} for this chat. It overrides the project's default mode: call start with auto = "${mode}" unless the request names another mode. See **Modes**.`,
+          rule: `The user chose ${modeName(mode)} with /team-${mode === "off" ? "mode-default" : `mode-${mode}`} for this chat. The plugin applies it to the next tasks; pass auto to start only when a request names another mode.`,
         },
       })
     } catch (e) {
@@ -502,8 +547,10 @@ export class Team {
       case "questions": {
         const n = task.questions?.length ?? 0
         const from = task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"
-        const answer =
-          "The user runs this task on auto mode and isn't asked: take your recommended option for each question (where you gave none, the option you'd recommend), and note each choice as an assumption."
+        const answer = [
+          "The user runs this task on auto mode and isn't asked; the team took the recommended option for each question. Note each as an assumption.",
+          ...(task.questions ?? []).map((q, i) => `${i + 1}. ${recommendationOf(q) ?? "the option you'd recommend"} (auto)`),
+        ].join("\n")
         appendFile(task, answersName(task), `## Answer (auto)\n\n${answer}\n`)
         this.answered(task, answer)
         save(task)
@@ -627,7 +674,7 @@ export class Team {
         `A task is already active in this session: ${active.id} (${active.phase}). Only one task runs per session.`,
         `NEXT ACTION: ask the user [Stop task] [Wait]. Stop task → call team with action "stop", then "start" again. Wait → tell the user to send the new request again when this task ends.`,
       ].join("\n")
-    if (!text.trim()) return 'start needs text: the confirmed request. NEXT ACTION: call team with action "start" and the request.'
+    if (!text.trim()) return 'start needs text: the polished request. NEXT ACTION: call team with action "start" and the request.'
     const task = newTask(this.root, managerSession, this.ctx.location.directory, text, this.config.limits.taskAttempts, this.config.limits.taskAgentCalls)
     if (opts.plan === true) task.forcePlan = true
     if (opts.review === true) task.reviewFirst = true
@@ -805,7 +852,7 @@ export class Team {
 
   /** Something to run for the user (a command, script, API call, web page): the Operator does it outside any task. */
   private async run(managerSession: string, request: string, signal: AbortSignal): Promise<string> {
-    if (!request.trim()) return 'run needs text: what to run. NEXT ACTION: call team with action "run" and the confirmed request.'
+    if (!request.trim()) return 'run needs text: what to run. NEXT ACTION: call team with action "run" and the polished request.'
     const role = "operator"
     const res = await runAgent(
       this.ctx,
@@ -935,7 +982,7 @@ export class Team {
     const id = w.ids[w.at]!
     if (verdict === "finetune" || verdict === "revise") {
       const { polished, note } = await this.withOriginal(task, input.text ?? "", "comments")
-      if (!polished) return `section with verdict ${verdict} needs text: the user's confirmed comment on ${id}. NEXT ACTION: call team "section" again with it.`
+      if (!polished) return `section with verdict ${verdict} needs text: the user's polished comment on ${id}. NEXT ACTION: call team "section" again with it.`
       w.replies.push({ id, verdict, note })
     } else w.replies.push({ id, verdict: verdict === "ok" ? "ok" : "skip" })
     task.askedAt = Date.now()
@@ -1384,6 +1431,8 @@ export class Team {
         return
       }
       case "planner": {
+        if (r.status === "ASK" || r.status === "NEED_INFO") task.draftAsks = (task.draftAsks ?? 0) + 1
+        if (r.status === "PLAN" || r.status === "DOC") task.draftAsks = 0
         if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
         if (r.status === "ASK") return this.askAnalyst(task, p, r)
         if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
@@ -1584,6 +1633,7 @@ export class Team {
     task.stage = stage
     task.stageRun = (task.stageRun ?? 0) + 1
     task.needInfo = 0
+    task.draftAsks = 0
     task.plannerUnseen = []
     this.resetLadder(task)
   }

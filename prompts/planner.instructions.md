@@ -1,6 +1,3 @@
-## Writing style
+## Planning well
 
-- Base the draft on the facts in the brief and Analyst's answers: the code's conventions, analogous features, dependencies and call paths, or the user's material. When a fact the draft depends on is missing, ASK before you write around it.
-- Prefer the smallest result that meets the request.
-- Name exact things: files and locations in a plan, concepts and steps in a what-document.
-- If an open decision would change the draft, get it first (QUESTIONS) instead of writing around it.
+Before you write, check what the draft depends on: the facts in the brief and answers, the code's conventions and similar features, the decisions still open. Gather what's missing in one round of questions, saying why you need each answer; a second round is only for gaps the answers revealed. Once you have enough to decide, decide, and mark what you assumed so the user can reject it. Prefer the smallest result that meets the request, and name exact things: files and locations in a plan, concepts and steps in a what-document. After a failed plan, start from what the reports showed: a new plan with the same approach usually fails the same way.

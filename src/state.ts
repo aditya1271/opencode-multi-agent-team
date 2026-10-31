@@ -279,6 +279,8 @@ export interface TaskState {
   architectAdviceUsed: number
   skipArchitectReview: boolean
   needInfo: number
+  /** The Planner's rounds of questions (ASK, or NEED_INFO in research) since its last draft (limits.askRoundsPerDraft). */
+  draftAsks?: number
   /** Intern rounds Analyst used since its last report (limits.analystSearchRounds). */
   analystSearches?: number
   questionRounds: number

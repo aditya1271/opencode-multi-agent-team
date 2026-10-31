@@ -4,7 +4,8 @@ import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
 import { allowedStatuses, needInfoLimit } from "./report.ts"
 import { annotate, ensureIndex, idRanges, missingSummaries, oneLine, sectionBody, shortView, shownTitle, split, userView, walkIds, type Section, type SectionIndex } from "./sections.ts"
-import { answerFiles, answersName, autoDecides, briefName, consultsUsed, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
+import { answerFiles, answersName, autoDecides, briefName, consultsUsed, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Mode, type Pending, type TaskState } from "./state.ts"
+import { reportBlock } from "./statuses.ts"
 import { report as usageReport } from "./usage.ts"
 
 export const fileBlock = (task: TaskState, name: string) => {
@@ -162,12 +163,10 @@ const ANALYST_WHAT = [
 
 const ADVICE_RULES = [
   "Read the user's comments across all rounds: what do they keep asking for that the draft still doesn't give? Think independently: the user's material and examples are a starting point, not the boundary. Look for concerns, approaches, edge cases and failure modes nobody has named yet.",
-  "Report ADVICE: `items` holds one concrete instruction per entry (what to add, explore, change or drop, and why), most important first; the plugin numbers them ADV1, ADV2, …. `content`: your diagnosis in a few lines (why the draft keeps missing).",
-  "You have no file access. When you need a fact from the code or the user's files, report ASK with your questions for Analyst first.",
+  "You have no file access: when you need a fact from the code or the user's files, ask Analyst first (ASK).",
 ].join("\n\n")
 
-const ANALYST_ASK =
-  "Report QUESTIONS only for decisions that belong to the user and change what gets built: at most 4, most important first, each with the options, your recommended option, and why the answer matters. Anything with a sensible default is not a question: put it in the brief as an assumption."
+const ANALYST_ASK = "Questions for the user: at most 4, most important first; put anything with a sensible default in the brief as an assumption."
 
 const ANALYST_PLAN = join("Workflow: plan. Nobody edits files in this task, and there is no build or test. Report ESCALATE with the brief.", ANALYST_WHAT, ANALYST_ASK)
 
@@ -189,21 +188,17 @@ const HOW_BRIEF = [
   ].join("\n"),
 ].join("\n\n")
 
-const ANALYST_INFEASIBLE =
-  "If a decision of the what-document can't work in this code, report INFEASIBLE: which decision, the evidence (`path:line`, excerpt), and what would work instead. Don't quietly plan around it."
+const ANALYST_INFEASIBLE = "If a decision of the what-document can't work in this code, say so (INFEASIBLE); don't quietly plan around it."
 
 const ANALYST_REVISION = [
   "MODE: revision. The user commented on the {doc} below. Don't rewrite it; brief the Planner, who revises it.",
   "Where the comments give examples, treat them as examples: find every place in the document with the same problem, not only the ones named. Check the files the request names, and the code or material they connect to, where the comments need it.",
   "The Planner has no file access: quote what it needs (`path:line`, excerpt). Don't repeat what your earlier brief and answers already hold; point to them.",
-  "Report ESCALATE with the revision brief: each change, with the section it applies to, what is wrong and what it should become; the places you found beyond the ones named; and what must stay as it is.",
-  "Report QUESTIONS only if a comment leaves open a decision that belongs to the user: at most 4, each with the options, your recommended option, and why the answer matters.",
+  "Report ESCALATE with the revision brief: each change, with the section it applies to, what is wrong and what it should become; the places you found beyond the ones named; and what must stay as it is. QUESTIONS only if a comment leaves open a decision that belongs to the user.",
 ].join("\n\n")
 
-const ANALYST_ANSWER = [
-  "MODE: answer. {asker} has no file access and asks you the questions below. Look up what you need.",
-  "Report ANSWER. `content` answers each question under its id (\"### A3\"), with only new facts: exact quotes with `path:line`, or what was searched when something isn't there (send the Intern queries with NEED_INFO first if you need new facts). Where your brief or an earlier answer already holds it, point to it (\"see brief.md, Excerpts: glossary\") instead of repeating it. When a question is a decision for the user, say so under its id.",
-].join("\n\n")
+const ANALYST_ANSWER =
+  "MODE: answer. {asker} has no file access and asks you the questions below. Look up what you need (have the Intern search first when you need new facts), then report ANSWER."
 
 const ANALYST_RESEARCH = [
   "Workflow: research. The deliverable is a findings report, not code: nobody edits files in this task, and there is no build or test.",
@@ -257,7 +252,15 @@ export const operatorPrompt = (request: string, asker?: string) =>
     `<request>\n${request}\n</request>`,
   )
 
+/** Every task message ends with the statuses allowed now (statuses.ts), and for a reviewed draft, its format. */
 export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSession: boolean): string {
+  const body = taskMessage(config, task, p, freshSession)
+  const reviewed =
+    p.mode === "analyst" && !p.revision && task.stage !== "how" ? "brief" : p.mode === "planner" ? "draft" : undefined
+  return join(body, reportBlock(config, task, p.mode, reviewed))
+}
+
+function taskMessage(config: Config, task: TaskState, p: Pending, freshSession: boolean): string {
   const f = (name: string) => fileBlock(task, name)
   const latest = (kind: string) => (task.seq[kind] ? f(`${kind}-${task.seq[kind]}.md`) : "")
   const edited = task.editedFiles.length ? `Files changed so far (kept): ${task.editedFiles.join(", ")}` : "No files changed so far."
@@ -376,8 +379,8 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "fix_trivial":
       return join(
         task.skipChecks
-          ? "Make this trivial change. Build and test are skipped: don't run them. Report DONE when the edit is made, or FAILED / BLOCKED."
-          : "Make this trivial change. Run the check command, and iterate until it passes or you are stuck. Report DONE with checkCommand, or FAILED / BLOCKED.",
+          ? "Make this trivial change. Build and test are skipped: don't run them."
+          : "Make this trivial change, and iterate until its check command passes or you are stuck.",
         f("request.md"),
         f("checks.md"),
         f("brief.md"),
@@ -424,9 +427,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       task.plannerUnseen = []
       const report = task.history.filter((h) => h.mode === "fix" && h.plan === task.plan && h.step === task.step && h.file).at(-1)?.file
       const ask = join(
-        `MODE: step fix. ${p.note ?? `Developer is blocked on step ${task.step}`}. Developer's report is ${report ?? "below"}. Fix that step instead of writing a new plan, if you can:`,
-        `- **STEP**: \`content\` holds only the step(s) that replace step ${task.step}, in the plan's step format: one step, or two when a new step must come first. Each starts with \`N. **Title**: <what the step achieves>\`, the details on the next lines. The finished steps and the rest of the plan stay as they are. \`summary\`: one line for the user on what changed and why. \`risk\`: yes only if the new step(s) are destructive or irreversible.`,
-        "- **REPLAN**: the plan is wrong beyond this step, so patching it won't do. `content`: why. You then write the next plan as usual.",
+        `MODE: step fix. ${p.note ?? `Developer is blocked on step ${task.step}`}. Developer's report is ${report ?? "below"}. Fix that step instead of writing a new plan, if you can (STEP): the replacement starts with \`N. **Title**: <what the step achieves>\`, and the finished steps and the rest of the plan stay as they are. If the plan is wrong beyond this step, report REPLAN.`,
       )
       if (!freshSession) return join(unseen.length > 0 && join("New information since your last call:", ...unseen.map(f)), ask)
       return join(ask, f("request.md"), f("checks.md"), whatDoc(), stageBrief(), answers(), f(`plan-${task.plan}.md`), ...unseen.map(f))
@@ -471,16 +472,13 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
     case "fix": {
       const head = `Plan ${task.plan}, step ${task.step} of ${task.planSteps}${task.step === task.planSteps ? " (the final check)" : ""}.`
       const rules = task.skipChecks
-        ? "Do only this step. Build and test are skipped: don't run them. Report DONE when the step's edits are made, FAILED when stuck, or BLOCKED when the step can't work as written."
-        : "Do only this step. Iterate freely until its check command passes. Report DONE with checkCommand, FAILED when stuck, or BLOCKED when the step can't work as written."
-      const consult = allowedStatuses(config, "fix", task).includes("CONSULT")
-        ? ` Unsure which way fits the plan? Report CONSULT with your question and the evidence before you fail or block (${config.limits.consultsPerStep - consultsUsed(task, "developer")} left for this step).`
-        : ""
+        ? "Do only this step. Build and test are skipped: don't run them."
+        : "Do only this step, and iterate until its check command passes."
       if (!task.developerSeenPlan) {
         task.developerSeenPlan = true
-        return join(`Carry out this plan one step at a time. ${head}`, rules + consult, f(`plan-${task.plan}.md`), f("checks.md"), p.note)
+        return join(`Carry out this plan one step at a time. ${head}`, rules, f(`plan-${task.plan}.md`), f("checks.md"), p.note)
       }
-      return join(head, p.note, rules + consult)
+      return join(head, p.note, rules)
     }
     case "diagnose": {
       const stepFiles = task.history.filter((h) => h.plan === task.plan && h.step === task.step && h.file).map((h) => f(h.file!))
@@ -524,8 +522,7 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
       return join(
         `MODE: critical review of ${what} (${file}), asked for by the user (review ${task.reviews ?? 1} of at most ${config.limits.architectReviews}). Review it in two parts, and keep them apart in your report.`,
         research ? REVIEW_RESEARCH : REVIEW_PLAN,
-        "Report APPROVE when it holds as written (content: optional notes for the user), or CHANGES: at most 5 must-fix items, most important first, each with where, the problem and the fix; then any should-consider items, marked as such. Don't rewrite the document.",
-        "You have no file access: check claims against the brief, Analyst's answers and the findings. When a claim matters and nothing quotes it, ASK Analyst for the exact quote.",
+        "Check claims against the brief, Analyst's answers and the findings; when a claim matters and nothing quotes it, ask Analyst for the exact quote.",
         p.note && `What the user asked the review to look at:\n${p.note}`,
         f("request.md"),
         answers(),
@@ -541,12 +538,10 @@ export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSe
 
 /** What the Planner is told about its draft in this stage: the status to report and the standard. */
 function plannerHandoff(config: Config, task: TaskState): string {
-  const ask =
-    "When a fact is missing, report ASK with your questions for Analyst in `questions` (one per item, unnumbered; the plugin numbers them A1, A2, …); Analyst answers in a new file. When a decision belongs to the user and changes what gets built, report QUESTIONS, each with the options and your recommendation."
   if (task.workflow === "research")
     return join(
-      "Write only from evidence: the brief's findings and the Intern's findings. When a sub-question lacks evidence, report NEED_INFO with precise queries for the Intern: for each, the objective, what to return, where to look and what is out of scope, with no overlap between queries. Stop searching when the last round added nothing new; list what is still missing under Gaps.",
-      `Report DOC with the whole document in \`content\` (markdown); the plugin saves it to ${task.output}. \`summary\`: the first line says what the document gives the user ("Approving this gives you …").`,
+      "Write only from evidence: the brief's findings and the Intern's findings. When a sub-question lacks evidence, have the Intern search (NEED_INFO).",
+      `The plugin saves the document to ${task.output}. \`summary\`: the first line says what the document gives the user ("Approving this gives you …").`,
       readTaskFile(task, "existing.md") && "That file already exists (below): keep it and append a `## Follow-up <date>: <topic>` section for the new question.",
       fileBlock(task, "existing.md"),
       `<standard>\n${workflowInstructions(config, "research")}\n</standard>`,
@@ -554,8 +549,7 @@ function plannerHandoff(config: Config, task: TaskState): string {
   if (draftIsDoc(task))
     return join(
       "Stage: WHAT. Write the what-document: what the feature does, as a process, independent of code. The change plan comes after the user approves it.",
-      ask,
-      `Report DOC with the whole document in \`content\` (markdown)${task.output ? `; the plugin saves it to ${task.output}` : ""}. \`summary\`: the first line says what the user decides by approving ("Approving this settles …").`,
+      `${task.output ? `The plugin saves the document to ${task.output}. ` : ""}\`summary\`: the first line says what the user decides by approving ("Approving this settles …").`,
       readTaskFile(task, "existing.md") && "That file already exists (below): keep it and change only what the request asks for.",
       fileBlock(task, "existing.md"),
       `<standard>\n${workflowInstructions(config, "what")}\n</standard>`,
@@ -564,10 +558,9 @@ function plannerHandoff(config: Config, task: TaskState): string {
   return join(
     `Stage: HOW. Write the change plan${task.doc ? " for the approved what-document" : ""}. Developer carries it out step by step${plan ? " once the user chooses [Implement it]; nobody edits files before that" : " once the user approves it"}.`,
     !task.doc && "There is no what-document: Analyst found that the request fixes the behaviour (see the brief). Start the plan with a short `## Behaviour` section: what the change does, as the user will see it, in a few lines.",
-    !!task.doc && "Follow every decision of the what-document. If one can't work in this code, report INFEASIBLE: which decision, the evidence from the brief or Analyst's answers, and what would work instead. Never quietly change a decision.",
-    ask,
+    !!task.doc && "Follow every decision of the what-document.",
     plan && !readTaskFile(task, "checks.md") && "No build or test commands are known yet: give each step's check as what it must prove, plus the command when the brief names one.",
-    `Report PLAN with the whole plan in \`content\`${plan && task.output ? `; the plugin saves it to ${howOutput(task.output)}` : ""}.`,
+    plan && !!task.output && `The plugin saves the plan to ${howOutput(task.output)}.`,
     `<standard>\n${workflowInstructions(config, "how")}\n</standard>`,
   )
 }
@@ -583,7 +576,7 @@ export const howOutput = (output: string) => {
 const DETAILS_ROUTE =
   'a request for details, the full text or "more" (of the whole draft or of sections) → team "details", with ids = the section ids if they named some (no confirmation; no agent runs)'
 
-const REPLY_ROUTES = `a clear approval ("approve", "go ahead") → team "approve"; a clear stop → team "stop"; feedback, requests for changes or more work → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask"; ${DETAILS_ROUTE}; a request for a (critical) review → team "review", with what the review should look at as text if they said.`
+const REPLY_ROUTES = `a clear approval ("approve", "go ahead") → team "approve"; a clear stop → team "stop"; feedback, requests for changes or more work → polish it, then team "change"; a question → polish it, then team "ask"; ${DETAILS_ROUTE}; a request for a (critical) review → team "review", with what the review should look at as text if they said.`
 
 /** Architect's review shown at approval, marked when the plan or document was revised after it. */
 function adviceLine(task: TaskState): string {
@@ -597,13 +590,9 @@ function architectBlock(task: TaskState): string {
   return `${title}\n${readTaskFile(task, task.architectNote)}`
 }
 
-const AUTO_SEND = (level: string) =>
-  `AUTO-SEND (${level} auto): wherever this says to polish and confirm [Send] [Edit] [Cancel], polish the user's text as usual, show it in one block as sent, and send it right away without asking. Build and test commands are still sent as typed.`
-
 export function render(task: TaskState): string {
   const review = (task.phase === "brief" || task.phase === "approval") && !autoDecides(task)
-  const out = review && task.phase === "approval" && task.stepFix?.waiting ? stepFixView(task, task.stepFix) : review ? reviewView(task) : renderPhase(task)
-  return task.auto ? join(out, AUTO_SEND(task.auto)) : out
+  return review && task.phase === "approval" && task.stepFix?.waiting ? stepFixView(task, task.stepFix) : review ? reviewView(task) : renderPhase(task)
 }
 
 /** A step fix waiting on the user: one line, and the new step text when it is destructive or irreversible. */
@@ -625,7 +614,7 @@ function stepFixView(task: TaskState, sf: NonNullable<TaskState["stepFix"]>): st
 }
 
 const SECTION_ROUTES =
-  'Then act on the reply: "ok", "fine", "looks good" → team "section" with verdict "ok" (no confirmation); "skip" → verdict "skip"; a comment → polish it and confirm [Send] [Edit] [Cancel], then team "section" with verdict "finetune" (the user states the exact edit; give it in text) or "revise" (unhappy with the substance; when unsure, revise) and text = the confirmed comment; a question → polish and confirm, then team "ask" (the same section comes back after the answer); "details" or "more" → team "details" with ids = [the id of this section] (the same section stays open); "show the rest" or "all at once" → verdict "rest"; a clear stop → team "stop".'
+  'Then act on the reply: "ok", "fine", "looks good" → team "section" with verdict "ok" (no confirmation); "skip" → verdict "skip"; a comment → polish it, then team "section" with verdict "finetune" (the user states the exact edit; give it in text) or "revise" (unhappy with the substance; when unsure, revise) and text = the polished comment; a question → polish it, then team "ask" (the same section comes back after the answer); "details" or "more" → team "details" with ids = [the id of this section] (the same section stays open); "show the rest" or "all at once" → verdict "rest"; a clear stop → team "stop".'
 
 /** The draft the user reviews now: the brief, or the latest document or plan. */
 function reviewDraft(task: TaskState): { text: string; idx?: SectionIndex; under?: string } {
@@ -717,11 +706,11 @@ export function dialogView(task: TaskState, w: NonNullable<TaskState["walk"]>): 
   if (d.questions.length) steps.push('call team "ask" once with all the questions, each starting with its section id; show the answers')
   if (d.comments.length)
     steps.push(
-      'polish the comments (one paragraph per section, keeping the user\'s meaning) and confirm them [Send] [Edit] [Cancel]; then call team "change" with text = the confirmed comments, finetune = sections where the user states the exact edit, revise = the others (when unsure, revise). If the answers settle a comment, the user may drop it at [Edit]',
+      'polish the comments (one paragraph per section, keeping the user\'s meaning); then call team "change" with text = the polished comments, finetune = sections where the user states the exact edit, revise = the others (when unsure, revise). If the answers settle a comment, the user may drop it',
     )
   else
     steps.push(
-      'ask the user with the question tool: [Approve] [Comment] [Show it all at once]. Approve → team "approve". Comment → take the comment as free text, polish and confirm [Send] [Edit] [Cancel], then team "change". Show it all at once → team "section" with verdict "rest"',
+      'ask the user with the question tool: [Approve] [Comment] [Show it all at once]. Approve → team "approve". Comment → take the comment as free text, polish it, then team "change". Show it all at once → team "section" with verdict "rest"',
     )
   return join(
     `REVIEW DIALOG FINISHED: ${draftTitle(task)}. ${[ok.length && `ok ${idRanges(ok)}`, skipped.length && `skipped ${idRanges(skipped)}`].filter(Boolean).join("; ") || "No section marked ok"}.`,
@@ -842,7 +831,7 @@ function renderPhase(task: TaskState): string {
       return join(
         `QUESTIONS from ${task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"}:`,
         (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"),
-        `NEXT ACTION: ask the user these questions as free text (no fixed options). Polish their answer and confirm it [Send] [Edit] [Cancel], then call team with action "answer" and the confirmed answer. If they ask something back instead, polish and confirm it, then call team with action "ask".`,
+        `NEXT ACTION: ask the user these questions as free text (no fixed options). Polish their answer, then call team with action "answer" and the polished answer. If they ask something back instead, polish it, then call team with action "ask".`,
       )
     case "brief": {
       const research = task.workflow === "research"
@@ -854,7 +843,7 @@ function renderPhase(task: TaskState): string {
       return join(
         `${research ? "RESEARCH" : "CONCEPT"} BRIEF ready. Show this block to the user exactly as written:`,
         `<show>\n${join(title, shown, changeLine(task), adviceLine(task))}\n</show>`,
-        `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, ask for details, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish and confirm [Send] [Edit] [Cancel], then team "change"; a question → polish and confirm, then team "ask"; ${DETAILS_ROUTE}.`,
+        `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, ask for details, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish it, then team "change"; a question → polish it, then team "ask"; ${DETAILS_ROUTE}.`,
         idx && SCOPE_RULE,
       )
     }
@@ -956,7 +945,7 @@ function renderPhase(task: TaskState): string {
           `Task folder: ${task.dir}`,
           task.workflow === "plan"
             ? `NEXT ACTION: tell the user the result, then ask with the question tool: [Implement it] [Done]. Implement it → team "implement" (it switches to build-manager and starts the code task; follow its NEXT ACTION). Done → stop. If the user later says "implement it", do the same.`
-            : `NEXT ACTION: tell the user the result. A follow-up question on this report → polish and confirm it, then team "start" with output "${task.output}", so the answer is appended to the report.`,
+            : `NEXT ACTION: tell the user the result. A follow-up question on this report → polish it, then team "start" with output "${task.output}", so the answer is appended to the report.`,
         )
       return join(
         `DONE: ${task.doneSummary ?? lastLine}`,

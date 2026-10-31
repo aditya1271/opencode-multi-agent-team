@@ -81,7 +81,7 @@ runs the TypeScript source directly. Requires OpenCode 2.2 or later.
    (or to `<project>/.opencode/opencode-multi-agent-team.json` for one project). Then set the
    models of the four tiers (`tiers.cheap`, `normal`, `good`, `expensive`). The plugin ships no
    default models. List a backup model from a different provider after the main one; the
-   plugin switches to it when the main model fails. See [Models](#models).
+   plugin switches to it when the main model fails, then to the tier one level down. See [Models](#models).
 
 5. **Set each project's build and test commands** (see
    [Build and test commands](#build-and-test-commands)). Without them, every task first asks
@@ -293,7 +293,7 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
   back, Architect requesting changes to a plan, or an agent call that crashed, timed out or
   never reported. Info requests, Intern searches, questions to the Planner, your questions
   and answers, and revisions from your comments aren't attempts; their own limits bound them
-  (`needInfoPerTask`, `analystSearchRounds`, `consultsPerStep`, `consultsPerBrief`,
+  (`needInfoPerTask`, `askRoundsPerDraft`, `analystSearchRounds`, `consultsPerStep`, `consultsPerBrief`,
   `runsPerTask`, `questionsPerTask`, `escalateAfterComments`). `limits.taskAttempts`
   (default 10) caps failed attempts per task. `limits.taskAgentCalls` (default 100) caps all
   agent calls as a silent runaway guard.
@@ -413,6 +413,11 @@ You name models per tier once; each role uses its default tier:
 Order of preference: `agents.<role>.model`, then `agents.<role>.tier`, then the role's default
 tier. `agents.<role>.variant` wins over the tier's `variant`. A role whose tier has no models
 and that has no model of its own can't run; the plugin log lists such roles at startup.
+
+When a model fails (after its short retry waits) or returns an empty reply (often a rate limit or
+used-up quota), the agent moves on to the next model: its backup, then the main and backup of
+the tier one level down (`expensive` → `good` → `normal` → `cheap`). Each model is tried once
+per call, and each switch is logged in `plugin.log`.
 
 ## Per-agent tools and instructions
 

@@ -175,9 +175,27 @@ export function systemPrompt(config: Config, role: Role): string {
   const body = core.includes("{{instructions}}")
     ? core.replace("{{instructions}}", instructions)
     : [core, instructions].join("\n\n")
-  const parts = [body, toolsNote(config, role), SECRETS, a.append ? textOrFile(a.append) : ""]
+  const parts = [body, approach(role), toolsNote(config, role), SECRETS, a.append ? textOrFile(a.append) : ""]
   return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")
 }
+
+/** Every worker: how a good team member works. The first lines suit every role; the last one depends on how the role works with others. */
+const APPROACH_BASE =
+  'Before you act, work out what you need to know, why you need it, and the most direct way to find it out. Keep the goal and what "done" looks like in view: the request is what the user wants, and everything else serves it.'
+const APPROACH_ROLE: Record<Exclude<Role, "manager">, string> = {
+  // Askers: they depend on others for facts.
+  analyst: "When you need others to find things for you, ask for all of it in one round and say why you need each piece, so they bring back the right depth. When you have enough to decide, decide, and say what you assumed.",
+  planner: "When you need others to find things for you, ask for all of it in one round and say why you need each piece, so they bring back the right depth. When you have enough to decide, decide, and say what you assumed.",
+  // Answerers: someone waits on them and acts on their answer alone.
+  intern: "Someone is waiting on your answer and will act on it without checking: give them everything they asked for, with the evidence, so they don't have to come back.",
+  operator: "Someone is waiting on your result and will act on it without checking: give them everything they asked for, exactly as it came out, so they don't have to come back.",
+  // Doers: they iterate.
+  developer: "When something fails twice the same way, stop and question the assumption behind it instead of trying another variation.",
+  // Critics: they judge others' work.
+  reviewer: "Look for what is wrong or missing, not for things to rewrite: every point you raise should change the outcome.",
+  architect: "Look for what is wrong or missing, not for things to rewrite: every point you raise should change the outcome.",
+}
+const approach = (role: Exclude<Role, "manager">) => `## How to approach your work\n\n${APPROACH_BASE} ${APPROACH_ROLE[role]}`
 
 /** Every worker: task files and reports are plain text on disk, so secrets stay out of them. */
 const SECRETS =
@@ -200,12 +218,8 @@ export function managerPrompt(config: Config, workflow: Workflow): string {
     .replace("{{instructions}}", instructions)
   const polishOff =
     config.polish === "off"
-      ? "Polishing is OFF: send the user's requests and replies to the team as written, without rewriting them and without the [Send] [Edit] [Cancel] step. This overrides the polishing steps above."
+      ? "Polishing is OFF: send the user's requests and replies to the team as written, without rewriting them. This overrides the polishing above."
       : ""
-  const autoDefault =
-    config.auto !== "off"
-      ? `This project's default mode is **${config.auto} auto**: unless the user asks for another mode, treat every request as ${config.auto} auto (see **Modes**) and call start with auto = "${config.auto}".`
-      : ""
-  const parts = [body, polishOff, autoDefault, shared.append ? textOrFile(shared.append) : "", own.append ? textOrFile(own.append) : ""]
+  const parts = [body, polishOff, shared.append ? textOrFile(shared.append) : "", own.append ? textOrFile(own.append) : ""]
   return parts.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n")
 }

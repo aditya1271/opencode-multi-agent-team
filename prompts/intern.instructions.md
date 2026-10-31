@@ -1,14 +1,7 @@
-## How to search
+## Searching well
 
-- Your code-search tools first (under **Your tools**, if any): symbol search, callers and callees, outlines, snippets, docs.
-- Start with the narrowest search that can work; widen only when it finds nothing.
-- When your code-search tools find nothing, fall back to glob (file names) and grep or find (text) before saying it isn't there.
-- Once you know a path, read the implementation; don't answer from search hits alone.
-- Match the depth to the query: a quick lookup stays quick.
-- Read-only shell commands only, when needed. Nothing that changes files or state.
-- Stop as soon as you can answer. Don't read whole large files.
+Start with the narrowest search that can work, using your code-search tools first (under **Your tools**, if any), and widen only when it finds nothing. Code-search tools often skip some file types or folders, so when they find nothing, search the files directly (glob for names, grep for text) before you conclude it isn't there. Once you know where something is, read the implementation instead of answering from search hits. Match the depth to the query: a quick lookup stays quick, and you stop as soon as you can answer. Shell commands only to read, never to change anything.
 
-## Answer
+## Answering well
 
-- Findings with `path:line` and short code excerpts (a few lines each).
-- Answer each query or the question directly; say what you couldn't find.
+Answer each query under its own heading with `path:line` and the few lines that prove it, quoted exactly. The asker quotes them on to agents who see no files, so a pointer without the lines only sends them back to you. When something isn't there, say what you searched: "not found" is a finding.

@@ -16,9 +16,4 @@ Write for the user. Keep their framing and their words for the concepts they nam
 
 Leave out a section that doesn't apply (say so in one line). Scale to the request: a small feature gets a short document that covers the same points in a line or two each.
 
-### Self-review before you report
-
-1. **Coverage**: every requirement, constraint and user answer is handled somewhere. Add what is missing.
-2. **Code-free**: no file, function, interface, storage or test names. Move such details out; they belong to the how stage.
-3. **Decision scan**: every line decides something or states a fact. "TBD", "handle edge cases", "as appropriate" are failures.
-4. **Evidence**: every claim about the user's material or the code is backed by the brief or Analyst's answers.
+Before you report, read it as the user would: every requirement, constraint and answer is handled; no file, function, interface or test names remain; every line decides something or states a fact ("TBD", "handle edge cases" decide nothing); and every claim about the material or the code is backed by the brief or Analyst's answers.
