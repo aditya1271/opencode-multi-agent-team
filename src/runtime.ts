@@ -1,4 +1,5 @@
 import type { WorkerRole } from "./config.ts"
+import type { Fix, GivenFix } from "./fixes.ts"
 import type { SectionEdit } from "./sections.ts"
 import type { Mode, TaskState } from "./state.ts"
 
@@ -19,6 +20,8 @@ export interface Report {
   addressed?: string
   /** A scoped revision: only the sections that change. */
   sections?: SectionEdit[]
+  /** After a refusal that kept the report: the missing parts, by fix id. */
+  fixes?: GivenFix[]
 }
 
 export interface ShellRun {
@@ -50,6 +53,15 @@ export interface SessionRun {
   before: Map<string, string | undefined>
   /** Session token counts when the call started, for live usage. */
   base?: { input: number; cacheRead: number; output: number }
+  /** The role's skills, added to each request's system prompt so the agent doesn't spend steps loading them. */
+  skills?: string
+  /** A report refused for parts code checks, kept until the writer sends the fixes asked for. */
+  draft?: Report
+  fixes?: Fix[]
+  /** Why the last report call was refused, told again if the agent stops without reporting. */
+  reportRefused?: string
+  /** Times the Intern's report went back for code blocks that don't match their files. */
+  quoteRejects?: number
 }
 
 /** Prompt and tool counts for sessions outside a worker call (the manager). */

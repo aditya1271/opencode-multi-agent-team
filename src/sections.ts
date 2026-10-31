@@ -5,6 +5,8 @@ export interface Section {
   title: string
   text: string
   step: boolean
+  /** Index of its first line in the text it was split from. */
+  line?: number
 }
 
 /** The section ids of the current draft, and the ones the user marked final. */
@@ -63,20 +65,20 @@ const plain = (title: string) =>
 
 export function split(text: string, inSteps = false): { head: string; sections: Section[] } {
   const head: string[] = []
-  const parts: { title: string; lines: string[]; step: boolean }[] = []
+  const parts: { title: string; lines: string[]; step: boolean; line: number }[] = []
   let fence = false
   let steps = inSteps
-  for (const line of text.split("\n")) {
+  text.split("\n").forEach((line, i) => {
     const h = !fence && HEADING.exec(line)
     const s = !fence && !h && steps && STEP.exec(line)
     if (FENCE.test(line)) fence = !fence
     if (h) {
       steps = /^steps\b/.test(plain(h[2]!))
-      parts.push({ title: h[2]!, lines: [line], step: false })
-    } else if (s) parts.push({ title: line.replace(/^(\d+\.\s+)\*\*(.+?)\*\*.*$/, "$1$2"), lines: [line], step: true })
+      parts.push({ title: h[2]!, lines: [line], step: false, line: i })
+    } else if (s) parts.push({ title: line.replace(/^(\d+\.\s+)\*\*(.+?)\*\*.*$/, "$1$2"), lines: [line], step: true, line: i })
     else (parts.at(-1)?.lines ?? head).push(line)
-  }
-  return { head: head.join("\n"), sections: parts.map((p) => ({ title: p.title, text: p.lines.join("\n"), step: p.step })) }
+  })
+  return { head: head.join("\n"), sections: parts.map((p) => ({ title: p.title, text: p.lines.join("\n"), step: p.step, line: p.line })) }
 }
 
 const assemble = (head: string, texts: string[]) => [...(head ? [head] : []), ...texts].join("\n")
@@ -222,8 +224,9 @@ const body = (s: Section) => s.text.split("\n").slice(1).join("\n").trim()
  * The sections a user reviews (indices): those with text under their heading, and for a brief only those under its
  * top heading (`under`, e.g. "Concept brief"), so the supporting excerpts are left out. Undefined when `under` is missing.
  */
+const level = (s: Section) => (s.step ? 99 : (/^(#+)/.exec(s.text)?.[1]?.length ?? 99))
+
 function reviewed(sections: Section[], under?: string): number[] | undefined {
-  const level = (s: Section) => (s.step ? 99 : (/^(#+)/.exec(s.text)?.[1]?.length ?? 99))
   let from = 0
   let to = sections.length
   if (under) {
@@ -246,14 +249,26 @@ export function walkIds(text: string, index: SectionIndex, under?: string): stri
 /** A section's closing line with the writer's pick: "**Recommended:** …". */
 export const RECOMMENDED_LINE = /^[-*>\s]*\**\s*recommended\b/i
 
-/** Reviewed sections (plan steps and their Steps heading aside) whose last line isn't a Recommended line, by title. */
-export function missingRecommendations(text: string, under?: string): string[] {
+/** A labelled line, "**Recommended:** …" or "Summary: …", wherever it is in the section. */
+const labelled = (name: string) => new RegExp(`^[-*>\\s]*\\**\\s*${name}\\s*\\**\\s*:`, "i")
+
+/** A section's title as the writer sees it in messages. */
+export const titleOf = (s: Section) => shownTitle(s.title).replace(/^#+\s*/, "")
+
+/**
+ * Reviewed sections (plan steps and their Steps heading aside) with no Recommended line.
+ * A section followed by its own sub-sections is exempt: its picks close the sub-sections, which are checked themselves.
+ */
+export function unrecommended(text: string, under?: string): Section[] {
   const { sections } = split(text)
+  const parent = (i: number) => !!sections[i + 1] && level(sections[i + 1]!) > level(sections[i]!)
   return (reviewed(sections, under) ?? [])
+    .filter((i) => !parent(i))
     .map((i) => sections[i]!)
-    .filter((s) => !s.step && !/^steps\b/.test(plain(s.title)) && !RECOMMENDED_LINE.test(body(s).split("\n").pop() ?? ""))
-    .map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))
+    .filter((s) => !s.step && !/^steps\b/.test(plain(s.title)) && !body(s).split("\n").some((l) => labelled("recommended").test(l)))
 }
+
+export const missingRecommendations = (text: string, under?: string) => unrecommended(text, under).map(titleOf)
 
 /** A section's opening line for the user: "**Summary:** …". */
 export const SUMMARY_LINE = /^[-*>\s]*\**\s*summary\b\s*\**\s*:?\s*\**/i
@@ -274,8 +289,8 @@ export function userView(s: Section): string | undefined {
   const lines = body(s).split("\n").filter((l) => l.trim())
   const summary = lines.find((l) => SUMMARY_LINE.test(l))
   if (!summary) return undefined
-  const last = lines.at(-1) ?? ""
-  return RECOMMENDED_LINE.test(last) && last !== summary ? `${summary}\n\n${last}` : summary
+  const pick = lines.findLast((l) => RECOMMENDED_LINE.test(l) && l !== summary)
+  return pick ? `${summary}\n\n${pick}` : summary
 }
 
 /** A section's text under its heading line. */
@@ -288,14 +303,15 @@ export const oneLine = (s: Section) =>
     .replace(/\s*\n+\s*/g, " · ")
     .trim()
 
-/** Reviewed sections that don't open with a Summary line, and plan steps with no purpose after the title, by title. */
-export function missingSummaries(text: string, under?: string): string[] {
+/** Reviewed sections with no Summary line, and plan steps with no purpose after the title. */
+export function unsummarized(text: string, under?: string): Section[] {
   const { sections } = split(text)
   return (reviewed(sections, under) ?? [])
     .map((i) => sections[i]!)
-    .filter((s) => (s.step ? !stepPurpose(s) : !/^steps\b/.test(plain(s.title)) && !isSummary(s) && !SUMMARY_LINE.test(body(s).split("\n").find((l) => l.trim()) ?? "")))
-    .map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))
+    .filter((s) => (s.step ? !stepPurpose(s) : !/^steps\b/.test(plain(s.title)) && !isSummary(s) && !body(s).split("\n").some((l) => labelled("summary").test(l))))
 }
+
+export const missingSummaries = (text: string, under?: string) => unsummarized(text, under).map(titleOf)
 
 /** The draft as the user sees it by default: each reviewed section's user view; other sections show only their heading. */
 export function shortView(text: string, under?: string): string {

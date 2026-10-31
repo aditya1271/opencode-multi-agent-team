@@ -41,11 +41,11 @@ function resultText(result: unknown): string {
   return (r?.content ?? []).map((c) => (c.type === "text" ? c.text ?? "" : "")).join("\n")
 }
 
-const ASK_INTERN = "Send the Intern a NEED_INFO with precise queries; its findings come back to you, and then you can read the files they cite."
+const ASK_INTERN = "Send the Intern a NEED_INFO with precise queries; its findings come back to you with their code checked against the files."
 
 /**
- * Analyst doesn't search: it reads only files whose path appears in what it was given (the request, the user's answers
- * and material, the Intern's findings, briefs and drafts: the task folder). Why a read is refused, or undefined.
+ * Analyst doesn't read code: it reads the task folder (the request, the user's answers and material, the Intern's
+ * findings, briefs and drafts), and the Intern reads and quotes the code. Why a read is refused, or undefined.
  */
 export function analystReadProblem(task: TaskState, input: unknown): string | undefined {
   const i = (input ?? {}) as Record<string, unknown>
@@ -59,12 +59,7 @@ export function analystReadProblem(task: TaskState, input: unknown): string | un
       ? `${path.basename(file)} is a task file: its content is already in your prompt.`
       : undefined
   if (statSync(file).isDirectory()) return `Listing folders is searching, which the Intern does for you. ${ASK_INTERN}`
-  let text = ""
-  for (const name of readdirSync(task.dir)) if (name.endsWith(".md")) text += readFileSync(path.join(task.dir, name), "utf8") + "\n"
-  const mentioned = (p: string) => new RegExp(`(^|[^\\w.-])${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\w-])`).test(text)
-  const rel = path.relative(task.workspace, file)
-  if (mentioned(file) || mentioned(rel) || mentioned(path.basename(file))) return undefined
-  return `${rel} isn't named in the request, the user's material or the Intern's findings, so reading it would be searching. ${ASK_INTERN}`
+  return `You read only the task folder: the Intern reads the code for you. ${ASK_INTERN}`
 }
 
 function resultExit(result: unknown): number | undefined {
@@ -115,14 +110,18 @@ export async function registerGuards(ctx: Context, config: Config) {
       return
     }
     // After `report`, the turn's last step gets no tools, so the session ends on its own
-    // (outcome "succeeded") instead of being interrupted.
+    // (outcome "succeeded") instead of being interrupted. That step only has to say "done",
+    // so it is sent one short message instead of the whole conversation again.
     if (run.report) {
       for (const id of Object.keys(event.tools)) delete event.tools[id]
-      event.system.push({ type: "text", text: "Your report was accepted. Reply with the single word: done." })
+      event.system = [{ type: "text", text: "Reply with the single word: done." }]
+      const user = event.messages.find((m) => m.role === "user")
+      if (user) event.messages = [Object.assign(Object.create(Object.getPrototypeOf(user)), user, { content: [{ type: "text", text: "Your report was accepted." }] })]
       return
     }
     run.prompts++
     touch(event.sessionID)
+    if (run.skills) event.system.push({ type: "text", text: run.skills })
     const report = event.tools.report
     if (report) {
       const statuses = allowedStatuses(config, run.mode, run.task)

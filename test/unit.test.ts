@@ -1,20 +1,22 @@
 import { describe, expect, test } from "bun:test"
-import { evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
+import { agentId, evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
 import { buildPatterns, DEFAULTS, fallbackModels, merge, modelLabel, modelsFor, parseModel, stripJsonc, tierOf, type Role } from "../src/config.ts"
-import { analystReadProblem, toolKind, trimLog } from "../src/guards.ts"
+import { analystReadProblem, registerGuards, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
+import { checkQuotes, expandQuotes, keepChecked, loadQuotes, numberQuotes, fixCites } from "../src/quotes.ts"
+import { applyFixes, blockFixes, numbered, sectionFixes } from "../src/fixes.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, counter, runs } from "../src/runtime.ts"
 import { appendFile, loadTask, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, join, render, stepTitles } from "../src/messages.ts"
-import { annotate, checkEdits, idRanges, indexOf, missingSummaries, shortView, splice, split, userView } from "../src/sections.ts"
+import { annotate, checkEdits, idRanges, indexOf, missingRecommendations, missingSummaries, shortView, splice, split, userView } from "../src/sections.ts"
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { detectVcs, vcsLine } from "../src/vcs.ts"
-import { runAgent } from "../src/run.ts"
+import { runAgent, skillText } from "../src/run.ts"
 import path from "node:path"
 
 describe("config", () => {
@@ -265,6 +267,62 @@ describe("permissions", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+  test("an agent that stops after a refused report is told the refusal again", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "omat-rf-"))
+    const texts: string[] = []
+    const ctx = {
+      location: { directory: dir },
+      session: {
+        create: async () => ({ id: "ses_rf" }),
+        get: async () => ({ tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, outcome: "succeeded" }),
+        prompt: async ({ text }: { text: string }) => {
+          texts.push(text)
+          const run = runs.get("ses_rf")!
+          if (texts.length === 1) run.reportRefused = "Missing in: Choices."
+          else run.report = { status: "PLAN", summary: "s", content: "c" } as never
+        },
+        wait: async () => undefined,
+        context: async () => [{ type: "user", text: "x" }, { type: "assistant", content: [{ type: "text", text: "I can't call report." }] }],
+        interrupt: async () => undefined,
+      },
+    }
+    try {
+      const config = merge(DEFAULTS, { tiers: { good: { model: "fuse/terra" } } })
+      const r = await runAgent(ctx as never, config, { role: "planner", mode: "planner", parentID: "p", title: "t", prompt: "go", signal: new AbortController().signal }, () => {})
+      expect(r.end).toBe("report")
+      expect(texts[1]).toContain("Your last `report` call was refused: Missing in: Choices.")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  test("the step after an accepted report gets no tools and one short message, not the conversation", async () => {
+    const hooks: Record<string, (e: any) => unknown> = {}
+    const hook = (name: string, f: (e: any) => unknown) => void (hooks[name] = f)
+    const ctx = { location: { directory: "/" }, permission: { hook }, session: { hook }, tool: { hook }, shell: { hook } }
+    await registerGuards(ctx as never, DEFAULTS)
+    beginRun("ses_done", { role: "analyst", mode: "analyst", toolLimit: 10 } as any)
+    try {
+      runs.get("ses_done")!.report = { status: "NEED_INFO", summary: "s", content: "c" }
+      class Msg {
+        constructor(public role: string, public content: unknown[]) {}
+      }
+      const event = {
+        sessionID: "ses_done",
+        agent: agentId("analyst"),
+        tools: { read: {}, report: {} },
+        system: [{ type: "text", text: "long prompt" }],
+        messages: [new Msg("user", [{ type: "text", text: "task" }]), new Msg("assistant", []), new Msg("tool", [])],
+      }
+      hooks.context!(event)
+      expect(Object.keys(event.tools)).toEqual([])
+      expect(event.messages).toHaveLength(1)
+      expect(event.messages[0]).toBeInstanceOf(Msg)
+      expect([event.messages[0]!.role, event.messages[0]!.content]).toEqual(["user", [{ type: "text", text: "Your report was accepted." }]])
+      expect(event.system).toEqual([{ type: "text", text: "Reply with the single word: done." }])
+    } finally {
+      runs.delete("ses_done")
+    }
+  })
   test("every worker is told to keep secrets out of what it writes", () => {
     for (const role of ["analyst", "planner", "intern", "developer", "reviewer", "architect", "operator"] as const)
       expect(systemPrompt(DEFAULTS, role)).toContain("Never copy a secret's value")
@@ -296,6 +354,15 @@ describe("permissions", () => {
 })
 
 describe("prompts", () => {
+  test("skills come with the system prompt; one the server lacks is left for the agent to load", async () => {
+    const skill = (id: string) => ({ id, name: id, content: `${id} text\n` })
+    const ctx = (list: () => unknown) => ({ skill: { list } }) as any
+    const text = await skillText(ctx(async () => ({ data: [skill("csh"), skill("other")] })), ["csh", "gone"], "/p")
+    expect(text).toBe("## Skill: csh (already loaded)\n\ncsh text\n\nLoad these skills with the skill tool before you start working: gone.")
+    expect(await skillText(ctx(() => { throw new Error("no api") }), ["csh"], "/p")).toContain("skill tool before you start working: csh.")
+    expect(await skillText(ctx(async () => ({ data: [] })), [], "/p")).toBeUndefined()
+  })
+
   // Fixed text costs context on every call; it must stay small enough not to crowd out the task.
   test("prompts stay within their size budget", () => {
     const tok = (s: string) => Math.round(s.split(/\s+/).filter(Boolean).length * 1.35)
@@ -517,20 +584,20 @@ describe("plan and research workflows", () => {
     }
   })
 
-  test("Analyst reads only files named in the task folder; folders and other files are refused", async () => {
+  test("Analyst reads only the task folder; code files and folders are refused, even when named", async () => {
     const { team, workspace, cleanup } = setup()
     try {
       await team.handle({ action: "start", text: "extend the bindings in `nl.i`", workflow: "plan" }, "ses_r", signal)
       const t = team.task("ses_r")
       mkdirSync(path.join(workspace, "src/lwt"), { recursive: true })
       for (const f of ["src/nl.i", "src/lwt/traverse.cpp", "src/other.cpp"]) writeFileSync(path.join(workspace, f), "x")
-      expect(analystReadProblem(t, { filePath: "src/nl.i" })).toBeUndefined()
+      expect(analystReadProblem(t, { filePath: "src/nl.i" })).toContain("You read only the task folder")
       expect(analystReadProblem(t, { filePath: "src" })).toContain("Listing folders is searching")
-      expect(analystReadProblem(t, { filePath: "src/lwt/traverse.cpp" })).toContain("isn't named")
       expect(analystReadProblem(t, { filePath: "request.md" })).toBe("request.md is a task file: its content is already in your prompt.")
       expect(analystReadProblem(t, { filePath: path.join(t.dir, "request.md") })).toBeUndefined()
       writeFileSync(path.join(t.dir, "findings-1.md"), "# Findings\n\n- `src/lwt/traverse.cpp:42` nextLevel()")
-      expect(analystReadProblem(t, { filePath: path.join(workspace, "src/lwt/traverse.cpp") })).toBeUndefined()
+      expect(analystReadProblem(t, { filePath: path.join(workspace, "src/lwt/traverse.cpp") })).toContain("NEED_INFO")
+      expect(analystReadProblem(t, { filePath: path.join(t.dir, "findings-1.md") })).toBeUndefined()
       expect(analystReadProblem(t, { filePath: "src/other.cpp" })).toContain("NEED_INFO")
     } finally {
       cleanup()
@@ -849,7 +916,7 @@ describe("plan and research workflows", () => {
       t.pending = undefined
       beginRun("ses_wr", { role: "analyst", mode: "analyst", task: t, toolLimit: 10 })
       const noRec = { status: "ESCALATE", summary: "s", content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\n**Summary:** Two passes, then linking.\n\ntwo passes, then linking" }] }
-      expect(() => acceptReport(DEFAULTS, "ses_wr", noRec as any)).toThrow("Missing in: 2. Glossary. Return those sections too")
+      expect(() => acceptReport(DEFAULTS, "ses_wr", noRec as any)).toThrow("no line \"**Recommended:** <option>: <short reason>\": 2. Glossary.")
       runs.delete("ses_wr")
       team.apply(t, p, report("ESCALATE", { content: "linking", sections: [{ id: "S4", content: "#### 2. Glossary\n\n**Summary:** Two passes, then linking.\n\ntwo passes, then linking\n\n**Recommended:** as written" }] }), {})
       save(t)
@@ -992,25 +1059,75 @@ describe("plan and research workflows", () => {
         }
       }
       const brief = "## Concept brief\n\n### Concerns\n\nA or B\n\n### Assumptions\n\nx\n\n## Excerpts\n\nE"
-      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: brief })).toThrow("Missing in: Concerns; Assumptions.")
+      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: brief })).toThrow('F1: section "Concerns" has no Summary line')
       const recs = brief.replace("A or B", "A or B\n\n**Recommended:** A: simpler").replace("x\n", "x\n\n- **Recommended:** as written\n")
-      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: recs })).toThrow("opens with a line \"**Summary:**")
+      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: recs })).toThrow('F1: section "Concerns" has no Summary line')
       const fixed = recs.replace("A or B", "**Summary:** Keep it simple.\n\nA or B").replace("### Assumptions\n\n", "### Assumptions\n\n**Summary:** Defaults.\n\n")
       expect(() => check("analyst", "analyst", { status: "ESCALATE", content: fixed })).not.toThrow()
       expect(() => check("analyst", "analyst", { status: "ESCALATE", content: "## Code\n\n`a.ts:1`" })).not.toThrow()
+      // A refused brief is kept: only the missing lines come back, and the plugin puts them in place.
+      beginRun("ses_fx", { role: "analyst", mode: "analyst", task: t, toolLimit: 10 } as any)
+      try {
+        const report = (input: object) => acceptReport(DEFAULTS, "ses_fx", input as any)
+        expect(() => report({ status: "ESCALATE", summary: "s", content: brief })).toThrow("F4: section \"Assumptions\" has no Recommended line")
+        expect(() => report({ status: "ESCALATE", fixes: [{ id: "F9", text: "x" }] })).toThrow("No fix F9 was asked for")
+        expect(() => report({ status: "ESCALATE", fixes: [{ id: "F1", text: "Keep it simple." }, { id: "F2", text: "A: simpler" }, { id: "F3", text: "Defaults." }] })).toThrow(
+          'F1: section "Assumptions" has no Recommended line',
+        )
+        report({ status: "ESCALATE", fixes: [{ id: "F1", text: "**Recommended:** as written" }] })
+        expect(runs.get("ses_fx")!.report!.content).toBe(
+          "## Concept brief\n\n### Concerns\n\n**Summary:** Keep it simple.\n\nA or B\n\n**Recommended:** A: simpler\n\n### Assumptions\n\n**Summary:** Defaults.\n\nx\n\n**Recommended:** as written\n\n## Excerpts\n\nE",
+        )
+        expect(runs.get("ses_fx")!.draft).toBeUndefined()
+      } finally {
+        runs.delete("ses_fx")
+      }
+      // A section that continues in sub-sections gets its picks there, not under its own heading.
+      const choices = "## Choices\n\n**Summary:** Two picks.\n\n### Config\n\n**Summary:** One setting.\n\n**Recommended:** one default\n\n### Logging\n\n**Summary:** Log it.\n\nx"
+      expect(missingRecommendations(choices)).toEqual(["Logging"])
+      expect(missingRecommendations(choices + "\n\n**Recommended:** log at the end")).toEqual([])
+      // The pick may be followed by more (assumptions, a rule): it still counts, and the user's view shows it.
+      const after = choices + "\n\n**Recommended:** log at the end\n\n**Assumption:** logs exist\n\n---"
+      expect(missingRecommendations(after)).toEqual([])
+      expect(userView(split(after).sections.at(-1)!)).toBe("**Summary:** Log it.\n\n**Recommended:** log at the end")
       const plan = "# Plan\n\n## Risks\n\n**Summary:** Low risk.\n\nnone\n\n## Steps\n\nIn order.\n\n1. **Edit a.ts**: the flag exists\n\nchange it\n\n2. **Test**: it is proven\n\nrun it"
       t.stage = "how"
-      expect(() => check("planner", "planner", { status: "PLAN", content: plan, risk: "no", steps: 2 })).toThrow("Missing in: Risks.")
+      expect(() => check("planner", "planner", { status: "PLAN", content: plan, risk: "no", steps: 2 })).toThrow('F1: section "Risks" has no Recommended line')
       const planOk = plan.replace("none", "none\n\n**Recommended:** as written")
       expect(() => check("planner", "planner", { status: "PLAN", content: planOk, risk: "no", steps: 2 })).not.toThrow()
-      expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Test**: it is proven", "**Test**"), risk: "no", steps: 2 })).toThrow("Missing in: 2. Test.")
-      expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Summary:** Low risk.\n\n", ""), risk: "no", steps: 2 })).toThrow("Missing in: Risks.")
+      expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Test**: it is proven", "**Test**"), risk: "no", steps: 2 })).toThrow('F1: step "2. Test" has no purpose')
+      expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Summary:** Low risk.\n\n", ""), risk: "no", steps: 2 })).toThrow('F1: section "Risks" has no Summary line')
       // Every question to the user carries a recommendation (auto mode answers from it); findings quote the lines.
       expect(() => check("planner", "planner", { status: "QUESTIONS", content: "", questions: ["A or B?\nRecommended: A", "C or D?"] })).toThrow("missing in item 2")
       expect(() => check("planner", "planner", { status: "QUESTIONS", content: "", questions: ["A or B?\n**Recommended:** A, simpler"] })).not.toThrow()
       expect(() => check("planner", "planner", { status: "QUESTIONS", content: "word ".repeat(300), questions: ["A or B?\nRecommended: A"] })).toThrow("not your draft")
       expect(() => check("intern", "intern", { status: "FOUND", content: "see `a.ts:10`" })).toThrow("quoted exactly in a code block")
-      expect(() => check("intern", "intern", { status: "FOUND", content: "`a.ts:10`\n```\nx = 1\n```" })).not.toThrow()
+      expect(() => check("intern", "intern", { status: "FOUND", content: "`grep x`\n```output\nx = 1\n```" })).not.toThrow()
+      // Quoted code goes back until it matches the cited file; after two tries the blocks that don't are removed.
+      const ws = mkdtempSync(path.join(tmpdir(), "omat-q-"))
+      writeFileSync(path.join(ws, "a.ts"), "const limit = 30\n")
+      t.workspace = ws
+      beginRun("ses_q", { role: "intern", mode: "intern", task: t, toolLimit: 10 } as any)
+      try {
+        const content = "`a.ts:1`\n```ts\nconst limit = 30\n```\n\n`a.ts:1`\n```ts\nconst limit = 45\n```\n\n`p4 changes`\n```output\n42\n```"
+        const wrong = () => ({ summary: "s", status: "FOUND", content }) as any
+        for (const _ of [1, 2]) expect(() => acceptReport(DEFAULTS, "ses_q", wrong())).toThrow("F1: block 2 (`a.ts:1`): `const limit = 45` isn't in the file")
+        expect(() => acceptReport(DEFAULTS, "ses_q", wrong())).not.toThrow()
+        expect(runs.get("ses_q")!.report!.content).toBe("`a.ts:1`\n```ts\nconst limit = 30\n```\n\n`a.ts:1`\n_(The plugin removed a code block here: it doesn't match a.ts:1.)_\n\n`p4 changes`\n```output\n42\n```")
+      } finally {
+        runs.delete("ses_q")
+      }
+      // A block sent again as a fix replaces only that block; a citation a few lines off is corrected without asking.
+      writeFileSync(path.join(ws, "a.ts"), "const limit = 30\nconst other = 1\n")
+      beginRun("ses_qf", { role: "intern", mode: "intern", task: t, toolLimit: 10 } as any)
+      try {
+        const content = "`a.ts:40`\n```ts\nconst limit = 30\n```\n\n`a.ts:1`\n```ts\nconst other = 2\n```"
+        expect(() => acceptReport(DEFAULTS, "ses_qf", { summary: "s", status: "FOUND", content } as any)).toThrow("F1: block 2")
+        acceptReport(DEFAULTS, "ses_qf", { status: "FOUND", fixes: [{ id: "F1", text: "`a.ts:2`\n```ts\nconst other = 1\n```" }] } as any)
+        expect(runs.get("ses_qf")!.report!.content).toBe("`a.ts:1`\n```ts\nconst limit = 30\n```\n\n`a.ts:2`\n```ts\nconst other = 1\n```")
+      } finally {
+        runs.delete("ses_qf")
+      }
       // The Planner asks at most askRoundsPerDraft rounds before each draft; a draft resets the count.
       t.pending = undefined
       t.needInfo = 0
@@ -1612,6 +1729,62 @@ describe("sidebar", () => {
     expect([compact(950), compact(1234), compact(56_000), compact(2_500_000)]).toEqual(["950", "1.2k", "56k", "2.5M"])
     expect(line("●", "developer", 1, 22, 333, "4.4k", "50%")).toHaveLength(35)
     expect(line(" ", "architect", 12, 1, 1, "1k", "1%")).toContain("architect  12")
+  })
+})
+
+describe("quoted code", () => {
+  test("blocks are compared with the cited file, ignoring layout; shortened lines, moved citations and misses are told apart", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "omat-quotes-"))
+    const src = ["export function run(a: number, b: number) {", "  const total = a + b;", "  return total", "}"]
+    writeFileSync(path.join(ws, "x.ts"), [...Array(100).fill("// pad"), ...src].join("\n"))
+    const block = (cite: string, ...lines: string[]) => `**${cite}**\n\`\`\`ts\n${lines.join("\n")}\n\`\`\``
+    const verdicts = (text: string) => checkQuotes(text, ws).map((b) => b.verdict)
+    const ok = checkQuotes(block("x.ts:101-104", "export function run(a: number,", "  b: number) {", "  const total = a + b", "  return total", "}"), ws)
+    expect(ok.map((b) => b.verdict)).toEqual(["ok"])
+    expect(blockFixes(ok)).toEqual([])
+    // Left-out code is true but sends the reader back to the file, so it goes back too; code with "..." in it is fine.
+    const short = block("x.ts:101-104", "export function run(a: number, b: number) {", "  // ...", "  return total")
+    expect(verdicts(short)).toEqual(["shortened"])
+    expect(verdicts(block("x.ts:101", "export function run(... b: number) {"))).toEqual(["shortened"])
+    expect(blockFixes(checkQuotes(short, ws))[0]!.ask).toContain('lines are left out with "..."')
+    expect(keepChecked(short, checkQuotes(short, ws))).toBe(short)
+    writeFileSync(path.join(ws, "s.ts"), "const all = [...items, last]\n")
+    expect(verdicts(block("s.ts:1", "const all = [...items, last]"))).toEqual(["ok"])
+    const moved = checkQuotes(block("x.ts:10-12", "export function run(a: number, b: number) {"), ws)
+    expect([moved[0]!.verdict, moved[0]!.at]).toEqual(["moved", 101])
+    expect(blockFixes(moved)).toEqual([])
+    expect(fixCites(block("x.ts:10-12", "export function run(a: number, b: number) {"), moved)).toContain("**x.ts:101**")
+    const text = [block("x.ts:102", "const total = a * b"), block("gone.ts:1", "x"), "```\nno cite\n```", "`ls`\n```output\nx.ts\n```"].join("\n\n")
+    expect(verdicts(text)).toEqual(["bad", "unchecked", "unchecked", "output"])
+    const problem = blockFixes(checkQuotes(text, ws)).map((f) => f.ask).join("\n")
+    for (const s of ["(`x.ts:102`): `const total = a * b` isn't in the file", "(`gone.ts:1`): there is no such file", "block 3: it has no `path:line`"]) expect(problem).toContain(s)
+    const kept = keepChecked(text, checkQuotes(text, ws))
+    expect(kept).not.toContain("a * b")
+    expect(kept).toContain("```output\nx.ts\n```")
+    expect(kept.match(/The plugin removed a code block/g)?.length).toBe(3)
+  })
+
+  test("true blocks are labelled [Qn] across findings, and the Analyst's labels become the blocks", () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "omat-qn-"))
+    const dir = mkdtempSync(path.join(tmpdir(), "omat-qn-task-"))
+    writeFileSync(path.join(ws, "a.ts"), "const limit = 30\nconst other = 1\n")
+    const one = numberQuotes(dir, "`a.ts:1`\n```ts\nconst limit = 30\n```\n\n`a.ts:1`\n```ts\nconst limit = 45\n```", ws, 0)
+    expect(one.next).toBe(1)
+    expect(one.content).toBe("`a.ts:1`\n[Q1]\n```ts\nconst limit = 30\n```\n\n`a.ts:1`\n```ts\nconst limit = 45\n```")
+    const two = numberQuotes(dir, "**a.ts:2**\n```ts\nconst other = 1\n```", ws, one.next)
+    expect([two.next, two.content.split("\n")[1]]).toEqual([2, "[Q2]"])
+    const quotes = loadQuotes(dir)
+    expect(expandQuotes("Today:\n[Q2]\nas [Q1] shows.", quotes)).toBe("Today:\n`a.ts:2`\n```ts\nconst other = 1\n```\nas `a.ts:1` shows.")
+    expect(() => expandQuotes("[Q9]", quotes)).toThrow("No code block Q9")
+    const t = { dir, workspace: ws } as any
+    beginRun("ses_qa", { role: "analyst", mode: "analyst", task: t, toolLimit: 10 } as any)
+    try {
+      const r = { summary: "s", status: "QUESTIONS", content: "[Q1]", questions: ["Keep it?\n[Q2]\nRecommended: yes"] } as any
+      acceptReport(DEFAULTS, "ses_qa", r)
+      expect([r.content, r.questions[0]]).toEqual([quotes.Q1, `Keep it?\n${quotes.Q2}\nRecommended: yes`])
+    } finally {
+      runs.delete("ses_qa")
+    }
   })
 })
 

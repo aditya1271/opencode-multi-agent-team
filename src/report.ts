@@ -1,8 +1,13 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
-import { runs, type Report, type ShellRun } from "./runtime.ts"
-import { checkEdits, missingRecommendations, missingSummaries, shownTitle, splice, split } from "./sections.ts"
+import { applyFixes, blockFixes, fixRequest, numbered, sectionFixes, type Fix } from "./fixes.ts"
+import { checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
+import { runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
+import { checkEdits, splice, split, titleOf, unrecommended, unsummarized, type Section } from "./sections.ts"
 import { consultSide, consultsUsed, draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
+
+/** Times the Intern's findings go back for code blocks that don't match their files. */
+const QUOTE_RETRIES = 2
 
 const SECTION_EDIT = {
   type: "object",
@@ -135,7 +140,21 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
     }
   if (mode === "fix" || mode === "fix_trivial")
     properties.checkCommand = { type: "string", description: "Required for DONE: the exact check command you ran last." }
-  return { type: "object", properties, required: ["status", "summary", "content"], additionalProperties: false }
+  if (!FIXABLE.includes(mode)) return { type: "object", properties, required: ["status", "summary", "content"], additionalProperties: false }
+  properties.summary = { ...(properties.summary as object), description: "At most 5 lines, shown to the user. Required, except with fixes." }
+  properties.content = { ...(properties.content as object), description: "Markdown. The plugin writes it to the task folder. Required, except with fixes." }
+  properties.fixes = { type: "array", items: FIX, description: "Only after a refusal that kept your report: one item per fix id it lists, sent with the status and nothing else." }
+  return { type: "object", properties, required: ["status"], additionalProperties: false }
+}
+
+/** Modes whose reports can be refused for parts code checks, and then fixed part by part. */
+const FIXABLE: Mode[] = ["intern", "analyst", "planner"]
+
+const FIX = {
+  type: "object",
+  properties: { id: { type: "string" }, text: { type: "string" } },
+  required: ["id", "text"],
+  additionalProperties: false,
 }
 
 /** Registered schema: accepts every field. Each agent sees a narrowed schema (context hook), and acceptReport validates. */
@@ -154,19 +173,20 @@ export const REPORT_INPUT = {
     items: { type: "array", items: { type: "string" } },
     addressed: { type: "string" },
     sections: { type: "array", items: SECTION_EDIT },
+    fixes: { type: "array", items: FIX },
   },
-  required: ["status", "summary", "content"],
+  required: ["status"],
 }
 
 export const REPORT_DESCRIPTION =
-  "Finish your work by calling this exactly once. Only the listed statuses are valid now. After calling it, stop."
+  "Finish your work by calling this exactly once. Only the listed statuses are valid now. After calling it, stop. If a call is refused but your report is kept, send only the fixes it asks for."
 
 /**
  * Briefs, documents and plans the user reviews: each reviewed section opens with a Summary line and ends with the writer's pick. A brief counts only
  * with its "Concept brief" or "Research brief" heading (how-stage briefs aren't shown to the user). A scoped revision
  * is checked as merged into the previous version.
  */
-function recommendProblem(role: string, input: Report, task: TaskState | undefined, scoped: boolean): string | undefined {
+function recommendProblem(role: string, input: Report, task: TaskState | undefined, scoped: boolean): string | Omit<Fix, "id">[] | undefined {
   const analyst = role === "analyst" && input.status === "ESCALATE"
   if (!analyst && !(role === "planner" && (input.status === "DOC" || input.status === "PLAN"))) return undefined
   let text = input.content
@@ -178,16 +198,20 @@ function recommendProblem(role: string, input: Report, task: TaskState | undefin
     } catch {
       return undefined
     }
-    returned = new Set(input.sections.flatMap((e) => split(e.content, true).sections.map((s) => shownTitle(s.title).replace(/^#+\s*/, ""))))
+    returned = new Set(input.sections.flatMap((e) => split(e.content, true).sections.map(titleOf)))
   }
-  const check = (f: (text: string, under?: string) => string[]) =>
-    (analyst ? [...f(text, "Concept brief"), ...f(text, "Research brief")] : f(text)).filter((t) => !returned || returned.has(t))
-  const missing = check(missingRecommendations)
-  const unsummed = check(missingSummaries)
-  if (!missing.length && !unsummed.length) return undefined
+  const check = (f: (text: string, under?: string) => Section[]) =>
+    (analyst ? [...f(text, "Concept brief"), ...f(text, "Research brief")] : f(text)).filter((s) => !returned || returned.has(titleOf(s)))
+  const unrec = check(unrecommended)
+  const unsum = check(unsummarized)
+  if (!unrec.length && !unsum.length) return undefined
+  // A whole draft is kept and gets only the missing lines; a scoped one returns its sections again.
+  if (!returned) return sectionFixes(unrec, unsum)
+  const missing = unrec.map(titleOf)
+  const unsummed = unsum.map(titleOf)
   return [
     missing.length
-      ? `Every section the user reviews ends with a line "**Recommended:** <option>: <short reason>" (several choices in one section: the pick for each, in that line; nothing to decide: "**Recommended:** as written"). Missing in: ${missing.join("; ")}.`
+      ? `These sections have no line "**Recommended:** <option>: <short reason>": ${missing.join("; ")}. Every section the user reviews closes with one (several choices in one section: the pick for each, in that line; nothing to decide: "**Recommended:** as written").`
       : "",
     unsummed.length
       ? `Every section the user reviews opens with a line "**Summary:** <1-3 plain sentences: the direction and why, not the mechanics>", and every plan step's first line is "N. **Title**: <one sentence on what the step achieves>". The user sees only those lines unless they ask for details. Missing in: ${unsummed.join("; ")}.`
@@ -212,7 +236,25 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (!run) throw new Error("report is only for team agents running a task.")
   const statuses = allowedStatuses(config, run.mode, run.task)
   if (!statuses.includes(input.status)) throw new Error(`Invalid status "${input.status}". Allowed now: ${statuses.join(", ")}.`)
-  if (typeof input.summary !== "string" || typeof input.content !== "string") throw new Error("summary and content are required.")
+  // The Analyst links the Intern's checked blocks as [Qn]; the readers get the blocks themselves.
+  const quotes = run.role === "analyst" && run.task ? loadQuotes(run.task.dir) : undefined
+  if (input.fixes?.length) {
+    if (!run.draft || !run.fixes) throw new Error("No report of yours is kept: send the whole report.")
+    if (input.status !== run.draft.status) throw new Error(`Your kept report has status ${run.draft.status}: send its fixes with that status, or a whole new report.`)
+    const given = quotes ? input.fixes.map((f) => ({ ...f, text: expandQuotes(f.text, quotes) })) : input.fixes
+    const { content, unknown } = applyFixes(run.draft.content, run.fixes, given)
+    if (unknown.length) throw new Error(`No fix ${unknown.join(", ")} was asked for. Asked for: ${run.fixes.map((f) => f.id).join(", ")}.`)
+    input = { ...run.draft, content }
+  } else {
+    run.draft = run.fixes = undefined
+    if (typeof input.summary !== "string" || typeof input.content !== "string")
+      throw new Error("summary and content are required (content may be empty if this status needs none); only a call with fixes for a kept report leaves them out.")
+  }
+  if (quotes && !input.fixes?.length) {
+    input.content = expandQuotes(input.content, quotes)
+    input.questions = input.questions?.map((q) => expandQuotes(q, quotes))
+    input.sections = input.sections?.map((s) => ({ ...s, content: expandQuotes(s.content, quotes) }))
+  }
   if ((input.status === "QUESTIONS" || input.status === "ASK" || input.status === "CONSULT") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
   if (input.status === "CONSULT" && !EVIDENCE.test(input.content))
     throw new Error("CONSULT needs the evidence in content: the Planner has no file access. Quote the code (`path:line` and the lines, in a code block) and the exact output or facts the question rests on.")
@@ -224,6 +266,22 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   }
   if (input.status === "FOUND" && !input.content.includes("```"))
     throw new Error("FOUND needs the lines that prove each finding, quoted exactly in a code block with `path:line`: the asker passes them to agents who see no files.")
+  // Readers take the Intern's code blocks as true: they go back until they match the files, and after
+  // QUOTE_RETRIES the blocks that are wrong are removed (shortened ones are true, so they stay).
+  if (run.role === "intern" && run.task) {
+    // Citations that are only off by some lines the plugin corrects itself.
+    let blocks = checkQuotes(input.content, run.task.workspace)
+    if (blocks.some((b) => b.verdict === "moved")) {
+      input = { ...input, content: fixCites(input.content, blocks) }
+      blocks = checkQuotes(input.content, run.task.workspace)
+    }
+    const fixes = blockFixes(blocks)
+    if (fixes.length && (run.quoteRejects ?? 0) < QUOTE_RETRIES) {
+      run.quoteRejects = (run.quoteRejects ?? 0) + 1
+      refuse(run, input, fixes, "The plugin compares each code block with the file cited just above it, and your asker quotes your blocks as they are; the blocks below don't match.")
+    }
+    if (fixes.length) input = { ...input, content: keepChecked(input.content, blocks) }
+  }
   if (input.status === "ESCALATE" && needsWhat(run.mode, run.task)) {
     if (input.what !== "settled" && input.what !== "open") throw new Error('ESCALATE needs what: "settled" or "open".')
     if (input.what === "settled" && !/^#+\s*Why the behaviour is settled/im.test(input.content))
@@ -243,7 +301,9 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (errors.length) throw new Error(`This revision is scoped:\n- ${errors.join("\n- ")}`)
   }
   const recommendErr = recommendProblem(run.role, input, task, !whole && isScopedWriter(run.mode, task))
-  if (recommendErr) throw new Error(recommendErr)
+  if (typeof recommendErr === "string") throw new Error(recommendErr)
+  if (recommendErr)
+    refuse(run, input, recommendErr, "Every section the user reviews opens with a Summary line and closes with a Recommended line: the user sees only those lines unless they ask for details. These are missing.")
   if (run.mode === "analyst_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))
     if (missing.length) throw new Error(`Answer every question by its id; missing: ${missing.join(", ")}.`)
@@ -275,5 +335,14 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
       )
   }
   run.report = { ...input, summary: input.summary.split("\n").slice(0, 5).join("\n") }
+  delete run.report.fixes
+  run.draft = run.fixes = undefined
   return "Report received. You are done; reply with the single word: done."
+}
+
+/** Keeps the report and refuses it, asking only for the missing parts. */
+function refuse(run: SessionRun, draft: Report, fixes: Omit<Fix, "id">[], intro: string): never {
+  run.draft = { ...draft, fixes: undefined }
+  run.fixes = numbered(fixes)
+  throw new Error(fixRequest(run.fixes, intro))
 }

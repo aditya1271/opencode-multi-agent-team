@@ -51,6 +51,26 @@ export async function lastReplyEmpty(ctx: Context, sessionID: string): Promise<b
   return !(last.content ?? []).some((p) => p.type === "tool" || (p.type === "text" && !!p.text?.trim()))
 }
 
+/** The skills' text for the system prompt; one the server can't find is left for the agent to load itself. */
+export async function skillText(ctx: Context, ids: string[] | undefined, directory: string): Promise<string | undefined> {
+  if (!ids?.length) return undefined
+  const found = await Promise.resolve()
+    .then(() => ctx.skill.list({ location: { directory } }))
+    .then(
+      (r) => r.data,
+      () => [],
+    )
+  const texts: string[] = []
+  const missing: string[] = []
+  for (const id of ids) {
+    const skill = found.find((s) => s.id === id || s.name === id)
+    if (skill) texts.push(`## Skill: ${id} (already loaded)\n\n${skill.content.trim()}`)
+    else missing.push(id)
+  }
+  if (missing.length) texts.push(`Load these skills with the skill tool before you start working: ${missing.join(", ")}.`)
+  return texts.join("\n\n")
+}
+
 export async function runAgent(ctx: Context, config: Config, input: RunInput, log: (msg: string) => void): Promise<RunResult> {
   const zero: UsageDelta = { prompts: 0, tools: {}, input: 0, cacheRead: 0, output: 0 }
   const models = fallbackModels(config, input.role)
@@ -109,6 +129,7 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
   let end: RunEnd = "no_report"
   let failure: string | undefined
   const dir = input.task?.workspace ?? ctx.location.directory
+  run.skills = await skillText(ctx, config.agents[input.role]?.skills, dir)
   let text = input.sessionID ? input.prompt : `${vcsLine(dir, await detectVcs(dir))}\n\n${input.prompt}`
   let reprompted = false
   try {
@@ -150,7 +171,9 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
       }
       if (!reprompted) {
         reprompted = true
-        text = "Finish by calling `report`."
+        text = run.reportRefused
+          ? `Your last \`report\` call was refused: ${run.reportRefused}\nThe \`report\` tool is still yours: call it again as that message says.`
+          : "Finish by calling `report`."
         continue
       }
       end = "no_report"

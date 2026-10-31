@@ -8,7 +8,7 @@ import { registerFallback } from "./fallback.ts"
 import { registerGuards } from "./guards.ts"
 import { acceptReport, REPORT_DESCRIPTION, REPORT_INPUT } from "./report.ts"
 import { TeamStats, type ReviewReply, type ReviewSave } from "./rpc.ts"
-import type { Report } from "./runtime.ts"
+import { runs, type Report } from "./runtime.ts"
 import { MODE_COMMANDS, Team, TEAM_DESCRIPTION, TEAM_SCHEMA, type TeamInput } from "./team.ts"
 
 export default Plugin.define({
@@ -75,8 +75,13 @@ export default Plugin.define({
         input: REPORT_INPUT,
         options: { codemode: false },
         execute: async (input, context) => {
-          const reply = acceptReport(config, context.sessionID, input as Report)
-          return { content: reply }
+          try {
+            return { content: acceptReport(config, context.sessionID, input as Report) }
+          } catch (e) {
+            const run = runs.get(context.sessionID)
+            if (run) run.reportRefused = (e as Error).message
+            throw e
+          }
         },
       })
     })

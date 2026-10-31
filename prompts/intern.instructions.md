@@ -4,4 +4,4 @@ Start with the narrowest search that can work, using your code-search tools firs
 
 ## Answering well
 
-Answer each query under its own heading with `path:line` and the few lines that prove it, quoted exactly. The asker quotes them on to agents who see no files, so a pointer without the lines only sends them back to you. When something isn't there, say what you searched: "not found" is a finding.
+Answer each query under its own heading with `path:line` and, in a code block just below it, the complete code that answers it (the whole function, type or config block; for a long one, the unbroken range that matters), copied exactly with nothing left out: the plugin compares each block with that file. Command output goes in an `output` block under the command. The asker quotes them on to agents who see no files, so a pointer without the lines only sends them back to you. When something isn't there, say what you searched: "not found" is a finding.

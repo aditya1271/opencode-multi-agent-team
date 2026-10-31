@@ -19,7 +19,7 @@ now means the new Architect: rename it to `planner`.
 | `build-manager` | Front agent for code changes: the team plans, edits, builds and tests. | cheap |
 | `plan-manager` | Front agent for plan documents: the team writes a plan for you to review. No code changes. | cheap |
 | `research-manager` | Front agent for research: the team investigates and writes a findings report. No code changes. | cheap |
-| `team-analyst` | Has the Intern search the code and reads only what it cites (no search tools), then decides between a trivial fix and a plan. Writes the brief. | normal |
+| `team-analyst` | Has the Intern search and quote the code (it reads only the task folder itself), then decides between a trivial fix and a plan. Writes the brief. | normal |
 | `team-planner` | Writes plans and documents. You approve each one. Advises Analyst when you keep sending its brief back. | good |
 | `team-intern` | Does code searches for Analyst and the Planner, and answers your code questions. | cheap |
 | `team-developer` | Edits, builds and tests. The only agent that changes files. | normal |
@@ -113,7 +113,8 @@ To update later, run `git pull` in the clone and restart OpenCode.
   in the code, you get the what-document back with the evidence and decide.
 - **Want a plan, not a quick fix?** Say so ("plan it first"). The Analyst still writes the
   brief but can't take the quick path, so the Planner always plans.
-- **Who knows what:** Analyst reads the code and your files. The Planner and Architect have no
+- **Who knows what:** Analyst works from the Intern's findings, whose code the plugin checks
+  against the files. The Planner and Architect have no
   file or code access: they work from Analyst's brief and ask Analyst (numbered questions A1, A2, …,
   answered in `brief-answer-N.md`) when they need more. Code-search tools configured for them
   are ignored, with a warning in the log.
@@ -226,7 +227,7 @@ written, with no confirmation, in any mode.
 
 ### Plan documents (`plan-manager`)
 
-A plan task has two approvals. First the Analyst reads your files and the code and writes a
+A plan task has two approvals. First the Analyst has the Intern find your files and the code and writes a
 **concept brief**: the concerns that decide whether the result is good (yours first, in your
 framing), approaches for each, feasibility notes only where an idea could fail, and
 assumptions. You see it and can adjust it (`workflows.plan.confirmBrief`). The Planner then
@@ -442,8 +443,8 @@ with whatever you use to explore code (a code graph, clangd, a docs RAG, ...):
 }
 ```
 
-Give code-search tools to the Intern, not Analyst. Analyst doesn't search: it can read only the files
-the request, your material or the Intern's findings name, and sends every search to the Intern.
+Give code-search tools to the Intern, not Analyst. Analyst doesn't read code: it reads only the task folder
+(the request, your answers, the Intern's findings) and asks the Intern for everything else.
 Tools you add to Analyst still work, so a code-search MCP there lets it search again; add only
 tools that fetch your material (an issue tracker, a wiki).
 

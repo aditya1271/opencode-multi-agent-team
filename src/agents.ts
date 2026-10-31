@@ -156,8 +156,9 @@ function toolsNote(config: Config, role: Role): string {
   const a = config.agents[role] ?? {}
   const lines: string[] = []
   if (role === "manager") return ""
-  if (BRIEF_ONLY.includes(role)) return a.skills?.length ? `## Your tools\n\n- Load these skills before you start working: ${a.skills.join(", ")}.` : ""
-  if (a.skills?.length) lines.push(`- Load these skills before you start working: ${a.skills.join(", ")}.`)
+  const skills = `- Skills: ${a.skills?.join(", ")}. Their text is at the end of your instructions; don't load them again.`
+  if (BRIEF_ONLY.includes(role)) return a.skills?.length ? `## Your tools\n\n${skills}` : ""
+  if (a.skills?.length) lines.push(skills)
   if (a.mcps?.length) lines.push(`- MCP servers, through the execute tool: ${a.mcps.join(", ")}.`)
   if (a.tools?.length) lines.push(`- Tools: ${a.tools.join(", ")}.`)
   if (a.commands?.length) lines.push(`- Shell commands: ${a.commands.join(", ")}.`)

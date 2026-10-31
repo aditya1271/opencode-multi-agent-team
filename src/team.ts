@@ -6,6 +6,7 @@ import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
 import { buildPrompt, checksText, detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, operatorPrompt, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
 import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
+import { numberQuotes, QUOTES_CHECKED } from "./quotes.ts"
 import { recommendationOf } from "./report.ts"
 import { EditedFilesTrack, type ReviewProgress, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
@@ -1501,17 +1502,19 @@ export class Team {
         return
       }
       case "intern": {
-        const file = writeNumbered(task, "findings", `# Findings (${r.status})\n\n${r.content}`)
+        const numbered = numberQuotes(task.dir, r.content, task.workspace, task.seq.quote ?? 0)
+        task.seq.quote = numbered.next
+        const file = writeNumbered(task, "findings", `# Findings (${r.status})\n\n${numbered.content}`)
         this.record(task, p.mode, r, file)
         if (p.asker === "analyst") {
           const left = this.config.limits.analystSearchRounds - (task.analystSearches ?? 0)
           const more = left > 0 ? `You may send ${left} more round${left === 1 ? "" : "s"} of queries (NEED_INFO).` : "No more search rounds: report with what you have."
-          const note = `The Intern answered your queries (${r.status}), below. Spot-check what you rely on by reading the cited lines, then report. ${more}`
+          const note = `The Intern answered your queries (${r.status}), below. ${QUOTES_CHECKED} Read a file only for what the findings leave out, then report. ${more}`
           task.pending = p.then?.mode === "analyst_answer" ? { ...p.then, note: join(note, p.then.note), files: [file] } : { mode: "analyst", note, files: [file] }
           return
         }
         task.plannerUnseen.push(file)
-        task.pending = { mode: "planner", note: `Intern answered your queries (${r.status}).`, afterReview: p.afterReview }
+        task.pending = { mode: "planner", note: `Intern answered your queries (${r.status}). ${QUOTES_CHECKED}`, afterReview: p.afterReview }
         return
       }
       case "architect_review": {
