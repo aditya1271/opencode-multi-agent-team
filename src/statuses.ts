@@ -75,6 +75,7 @@ const MODE: Partial<Record<Mode, Record<string, string>>> = {
   architect_draft_advice: {
     ADVICE: "`items`: one concrete instruction per entry for the writer (what to add, explore, change or drop, and why), most important first; the plugin numbers them ADV1, ADV2, …. `content`: your diagnosis in a few lines: why the draft keeps missing.",
   },
+  request_check: { CHECKED: "`content`: one verdict line per id, in the form the message gives. The plugin checks each line." },
   architect_doc_review: {
     CHANGES: "`content`: at most 5 must-fix items, most important first, each with where, the problem and the fix; then any should-consider items, marked as such. Don't rewrite the document.",
   },

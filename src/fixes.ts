@@ -6,10 +6,13 @@ import { RECOMMENDED_LINE, SUMMARY_LINE, titleOf, type Section } from "./section
 
 export interface Fix {
   id: string
-  kind: "recommended" | "summary" | "purpose" | "block"
+  kind: "recommended" | "summary" | "purpose" | "block" | "line" | "append"
   /** What to send, as the refusal says it. */
   ask: string
-  /** Line index the fix goes at: the section's last line, its heading, the step line, or the block's opening fence. */
+  /**
+   * Line index the fix goes at: the section's last line, its heading, the step line, the block's opening fence, the
+   * line it replaces (line), or the line it goes after (append).
+   */
   at: number
   /** block: its closing fence, and the line with its citation. */
   end?: number
@@ -60,6 +63,17 @@ export function blockFixes(blocks: QuotedBlock[]): Omit<Fix, "id">[] {
   })
 }
 
+/** Fixes for verdict lines (one per id): a wrong line is sent again whole, a missing one is added after the others. */
+export function lineFixes(problems: { ask: string; at?: number; after: number }[]): Omit<Fix, "id">[] {
+  const seen = new Set<number>()
+  return problems.flatMap((p): Omit<Fix, "id">[] => {
+    if (p.at === undefined) return [{ kind: "append" as const, at: p.after, ask: p.ask }]
+    if (seen.has(p.at)) return []
+    seen.add(p.at)
+    return [{ kind: "line" as const, at: p.at, ask: p.ask }]
+  })
+}
+
 /** Numbers the fixes F1, F2, … */
 export const numbered = (fixes: Omit<Fix, "id">[]): Fix[] => fixes.map((f, i) => ({ ...f, id: `F${i + 1}` }))
 
@@ -80,10 +94,17 @@ export function applyFixes(content: string, fixes: Fix[], given: GivenFix[]): { 
   // At the same line a Recommended line goes in first, so a Summary added there lands above it.
   const rank = (g: GivenFix) => byId.get(g.id)!.at * 2 + (byId.get(g.id)!.kind === "recommended" ? 1 : 0)
   const todo = given.filter((g) => byId.has(g.id)).sort((a, b) => rank(b) - rank(a))
+  // Added lines go in together, in the order given.
+  const appends = given.filter((g) => byId.get(g.id)?.kind === "append")
+  let appended = false
   for (const g of todo) {
     const f = byId.get(g.id)!
     const text = g.text.trim()
-    if (f.kind === "recommended") lines.splice(f.at + 1, 0, "", RECOMMENDED_LINE.test(text) ? text : `**Recommended:** ${text}`)
+    if (f.kind === "append") {
+      if (!appended) lines.splice(f.at + 1, 0, ...appends.map((a) => a.text.trim()))
+      appended = true
+    } else if (f.kind === "line") lines[f.at] = text
+    else if (f.kind === "recommended") lines.splice(f.at + 1, 0, "", RECOMMENDED_LINE.test(text) ? text : `**Recommended:** ${text}`)
     else if (f.kind === "summary") lines.splice(f.at + 1, 0, "", SUMMARY_LINE.test(text) ? text : `**Summary:** ${text}`)
     else if (f.kind === "purpose") {
       const title = /^\d+\.\s+\*\*.+?\*\*/.exec(lines[f.at]!)?.[0] ?? lines[f.at]!

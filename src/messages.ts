@@ -252,6 +252,41 @@ export const operatorPrompt = (request: string, asker?: string) =>
     `<request>\n${request}\n</request>`,
   )
 
+/** A review checks the work against each requirement and decision, one line each. */
+export const REVIEW_VERDICT_FORMAT = "`R1: met «the code line that does it» path:line` or `R1: not met — what is missing or differs`"
+
+function verdictAsk(task: TaskState): string {
+  if (!readTaskFile(task, "requirements.md")) return ""
+  return `requirements.md holds what the user asked for, in their own words, and what was decided; the plan is the team's reading of it and can drift. Start content with one line per id: ${REVIEW_VERDICT_FORMAT}. The plugin checks that each quoted line is in the file you cite, and takes PASS only when every line is met.`
+}
+
+/** On a re-review: the last review of this plan, so the reviewer starts from what it found. */
+function lastReview(task: TaskState): string {
+  const file = task.history.filter((h) => (h.mode === "review" || h.mode === "review_trivial") && h.plan === (task.plan || undefined) && h.file).at(-1)?.file
+  if (!file) return ""
+  return join(
+    "This is a re-review. Your last review is below: check first that each issue it raised is fixed, then that the lines it found met still hold after the fixes.",
+    fileBlock(task, file),
+  )
+}
+
+/** The read-back: does the request a team will work from still carry each thing the user asked for? */
+export const requestCheckPrompt = (reqs: { quote: string; need: string }[], text: string) =>
+  join(
+    "MODE: request check. A team will build from the request below and nothing else. Read it as they will, then go through the user's requirements: for each, is it in the request as fully and as firmly as the user said it? Use no tools; the request is all you judge.",
+    reqs.map((r, i) => `- R${i + 1}: ${r.need} (the user: «${r.quote}»)`).join("\n"),
+    `<request>\n${text}\n</request>`,
+    "Report CHECKED with one line per requirement: `R1: kept «the words in the request that carry it»`; `R1: weakened «those words» — what is lost` when it is softer, narrower or vaguer than the user said; `R1: missing` when nothing carries it.",
+  )
+
+/** Assumptions a writer marked, checked against the code by the Intern before the draft goes to approval. */
+export const assumptionCheckPrompt = (lines: string) =>
+  join(
+    "MODE: assumption check. The plan below rests on these assumptions about the code. Check each in the code and quote what settles it.",
+    `<assumptions>\n${lines}\n</assumptions>`,
+    "Report CHECKED with one line per id: `A1: confirmed «the code line that shows it» path:line`, or `A1: wrong «the code line that shows it» path:line — what is true instead`. Quote the code exactly as it is in the file.",
+  )
+
 /** Every task message ends with the statuses allowed now (statuses.ts), and for a reviewed draft, its format. */
 export function buildPrompt(config: Config, task: TaskState, p: Pending, freshSession: boolean): string {
   const body = taskMessage(config, task, p, freshSession)
@@ -388,7 +423,10 @@ function taskMessage(config: Config, task: TaskState, p: Pending, freshSession: 
     case "review_trivial":
       return join(
         `MODE: review. A trivial change touched more than one file. Check the changes against the request and the instruction. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Developer.`,
+        verdictAsk(task),
         f("request.md"),
+        f("requirements.md"),
+        lastReview(task),
         f("checks.md"),
         f("answers.md"),
         f("brief.md"),
@@ -433,7 +471,8 @@ function taskMessage(config: Config, task: TaskState, p: Pending, freshSession: 
       return join(ask, f("request.md"), f("checks.md"), whatDoc(), stageBrief(), answers(), f(`plan-${task.plan}.md`), ...unseen.map(f))
     }
     case "operator":
-      // Team.run and Team.runFor build the message (operatorPrompt).
+    case "request_check":
+      // Team builds these messages (operatorPrompt, requestCheckPrompt).
       return p.note ?? ""
     case "intern":
       if (task.workflow === "research") return join(INTERN_RESEARCH, `<queries>\n${p.note ?? ""}\n</queries>`)
@@ -495,7 +534,10 @@ function taskMessage(config: Config, task: TaskState, p: Pending, freshSession: 
       const reports = task.history.filter((h) => h.plan === task.plan && h.mode === "fix" && h.status !== "CONSULT" && h.status !== "RUN" && h.file).map((h) => f(h.file!))
       return join(
         `MODE: review. Plan ${task.plan} is finished${task.skipChecks ? " (build and test skipped by the user)" : " and its final check passed"}. Compare the changes with the plan and the request. The user's answers and comments settle the request's open points. Changed files: ${task.editedFiles.join(", ")}. Use git diff or p4 diff to see them. Report PASS, or ISSUES with instructions for Developer.`,
+        verdictAsk(task),
         f("request.md"),
+        f("requirements.md"),
+        lastReview(task),
         f("checks.md"),
         answers(),
         whatDoc(),

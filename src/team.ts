@@ -4,9 +4,10 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
-import { buildPrompt, checksText, detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, operatorPrompt, render, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
+import { assumptionCheckPrompt, buildPrompt, checksText, detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, operatorPrompt, render, requestCheckPrompt, REVIEW_VERDICT_FORMAT, reviseAs, scopeText, sectionIndex, SKIP_CHECKS, styleView, walkable } from "./messages.ts"
 import { idRanges, indexOf, shownTitle, splice, split, type Scope } from "./sections.ts"
 import { numberQuotes, QUOTES_CHECKED } from "./quotes.ts"
+import { checkCoverage, claimIds, claimLines, decisionsText, dropModeOnly, joined, modeOnly, multiSentence, questionOnly, requirementIds, requirementsText, untagged, verdicts, type Requirement, type VerdictSpec } from "./polish.ts"
 import { recommendationOf } from "./report.ts"
 import { EditedFilesTrack, type ReviewProgress, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
@@ -63,6 +64,12 @@ export type TeamAction = (typeof TEAM_ACTIONS)[number]
 /** Actions whose text the user confirms on default mode. */
 const CONFIRMED_ACTIONS: TeamAction[] = ["start", "ask", "run", "answer", "change", "section", "review"]
 
+/** Times a new request goes back to the front agent for what the polish checks find; then it is sent as it is. */
+const POLISH_RETRIES = 2
+
+/** Rounds per stage in which the Intern checks a draft's assumptions; a draft revised after that goes on unchecked. */
+const ASSUMPTION_ROUNDS = 2
+
 export type TeamMode = "off" | AutoLevel
 
 /** The /team-mode-* slash commands: pick a mode without remembering what to say. */
@@ -98,14 +105,20 @@ export interface TeamInput {
   verdict?: "start" | "ok" | "skip" | "finetune" | "revise" | "rest"
   /** details only: the sections to show in full (none: the whole draft). */
   ids?: string[]
+  /** start (polishing on): what the user asks for, each with their own words; the words that ask for nothing; open points. */
+  requirements?: Requirement[]
+  skipped?: string[]
+  questions?: string[]
+  /** send, or start again after the user answered: the user's answer to each question, in order. */
+  decisions?: string[]
 }
 
 export const TEAM_DESCRIPTION = [
   "Runs the multi-agent team. One call runs at most one agent and returns what to do next.",
-  "Actions: start (text = the polished request; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Architect to review the plan or document; auto = polished, safe or full when the user asked for an auto mode),",
+  "Actions: start (text = the polished request, tagging the requirements it carries [R1]; requirements, skipped and questions as described; plan = true when a code request should get a plan, not a quick fix; output = where the plan or research document goes, if the user named a path; review = true when the user asked Architect to review the plan or document; auto = polished, safe or full when the user asked for an auto mode),",
   "ask (text = a question; while a task is open, the agent it waits on answers),",
   "run (text = the polished request to run or fetch something and return the result: a command, script, API call or web page; the Operator does it, changes no code and starts no task; an open task doesn't move),",
-  "send, cancel (the user's choice when the team asked you to confirm a text first),",
+  "send (decisions = the user's answers when the request had questions), cancel (the user's choice when the team asked you to confirm a text first),",
   "continue, answer (text = the user's polished answer), approve, change (text = the user's polished comments; finetune, revise, final, reopen = section ids, add = titles of new sections), section (going through the waiting brief, document or plan one section at a time: verdict = start, ok, skip, finetune or revise with text = the polished comment, or rest to show the remaining sections at once), review (Architect critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status,",
@@ -139,6 +152,26 @@ export const TEAM_SCHEMA = {
       description: "section only: start the walk-through; ok, skip, finetune or revise (with text) the section shown; rest shows the remaining sections at once.",
     },
     ids: { type: "array", items: { type: "string" }, description: "details only: ids of the sections to show in full (S3); none: the whole draft." },
+    requirements: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          quote: { type: "string", description: "The user's exact words for this one behaviour (\"…\" leaves words out). A sentence that asks for two things gives two requirements, each quoting its part." },
+          need: { type: "string", description: "What they want, in one line." },
+        },
+        required: ["quote", "need"],
+        additionalProperties: false,
+      },
+      description: "start only: one item per behaviour the user asks for, each checkable on its own (R1, R2, … in order). Their quotes and skipped together cover the user's message.",
+    },
+    skipped: { type: "array", items: { type: "string" }, description: "start only: the user's words that ask for nothing (greetings, background), quoted exactly." },
+    questions: {
+      type: "array",
+      items: { type: "string" },
+      description: "start only: open points that change what gets built, one per item, each with the options and a line `Recommended: <option>`. The plugin adds the chosen answers to the request (D1, D2, …).",
+    },
+    decisions: { type: "array", items: { type: "string" }, description: "send, or start after the user answered: the user's answer to each question, in order." },
   },
   required: ["action"],
   additionalProperties: false,
@@ -171,6 +204,9 @@ export class Team {
   private questions = new Map<string, { count: number; usage: Partial<Record<Role, AgentUsage>> }>()
   /** A polished text waiting for the user's [Send] [Edit] [Cancel] (default mode), with the question count when it was held. */
   private drafts = new Map<string, { input: TeamInput; asked: number }>()
+  /** Times the current new request went back to the front agent for its polish checks. */
+  private polishTries = new Map<string, number>()
+  private joinAsked = new Map<string, Set<string>>()
   /** Called when a session's numbers change (the sidebar refreshes). */
   onChange: (managerSession: string) => void = () => {}
   /** Tells the TUIs a review waits in this session; one showing it opens the dialog. Unset: chat only. */
@@ -367,7 +403,14 @@ export class Team {
     if (this.config.polish === "off" || !input.text?.trim()) return false
     if (!CONFIRMED_ACTIONS.includes(input.action)) return false
     if (input.action === "section" && input.verdict !== "finetune" && input.verdict !== "revise") return false
-    return this.modeFor(managerSession, task, input) === "off"
+    const mode = this.modeFor(managerSession, task, input)
+    // A new request's open points are the user's to decide unless the team decides (safe or full auto).
+    if (this.asksUser(input, mode)) return true
+    return mode === "off"
+  }
+
+  private asksUser(input: TeamInput, mode: TeamMode) {
+    return input.action === "start" && !!input.questions?.length && !input.decisions?.length && (mode === "off" || mode === "polished")
   }
 
   /** send and cancel, and holding a text for confirmation. Undefined: handle the input as usual. */
@@ -381,16 +424,33 @@ export class Team {
       if (!draft) return "Nothing waits to be sent. NEXT ACTION: polish the user's message and call team with the matching action."
       if ((counter(managerSession).asked ?? 0) <= draft.asked)
         return 'The user hasn\'t confirmed it yet. NEXT ACTION: show the polished text and ask with the question tool: [Send] [Edit] [Cancel]. Send → team "send".'
+      const questions = draft.input.action === "start" ? (draft.input.questions?.length ?? 0) : 0
+      if (input.decisions?.length && input.decisions.length !== questions)
+        return `decisions needs one answer per question, in order: ${questions} question(s), ${input.decisions.length} answer(s). NEXT ACTION: call team "send" again with decisions fixed.`
       this.drafts.delete(managerSession)
-      return this.handle({ ...draft.input, confirmed: true }, managerSession, signal)
+      return this.handle({ ...draft.input, decisions: input.decisions?.length ? input.decisions : draft.input.decisions, confirmed: true }, managerSession, signal)
     }
     if (input.confirmed || !this.needsConfirm(managerSession, task, input)) return undefined
     this.drafts.set(managerSession, { input, asked: counter(managerSession).asked ?? 0 })
+    const mode = this.modeFor(managerSession, task, input)
+    if (this.asksUser(input, mode)) {
+      const list = input.questions!.map((q, i) => `D${i + 1}. ${q}`).join("\n")
+      const send = mode === "off" ? ', and as the last question [Send] [Edit] [Cancel]' : ""
+      return [
+        `Held: the request has open points only the user can decide.`,
+        list,
+        `NEXT ACTION: show the user the polished text as one block, then ask with the question tool in one call: each question above as its own question, options from it, its Recommended option first with "(Recommended)" at the end of the label${send}. Then call team "send" with decisions = the user's answer to each question, in order (their own words when they typed one). Edit → take their changes, revise and call team "start" again. Cancel → call team with action "cancel".`,
+      ].join("\n\n")
+    }
     return `Held for the user's confirmation (default mode). NEXT ACTION: show the user the polished text as one block and ask with the question tool: [Send] [Edit] [Cancel]. Send → call team with action "send". Edit → take their changes, revise the text and call team "${input.action}" again with it. Cancel → call team with action "cancel".`
   }
 
   async handle(input: TeamInput, managerSession: string, signal: AbortSignal): Promise<string> {
     const task = this.task(managerSession)
+    if (input.action === "start" && !input.confirmed && !input.decisions?.length && !(task && !TERMINAL.includes(task.phase))) {
+      const problem = await this.checkRequest(managerSession, input, signal)
+      if (problem !== undefined) return problem
+    }
     const held = await this.confirmStep(input, managerSession, task, signal)
     if (held !== undefined) return held
     if (task) task.usage.manager = { ...(task.usage.manager ?? this.emptyManager()), calls: (task.usage.manager?.calls ?? 0) + 1 }
@@ -622,6 +682,105 @@ export class Team {
     return undefined
   }
 
+  /** The user's messages in the session, newest first. */
+  private async userMessages(sessionID: string): Promise<string[]> {
+    const messages = (await this.ctx.session.context({ sessionID }).catch(() => [])) as unknown as Array<{ type?: string; text?: string }>
+    return messages
+      .filter((m) => m.type === "user" && typeof m.text === "string" && m.text.trim())
+      .map((m) => m.text!)
+      .reverse()
+  }
+
+  /**
+   * A new request, before it is held or sent: the requirements must rest on the user's words and cover their message,
+   * a fresh reader must find each one in the polished text. Layout slips (tags, mode words) are fixed or logged, not sent back. Undefined: it holds.
+   */
+  private async checkRequest(managerSession: string, input: TeamInput, signal: AbortSignal): Promise<string | undefined> {
+    const tries = this.polishTries.get(managerSession) ?? 0
+    const fixOnly = "Fix only these and keep the rest as it is; then call team \"start\" again with the whole input."
+    // Layout slips are fixed here rather than sent back: a mode request ("Mode: safe auto") is not a requirement.
+    if (input.requirements?.length) Object.assign(input, dropModeOnly(input.requirements, input.text ?? ""))
+    const reqs = input.requirements ?? []
+    const sources = await this.userMessages(managerSession)
+    // No user message to check against (a request made by the plugin itself, or tests).
+    if (!sources.length) return undefined
+    if (!reqs.length) {
+      this.polishTries.set(managerSession, tries + 1)
+      return tries < POLISH_RETRIES
+        ? `Not sent: start needs requirements, one per thing the user asks for, each with their exact words (quote) and what they want (need); skipped = their words that ask for nothing. ${fixOnly}`
+        : undefined
+    }
+    const problems: string[] = []
+    const c = checkCoverage(sources, reqs, input.skipped ?? [])
+    for (const n of c.badRequirements) problems.push(`R${n}: its quote isn't in the user's words, word for word («${reqs[n - 1]!.quote}»). Quote them exactly; "…" may leave words out.`)
+    for (const q of c.badSkipped) problems.push(`skipped «${q}» isn't in the user's words, word for word.`)
+    for (const n of multiSentence(sources, reqs))
+      problems.push(`R${n} spans more than one sentence of the user's («${reqs[n - 1]!.quote}»), so it bundles behaviours that are built and checked separately: give each its own requirement, quoting its own words.`)
+    // Asked once per quote: one sent back unchanged is the manager's call that it is one behaviour.
+    const asked = this.joinAsked.get(managerSession) ?? new Set<string>()
+    const counted = problems.length
+    for (const j of joined(reqs).filter((j) => !asked.has(reqs[j.n - 1]!.quote))) {
+      asked.add(reqs[j.n - 1]!.quote)
+      problems.push(`R${j.n} joins two parts with "and" («${j.parts[0]}» / «${j.parts[1]}»): when each can be built and checked without the other, give each its own requirement, quoting its own words. If it is one behaviour, send it again unchanged.`)
+    }
+    this.joinAsked.set(managerSession, asked)
+    const hints = problems.length - counted
+    for (const u of c.uncovered.filter((u) => !modeOnly(u))) problems.push(`The user wrote «${u}» and no requirement or skipped quote covers it: add a requirement for it, or add it to skipped when it asks for nothing.`)
+    const polishing = this.config.polish !== "off"
+    // Missing [R1] tags are layout: noted in the log, never a reason to send the request back.
+    const missing = polishing ? untagged(input.text ?? "", reqs.length) : []
+    if (missing.length) this.log(`polished text doesn't tag ${missing.join(", ")}`)
+    if (!problems.length && polishing) problems.push(...(await this.readBack(managerSession, input, signal)))
+    // The "and" hints are asked once per quote, so they don't use up a retry.
+    if (!problems.length || (tries >= POLISH_RETRIES && !hints)) {
+      this.polishTries.delete(managerSession)
+      this.joinAsked.delete(managerSession)
+      if (problems.length) this.log(`request sent with unresolved polish problems: ${problems.join(" | ")}`)
+      return undefined
+    }
+    if (problems.length > hints) this.polishTries.set(managerSession, tries + 1)
+    return join("Not sent: the plugin checked the request against the user's words.", problems.map((p) => `- ${p}`).join("\n"), fixOnly)
+  }
+
+  /** A fresh reader sees only the requirements and the polished text, and says for each whether the text carries it. */
+  private async readBack(managerSession: string, input: TeamInput, signal: AbortSignal): Promise<string[]> {
+    const reqs = input.requirements ?? []
+    const text = input.text ?? ""
+    const ids = reqs.map((_, i) => `R${i + 1}`)
+    const spec: VerdictSpec = {
+      ids,
+      words: ["missing", "weakened", "kept"],
+      quoteIn: { text, words: ["kept", "weakened"] },
+      format: "`R1: kept «the words in the request that carry it»` (or weakened «…» — what is lost, or missing)",
+    }
+    const res = await runAgent(
+      this.ctx,
+      this.config,
+      {
+        role: "intern",
+        mode: "request_check",
+        parentID: managerSession,
+        title: "team: intern (request check)",
+        prompt: requestCheckPrompt(reqs, text),
+        signal,
+        verdicts: spec,
+      },
+      this.log,
+    )
+    const usage: Partial<Record<string, AgentUsage>> = {}
+    add(usage as never, "intern", res.usage)
+    appendUsage(this.root, { task: "polish", session: managerSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
+    if (!res.report) return []
+    const found = verdicts(res.report.content, spec)
+    return [...found]
+      .filter(([, v]) => v.verdict !== "kept")
+      .map(([id, v]) => {
+        const r = reqs[Number(id.slice(1)) - 1]!
+        const why = v.rest.replace(/^[\s*:|—–-]+/, "").trim()
+        return `${id} (${r.need}) is ${v.verdict} in the text${why ? `: ${why}` : ""}. Say it as plainly as the user did («${r.quote}»).`
+      })
+  }
+
   /** The user's own words: their latest message if it came after the plugin asked, else the manager's text. */
   private async userWords(task: TaskState, text: string): Promise<string> {
     const last = await this.lastUserMessage(task.managerSession)
@@ -688,7 +847,13 @@ export class Team {
       task.output = this.outputPath(task, opts.output)
       if (existsSync(task.output)) writeFile(task, "existing.md", readFileSync(task.output, "utf8"))
     }
-    writeFile(task, "request.md", text)
+    const reqs = opts.requirements ?? []
+    const decisions = (opts.questions ?? []).map((q, i) => {
+      const given = opts.decisions?.[i]?.trim()
+      return { question: questionOnly(q), answer: given || recommendationOf(q) || "the option the team recommends", by: given ? "the user decided" : "recommended, decided by the team" }
+    })
+    writeFile(task, "request.md", join(text, decisionsText(decisions)))
+    if (reqs.length) writeFile(task, "requirements.md", requirementsText(reqs, decisions))
     const original = await this.lastUserMessage(managerSession)
     writeFile(task, "request-original.md", original?.text ?? text)
     const info = await this.ctx.session.get({ sessionID: managerSession }).catch(() => undefined)
@@ -1228,6 +1393,7 @@ export class Team {
         title: `team: ${role} (${pending.mode}${pending.mode === "fix" ? ` plan ${task.plan} step ${task.step}` : ""})`,
         prompt,
         signal,
+        verdicts: this.verdictSpec(task, pending),
       },
       this.log,
     )
@@ -1457,6 +1623,7 @@ export class Team {
           task.doc = task.seq.doc
           const failed = task.output ? this.writeOutput(task, task.output, text, file) : undefined
           task.docSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
+          if (this.checkAssumptions(task, text)) return
           return this.afterDraft(task)
         }
         const scoped = !!(task.scope && r.sections?.length)
@@ -1474,9 +1641,28 @@ export class Team {
         task.planSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
         const review = task.planRisk && !task.skipArchitectReview
         task.skipArchitectReview = false
-        if (review) {
-          task.pending = { mode: "architect_review", fresh: true }
-        } else this.afterDraft(task)
+        const next: Pending | undefined = review ? { mode: "architect_review", fresh: true } : undefined
+        if (this.checkAssumptions(task, text, next)) return
+        if (next) task.pending = next
+        else this.afterDraft(task)
+        return
+      }
+      case "request_check": {
+        const file = this.reportFile(task, "analysis", p.mode, r)
+        this.record(task, p.mode, r, file)
+        const spec = this.verdictSpec(task, p)!
+        const wrong = [...verdicts(r.content, spec)].filter(([, v]) => v.verdict === "wrong").map(([id]) => id)
+        if (wrong.length) {
+          task.plannerUnseen.push(file)
+          task.pending = {
+            mode: "planner",
+            note: `The Intern checked your assumptions in the code (${file}): ${wrong.join(", ")} ${wrong.length === 1 ? "is" : "are"} wrong. Revise the ${docName(task)} so it rests on what the code does, and ${reviseAs(task, draftIsDoc(task) ? "DOC" : "PLAN", docName(task))}.`,
+            afterReview: task.architectNote,
+          }
+          return
+        }
+        if (p.then) task.pending = p.then
+        else this.afterDraft(task)
         return
       }
       case "architect_doc_review": {
@@ -1616,6 +1802,41 @@ export class Team {
   }
 
   /** A new plan or document: Architect's review first if the user asked for it in the request, else the user. */
+  /**
+   * A draft that rests on assumptions about the code ([A1] assumed: …) gets them checked by the Intern before anyone
+   * builds on it. True when the check is queued; `then` runs after it when every assumption holds.
+   */
+  private checkAssumptions(task: TaskState, text: string, then?: Pending): boolean {
+    const ids = claimIds(text)
+    if (!ids.length || task.workflow === "research" || (task.assumptionChecks ?? 0) >= ASSUMPTION_ROUNDS) return false
+    task.assumptionChecks = (task.assumptionChecks ?? 0) + 1
+    task.pending = { mode: "request_check", ids, note: assumptionCheckPrompt(claimLines(text, ids)), then }
+    return true
+  }
+
+  /** The verdict lines a report must hold: the assumption check's, and a review's against requirements.md. */
+  private verdictSpec(task: TaskState, p: Pending): VerdictSpec | undefined {
+    if (p.mode === "request_check" && p.ids?.length)
+      return {
+        ids: p.ids,
+        words: ["confirmed", "wrong"],
+        evidence: ["confirmed", "wrong"],
+        quoteInFile: { root: task.workspace, words: ["confirmed", "wrong"] },
+        format: "`A1: confirmed «the code line» path:line` or `A1: wrong «the code line» path:line — what is true instead`",
+      }
+    if (p.mode !== "review" && p.mode !== "review_trivial") return undefined
+    const ids = requirementIds(readTaskFile(task, "requirements.md") ?? "")
+    if (!ids.length) return undefined
+    return {
+      ids,
+      words: ["not met", "met"],
+      evidence: ["met"],
+      quoteInFile: { root: task.workspace, words: ["met"] },
+      format: REVIEW_VERDICT_FORMAT,
+      notWith: { status: "PASS", words: ["not met"] },
+    }
+  }
+
   private afterDraft(task: TaskState) {
     if (task.reviewFirst && (task.reviews ?? 0) < this.config.limits.architectReviews) {
       task.reviewFirst = false
@@ -1637,6 +1858,7 @@ export class Team {
     task.stageRun = (task.stageRun ?? 0) + 1
     task.needInfo = 0
     task.draftAsks = 0
+    task.assumptionChecks = 0
     task.plannerUnseen = []
     this.resetLadder(task)
   }

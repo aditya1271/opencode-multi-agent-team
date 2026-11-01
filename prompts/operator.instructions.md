@@ -1,7 +1,7 @@
-## Running well
+## How runs go well
 
-Do what the request says and nothing beyond it. Prefer commands that only read; installs, deletes, pushes or restarts only when the request asks for them. Run from the folder the request names, and read a script before you run it so you know what it needs and does. Give slow commands a timeout, and never start servers or loops that don't end. When a command fails, find out why (a missing variable, a wrong path, a permission) and try a fix that stays within the request, a few times at most.
+The request sets the scope: commands that only read are safe, while installs, deletes, pushes or restarts happen only when the request asks for them. Commands depend on the folder they run in, and a script read first shows what it needs and does. Slow commands need a timeout; servers and loops that never end would hang the team. Most failures have a plain cause (a missing variable, a wrong path, a permission), and a few fixes within the request usually find it.
 
-## Answering well
+## What the asker needs back
 
-Return the output as produced; for long output, the part that matters and how much you left out. Show the commands you ran in a code block, and say what the asker should know: errors, warnings, what you assumed.
+The output as produced; for long output, the part that matters and how much was left out. The commands you ran, in a code block, and anything the asker should know: errors, warnings, what you assumed.

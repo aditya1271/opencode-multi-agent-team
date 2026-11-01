@@ -1,6 +1,7 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
-import { applyFixes, blockFixes, fixRequest, numbered, sectionFixes, type Fix } from "./fixes.ts"
+import { applyFixes, blockFixes, fixRequest, lineFixes, numbered, sectionFixes, type Fix } from "./fixes.ts"
+import { verdictProblems, verdicts } from "./polish.ts"
 import { checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
 import { runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
 import { checkEdits, splice, split, titleOf, unrecommended, unsummarized, type Section } from "./sections.ts"
@@ -8,6 +9,9 @@ import { consultSide, consultsUsed, draftIsDoc, isDocWorkflow, isScopedWriter, r
 
 /** Times the Intern's findings go back for code blocks that don't match their files. */
 const QUOTE_RETRIES = 2
+
+/** Times a report goes back for verdict lines; after that it counts as it is. */
+const VERDICT_RETRIES = 2
 
 const SECTION_EDIT = {
   type: "object",
@@ -43,6 +47,7 @@ const BASE: Record<Mode, string[]> = {
   planner_consult: ["ANSWER"],
   planner_stepfix: ["STEP", "REPLAN"],
   operator: ["RESULT", "FAILED"],
+  request_check: ["CHECKED"],
 }
 
 /** A plan step's first line: `N. **Title**: <what the step achieves>`. */
@@ -148,7 +153,7 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
 }
 
 /** Modes whose reports can be refused for parts code checks, and then fixed part by part. */
-const FIXABLE: Mode[] = ["intern", "analyst", "planner"]
+const FIXABLE: Mode[] = ["intern", "analyst", "planner", "review", "review_trivial", "request_check"]
 
 const FIX = {
   type: "object",
@@ -304,6 +309,16 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (typeof recommendErr === "string") throw new Error(recommendErr)
   if (recommendErr)
     refuse(run, input, recommendErr, "Every section the user reviews opens with a Summary line and closes with a Recommended line: the user sees only those lines unless they ask for details. These are missing.")
+  if (run.verdicts) {
+    const problems = verdictProblems(input.content, run.verdicts)
+    if (problems.length && (run.verdictRejects ?? 0) < VERDICT_RETRIES) {
+      run.verdictRejects = (run.verdictRejects ?? 0) + 1
+      refuse(run, input, lineFixes(problems), "The plugin checks your verdict lines, one per id; these are missing or don't hold.")
+    }
+    const bar = run.verdicts.notWith
+    const failing = bar && input.status === bar.status ? [...verdicts(input.content, run.verdicts)].filter(([, v]) => bar.words.includes(v.verdict)).map(([id]) => id) : []
+    if (failing.length) throw new Error(`${bar!.status} doesn't fit your own verdicts: ${failing.join(", ")} not met. Report ISSUES with the fix for each, or correct the verdict line.`)
+  }
   if (run.mode === "analyst_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))
     if (missing.length) throw new Error(`Answer every question by its id; missing: ${missing.join(", ")}.`)

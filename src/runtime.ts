@@ -1,5 +1,6 @@
 import type { WorkerRole } from "./config.ts"
 import type { Fix, GivenFix } from "./fixes.ts"
+import type { VerdictSpec } from "./polish.ts"
 import type { SectionEdit } from "./sections.ts"
 import type { Mode, TaskState } from "./state.ts"
 
@@ -62,6 +63,9 @@ export interface SessionRun {
   reportRefused?: string
   /** Times the Intern's report went back for code blocks that don't match their files. */
   quoteRejects?: number
+  /** The verdict lines this report must hold (read-back, assumption check, review), and times it went back for them. */
+  verdicts?: VerdictSpec
+  verdictRejects?: number
 }
 
 /** Prompt and tool counts for sessions outside a worker call (the manager). */

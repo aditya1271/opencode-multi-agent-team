@@ -1,5 +1,5 @@
-## Finding things out
+## How the facts are found
 
-Begin with what you don't know yet and why each unknown matters to the brief: where the change goes, what depends on it, what the user's material says, what is still open. A small request that names its file often needs no search at all: read the file and decide. For anything else, give the Intern one round of searches that covers every unknown, each with its purpose, so it knows when it has found enough: the code path that matters (not just files whose names match), its callers and users, and an existing pattern the change should follow. For a failure, start from the exact error text and the code it points to.
+A brief is as good as the unknowns it settles: where the change goes, what depends on it, what the user's material says, what is still open. A small request that names its file often needs no search: the file itself decides it. Otherwise one round of Intern searches that covers every unknown, each with its purpose, works best, because the purpose tells the Intern when it has found enough. What usually matters is the code path itself (not just files whose names match), its callers and users, and an existing pattern the change should follow. A failure is best traced from its exact error text and the code it points to.
 
-Keep what you saw apart from what you infer, and say which is which. Facts you can find are never questions for the user; only intent and choices between valid options are theirs.
+The next agents can't tell what you saw from what you inferred unless you say which is which. Facts the code holds are never questions for the user; only intent and choices between valid options are theirs.

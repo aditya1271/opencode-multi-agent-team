@@ -2,6 +2,7 @@ import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { agentId } from "./agents.ts"
 import { fallbackModels, modelLabel, modelsFor, tierOf, type Config, type WorkerRole } from "./config.ts"
+import type { VerdictSpec } from "./polish.ts"
 import { beginRun, runs, type Report, type SessionRun } from "./runtime.ts"
 import type { Mode, TaskState } from "./state.ts"
 import type { UsageDelta } from "./usage.ts"
@@ -18,6 +19,8 @@ export interface RunInput {
   title: string
   prompt: string
   signal: AbortSignal
+  /** Verdict lines the report must hold (checked when it is sent). */
+  verdicts?: VerdictSpec
 }
 
 export interface RunResult {
@@ -97,6 +100,7 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
     role: input.role,
     mode: input.mode,
     task: input.task,
+    verdicts: input.verdicts,
     toolLimit: config.limits.toolCalls[input.role],
   })
   run.base = tokenCounts(before.tokens as Tokens)

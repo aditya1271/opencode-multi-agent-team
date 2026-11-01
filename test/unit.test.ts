@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { detectVcs, vcsLine } from "../src/vcs.ts"
 import { runAgent, skillText } from "../src/run.ts"
 import path from "node:path"
+import { checkCoverage, claimIds, claimLines, decisionsText, dropModeOnly, joined, modeOnly, multiSentence, requirementIds, requirementsText, untagged, verdictProblems, verdicts, type VerdictSpec } from "../src/polish.ts"
 
 describe("config", () => {
   test("stripJsonc keeps strings and drops comments and trailing commas", () => {
@@ -390,7 +391,7 @@ describe("prompts", () => {
   test("default instructions fill the core prompt", () => {
     const p = systemPrompt(DEFAULTS, "intern")
     expect(p).toContain("You are the Intern")
-    expect(p).toContain("## Searching well")
+    expect(p).toContain("## How searching works here")
     expect(p).not.toContain("{{instructions}}")
     expect(p).not.toContain("## Your tools\n\n-")
   })
@@ -400,7 +401,7 @@ describe("prompts", () => {
     })
     const p = systemPrompt(config, "intern")
     expect(p).toContain("Use the RAG docs first.")
-    expect(p).not.toContain("## Searching well")
+    expect(p).not.toContain("## How searching works here")
     expect(p).toContain("Call `report` once")
     expect(p).toContain("- Tools: docs_search.")
     expect(p.trimEnd().endsWith("Answer in English.")).toBe(true)
@@ -416,7 +417,7 @@ describe("front agents", () => {
     expect(plan).toContain("`implement`")
     expect(research).toContain("A follow-up question on a finished report")
     for (const p of [build, plan, research]) {
-      expect(p).toContain("## Sending the user's messages")
+      expect(p).toContain("## How messages reach the team")
       expect(p).not.toMatch(/\{\{\w+\}\}/)
     }
     expect(plan).toContain("think critically")
@@ -1801,5 +1802,81 @@ describe("version control", () => {
     const p = vcsLine("/p4/ws/src", { kind: "perforce", client: "me_ws", root: "/p4/ws" })
     expect(p).toContain("Version control: Perforce workspace (client me_ws, root /p4/ws)")
     expect(p).not.toContain("p4_* tools")
+  })
+})
+
+describe("polish checks", () => {
+  const msg = "Hi team! Add a timeout for any role, configurable per role. Thanks"
+  test("every quote is the user's words and covers the message, except filler", () => {
+    const ok = checkCoverage([msg], [{ quote: "Add a timeout for any role", need: "timeouts for every role" }, { quote: "configurable per role", need: "per-role setting" }], ["Hi team", "Thanks"])
+    expect(ok).toEqual({ badRequirements: [], badSkipped: [], uncovered: [] })
+    const gap = checkCoverage([msg], [{ quote: "Add a timeout for … role", need: "timeouts" }], [])
+    expect(gap.badRequirements).toEqual([])
+    expect(gap.uncovered).toEqual(["team", "configurable per role"])
+    const bad = checkCoverage([msg], [{ quote: "add timeouts for roles", need: "x" }], ["hello"])
+    expect(bad.badRequirements).toEqual([1])
+    expect(bad.badSkipped).toEqual(["hello"])
+  })
+  test("quotes may come from earlier messages; fenced blocks need no quote", () => {
+    const c = checkCoverage(["Use the log below.\n```\nERROR 42 at foo\n```", "Fix the crash in parser"], [{ quote: "Fix the crash", need: "fix" }], ["Use the log below"])
+    expect(c).toEqual({ badRequirements: [], badSkipped: [], uncovered: [] })
+  })
+  test("a requirement spanning a sentence end or semicolon is bundled", () => {
+    const m = "Old entries are dropped after a day; new ones stay. Use e.g. `tsc -p .` to build. Keep it fast."
+    const r = (quote: string) => ({ quote, need: "x" })
+    expect(multiSentence([m], [r("Old entries are dropped after a day; new ones stay"), r("Use e.g. `tsc -p .` to build"), r("Keep it fast")])).toEqual([1])
+    expect(multiSentence([m], [r("new ones stay … Keep it fast")])).toEqual([1])
+    expect(multiSentence([m], [r("Old entries are dropped after a day"), r("new ones stay")])).toEqual([])
+  })
+  test("'and' between two parts of three real words each is flagged; short list items aren't", () => {
+    const r = (quote: string) => ({ quote, need: "x" })
+    const j = joined([r("Run the type check before every report and put its first error line in the summary"), r("show the columns calls, input, output, and cost, in that order")])
+    expect(j).toEqual([{ n: 1, parts: ["Run the type check before every report", "put its first error line in the summary"] }])
+  })
+  test("a mode request is not a requirement: dropped, tags renumbered", () => {
+    expect(modeOnly("Mode: safe auto.")).toBe(true)
+    expect(modeOnly("just do it")).toBe(true)
+    expect(modeOnly("make it safe to retry")).toBe(false)
+    const out = dropModeOnly([{ quote: "Mode: safe auto.", need: "safe" }, { quote: "rotate the log", need: "rotate" }], "[R1] Safe auto. [R2] Rotate the log.")
+    expect(out).toEqual({ requirements: [{ quote: "rotate the log", need: "rotate" }], text: " Safe auto. [R1] Rotate the log." })
+  })
+  test("the polished text tags each requirement", () => {
+    expect(untagged("[R1] timeouts; [R3] docs", 3)).toEqual(["R2"])
+  })
+  test("requirements file and decisions", () => {
+    const d = [{ question: "Default?\nRecommended: 5 min", answer: "5 min", by: "the user decided" }]
+    const text = requirementsText([{ quote: "any role", need: "every role" }], d)
+    expect(requirementIds(text)).toEqual(["R1", "D1"])
+    expect(decisionsText(d)).toContain("[D1] Default? → 5 min (the user decided)")
+  })
+  test("verdict lines: missing ids, quotes and evidence", () => {
+    const spec: VerdictSpec = { ids: ["R1", "R2", "R3"], words: ["missing", "weakened", "kept"], quoteIn: { text: "Every role gets a timeout.", words: ["kept", "weakened"] }, format: "R1: kept «…»" }
+    const content = "- **R1**: kept «every role gets a timeout»\n| R2 | kept «some roles» |"
+    expect([...verdicts(content, spec).keys()]).toEqual(["R1", "R2"])
+    const problems = verdictProblems(content, spec)
+    expect(problems.map((p) => p.id)).toEqual(["R3", "R2"])
+    expect(problems[0]!.at).toBeUndefined()
+    expect(problems[1]!.at).toBe(1)
+  })
+  test("assumption verdicts quote the file they cite", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-claim-"))
+    try {
+      writeFileSync(path.join(root, "a.ts"), "export const limit = 5\n")
+      const spec: VerdictSpec = { ids: ["A1", "A2"], words: ["confirmed", "wrong"], evidence: ["confirmed", "wrong"], quoteInFile: { root, words: ["confirmed", "wrong"] }, format: "A1: confirmed «…» path:line" }
+      const p = verdictProblems("A1: confirmed «export const limit = 5» a.ts:1\nA2: wrong «limit = 9» a.ts:1", spec)
+      expect(p.map((x) => x.id)).toEqual(["A2"])
+      expect(claimIds("x [A1] assumed: a\n[A2] assumed: b [A1]")).toEqual(["A1", "A2"])
+      expect(claimLines("1. step\n- [A1] assumed: a\n", ["A1"])).toBe("- [A1] assumed: a")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  test("a review is refused line by line, then PASS must fit its verdicts", () => {
+    const spec: VerdictSpec = { ids: ["R1", "R2"], words: ["not met", "met"], evidence: ["met"], format: "R1: met — path:line", notWith: { status: "PASS", words: ["not met"] } }
+    beginRun("ses_rev", { role: "reviewer", mode: "review", toolLimit: 10, verdicts: spec })
+    expect(() => acceptReport(DEFAULTS, "ses_rev", { status: "PASS", summary: "ok", content: "R1: met — a.ts:3 sets it\nR2: met, looks fine" })).toThrow("F1")
+    expect(() => acceptReport(DEFAULTS, "ses_rev", { status: "PASS", fixes: [{ id: "F1", text: "R2: not met — no docs" }] } as never)).toThrow("not met")
+    expect(acceptReport(DEFAULTS, "ses_rev", { status: "ISSUES", summary: "docs", content: "R1: met — a.ts:3\nR2: not met — no docs\n\n1. add docs" })).toContain("Report received")
+    runs.delete("ses_rev")
   })
 })

@@ -49,6 +49,7 @@ export type Mode =
   | "planner_consult"
   | "planner_stepfix"
   | "operator"
+  | "request_check"
 
 /** Who asks the Planner a question mid-work (status CONSULT); each has its own pair session with the Planner. */
 export type ConsultSide = "developer" | "analyst"
@@ -97,6 +98,7 @@ export const MODE_ROLE: Record<Mode, WorkerRole> = {
   planner_consult: "planner",
   planner_stepfix: "planner",
   operator: "operator",
+  request_check: "intern",
 }
 
 /** code: change files (the default). plan: write a plan document. research: write a findings report. */
@@ -281,6 +283,8 @@ export interface TaskState {
   needInfo: number
   /** The Planner's rounds of questions (ASK, or NEED_INFO in research) since its last draft (limits.askRoundsPerDraft). */
   draftAsks?: number
+  /** Rounds in which the Intern checked the assumptions of this stage's drafts ([A1] assumed: …). */
+  assumptionChecks?: number
   /** Intern rounds Analyst used since its last report (limits.analystSearchRounds). */
   analystSearches?: number
   questionRounds: number
