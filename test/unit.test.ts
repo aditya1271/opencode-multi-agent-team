@@ -1830,6 +1830,12 @@ describe("evidence by selector", () => {
     // A closing line ends the range at the first one as far out as the first line, however deep the code in between.
     expect((find({ first: "if (total > 9) {", last: "}" }) as any).to).toBe(6)
     expect((find({ first: "export function run(a: number, b: number) {", last: "  }" }) as any).to).toBe(8)
+    // A closing line deeper than the first (the `)` of a call under a case label) is found by the indentation it was given.
+    writeFileSync(path.join(ws, "c.ts"), ["switch (x) {", "  case \"a\":", "    return join(", "      one,", "      two(1),", "    )", "  case \"b\":", "}"].join("\n"))
+    expect((find({ file: "c.ts", first: "case \"a\":", last: "    )" }) as any).to).toBe(6)
+    // Without a way to tell which one it is, the answer lists where closing lines like it are.
+    expect(find({ file: "c.ts", first: "case \"a\":", last: ")" })).toContain("the next like it: line 6 (indented 4)")
+    expect(find({ file: "c.ts", first: "case \"a\":", last: "})" })).toContain("the closing line `})` doesn't follow")
     // A last line that occurs earlier ends the range there: the first match after the first line.
     expect((find({ first: "export function run(a: number, b: number) {", last: "return 9" }) as any).to).toBe(6)
   })

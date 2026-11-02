@@ -103,10 +103,16 @@ export function findEvidence(item: Evidence, root: string): Found | string {
   let to = from
   const last = item.last === undefined ? undefined : bare(item.last)
   if (last && !hasWord(last)) {
-    // A closing line ("}") is the first one like it that sits as far out as the first line.
+    // A closing line ("}") is the first one like it that sits as far out as the first line. One that sits deeper (the `)` of a
+    // `return f(` under a `case`) is found by the indentation the Intern gave it.
     const key = squash(last)
-    const end = lines.findIndex((l, i) => i > from && squash(l).startsWith(key) && indent(l) <= indent(lines[from]!))
-    if (end < 0) return `the closing line \`${last}\` doesn't follow the first line (line ${from + 1}) at its indentation in ${item.file}`
+    const after = lines.map((l, i) => ({ l, i })).filter(({ l, i }) => i > from && squash(l).startsWith(key))
+    const given = indent(item.last!.replace(/^\s*\d+:\s/, "").replace(/^\n+/, ""))
+    const end = (after.find(({ l }) => indent(l) <= indent(lines[from]!)) ?? (given > 0 ? after.find(({ l }) => indent(l) === given) : undefined))?.i ?? -1
+    if (end < 0) {
+      const near = after.slice(0, 3).map(({ l, i }) => `line ${i + 1} (indented ${indent(l)})`)
+      return `the closing line \`${last}\` doesn't follow the first line (line ${from + 1}) at its indentation in ${item.file}${near.length ? `; the next like it: ${near.join(", ")}` : ""}`
+    }
     to = end
   } else if (last && squash(last) !== squash(first)) {
     const ends = matches(lines, last, from)
