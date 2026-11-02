@@ -2053,3 +2053,107 @@ describe("call record", () => {
     rmSync(task.dir, { recursive: true, force: true })
   })
 })
+
+describe("one flow: confirm dialog, step loop, sessions in the call list", () => {
+  const signal = new AbortController().signal
+  const setup = () => {
+    const root = mkdtempSync(path.join(tmpdir(), "omat-flow-"))
+    const ctx = { location: { directory: root }, session: { context: async () => [], get: async () => undefined } }
+    const team = new Team(ctx as never, merge(DEFAULTS, { taskDir: root }), () => {}) as any
+    team.claimWaitMs = 50
+    team.ask = async (_s: string, text: string) => `ASKED: ${text}`
+    return { team, root, done: () => rmSync(root, { recursive: true, force: true }) }
+  }
+  test("a TUI shows the polished text without tags and the call waits for the choice", async () => {
+    const { team, done } = setup()
+    try {
+      let shown: any
+      team.offerConfirm = (s: string) =>
+        setTimeout(() => {
+          shown = team.confirmClaim(s)
+          expect(team.confirmClaim(s)).toBeUndefined()
+          team.confirmDone(s, shown.id, true)
+        }, 0)
+      expect(await team.handle({ action: "ask", text: "[R1] what is a dir manager?" }, "ses_d1", signal)).toBe("ASKED: [R1] what is a dir manager?")
+      expect(shown).toMatchObject({ title: "Ask the team this?", text: "what is a dir manager?" })
+      team.offerConfirm = (s: string) => setTimeout(() => team.confirmDone(s, team.confirmClaim(s).id, true, "  my own words "), 0)
+      expect(await team.handle({ action: "ask", text: "x" }, "ses_d1", signal)).toBe("ASKED: my own words")
+      team.offerConfirm = (s: string) => setTimeout(() => team.confirmDone(s, team.confirmClaim(s).id, false), 0)
+      expect(await team.handle({ action: "ask", text: "x" }, "ses_d1", signal)).toContain("Not sent: the user chose Cancel")
+    } finally {
+      done()
+    }
+  })
+  test("no TUI takes the text: the front agent asks as before, and a stopped run closes the dialog", async () => {
+    const { team, done } = setup()
+    try {
+      team.offerConfirm = () => {}
+      expect(await team.handle({ action: "ask", text: "x" }, "ses_d2", signal)).toContain("Held for the user's confirmation")
+      const stop = new AbortController()
+      let withdrawn = 0
+      team.withdrawConfirm = () => withdrawn++
+      team.claimWaitMs = 5000
+      team.offerConfirm = (s: string) => {
+        team.confirmClaim(s)
+        setTimeout(() => stop.abort(), 0)
+      }
+      expect(await team.handle({ action: "ask", text: "x" }, "ses_d3", stop.signal)).toContain("Not sent")
+      expect(withdrawn).toBe(1)
+    } finally {
+      done()
+    }
+  })
+  test("send ignores decisions when the request had no open points; blank skipped entries are dropped", async () => {
+    const { team, done } = setup()
+    try {
+      await team.handle({ action: "ask", text: "x" }, "ses_d4", signal)
+      counter("ses_d4").asked = (counter("ses_d4").asked ?? 0) + 1
+      expect(await team.handle({ action: "send", decisions: ["Send the question"] }, "ses_d4", signal)).toBe("ASKED: x")
+      const input: any = { action: "start", skipped: ["", "  "], requirements: [], text: "t" }
+      await team.checkRequest("ses_d4", input, signal)
+      expect(input.skipped).toEqual([])
+    } finally {
+      done()
+    }
+  })
+  test("a task runs on until it needs the user", async () => {
+    const { team, done } = setup()
+    try {
+      const task: any = { phase: "running", pending: { mode: "analyst" }, auto: undefined }
+      let n = 0
+      team.stepOnce = async (t: any) => {
+        n++
+        if (n === 3) {
+          t.phase = "brief"
+          t.pending = undefined
+        }
+        return `out ${n}`
+      }
+      expect(await team.step(task, signal)).toBe("out 3")
+      expect(n).toBe(3)
+      const stop = new AbortController()
+      task.phase = "running"
+      task.pending = { mode: "analyst" }
+      n = 0
+      team.stepOnce = async () => (stop.abort(), `out ${++n}`)
+      expect(await team.step(task, stop.signal)).toBe("out 1")
+    } finally {
+      done()
+    }
+  })
+  test("each call says whether it began a session or continues one", () => {
+    const list: CallRecord[] = []
+    const a = startCall(list, { n: 1, role: "analyst", mode: "analyst", ask: "a" })
+    endCall(a, { end: "report", notes: [] })
+    a.session = "ses_a"
+    const i = startCall(list, { n: 2, role: "intern", mode: "intern", ask: "i", asker: "analyst" })
+    i.session = "ses_i"
+    const b = startCall(list, { n: 3, role: "analyst", mode: "analyst", ask: "again", session: "ses_a" })
+    const c = startCall(list, { n: 4, role: "analyst", mode: "analyst", ask: "again", session: "ses_a" })
+    expect([a.resumed, a.of, b.resumed, b.of, c.of]).toEqual([undefined, undefined, true, 1, 1])
+    const rows = callRows(list, () => undefined)
+    expect(rows.map((r) => [r.n, r.resumed, r.of])).toEqual([[1, false, undefined], [2, false, undefined], [3, true, 1], [4, true, 1]])
+    expect(callsText(list)).toContain("analyst (same session as #1, remembers it)")
+    expect(callsText(list)).toContain("intern (asked by #1) (new session)")
+  })
+})

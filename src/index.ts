@@ -119,6 +119,14 @@ export default Plugin.define({
         opened.add(sessionID)
         return { draft }
       },
+      confirmClaim: async (input) => {
+        const offer = team.confirmClaim((input as { sessionID: string }).sessionID)
+        return offer ? { offer } : {}
+      },
+      confirmDone: async (input) => {
+        const { sessionID, id, send, text } = input as { sessionID: string; id: number; send: boolean; text?: string }
+        return { ok: team.confirmDone(sessionID, id, send, text) }
+      },
       reviewSave: async (input) => {
         const { sessionID, key, progress } = input as ReviewSave
         opened.delete(sessionID)
@@ -138,6 +146,9 @@ export default Plugin.define({
       opened.delete(sessionID)
       void rpc.events.emit("review", { sessionID }).catch(() => {})
     }
+
+    team.offerConfirm = (sessionID) => void rpc.events.emit("confirm", { sessionID }).catch(() => {})
+    team.withdrawConfirm = (sessionID) => void rpc.events.emit("unconfirm", { sessionID }).catch(() => {})
 
     await registerGuards(ctx, config)
     await registerFallback(ctx, config, log)

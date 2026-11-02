@@ -10,6 +10,11 @@ export interface CallRecord {
   parent?: number
   ask: string
   model?: string
+  /** The agent session the call ran in, and the earlier call that began it when this one continues that session. */
+  session?: string
+  of?: number
+  /** The call continued a session that already existed (it still knows what that session saw). */
+  resumed?: boolean
   started: number
   ms?: number
   /** Unset while the call runs (or after a restart cut it off). */
@@ -66,9 +71,22 @@ export function askOf(pending: Pending, calls: CallRecord[] = []): string {
 }
 
 /** Adds a call to the list as it starts. n 0: a call outside the task's numbering (a question, an errand). */
-export function startCall(list: CallRecord[], call: { n?: number; role: WorkerRole; mode: Mode; ask: string; asker?: Mode; model?: string }): CallRecord {
+export function startCall(list: CallRecord[], call: { n?: number; role: WorkerRole; mode: Mode; ask: string; asker?: Mode; model?: string; session?: string }): CallRecord {
   const parent = call.asker ? list.findLast((c) => c.mode === call.asker) : undefined
-  const record: CallRecord = { n: call.n ?? 0, role: call.role, mode: call.mode, parent: parent?.n, ask: call.ask, model: call.model, started: Date.now(), notes: [] }
+  const first = call.session ? list.find((c) => c.session === call.session) : undefined
+  const origin = first && (first.of ?? first.n)
+  const record: CallRecord = {
+    n: call.n ?? 0,
+    role: call.role,
+    mode: call.mode,
+    parent: parent?.n,
+    ask: call.ask,
+    model: call.model,
+    ...(call.session && { session: call.session, resumed: true }),
+    ...(origin && { of: origin }),
+    started: Date.now(),
+    notes: [],
+  }
   list.push(record)
   if (list.length > KEEP) list.splice(0, list.length - KEEP)
   return record
@@ -104,6 +122,10 @@ export function callTree(calls: CallRecord[]): { call: CallRecord; depth: number
 }
 
 export interface CallRow {
+  n: number
+  /** The call ran in a session that already existed; of: the call that began it. */
+  resumed: boolean
+  of?: number
   role: WorkerRole
   depth: number
   ask: string
@@ -127,6 +149,9 @@ export function callRows(calls: CallRecord[], live: (call: CallRecord) => string
       const state = notes ? "running" : !c.end ? "cut" : failed(c) ? "failed" : "done"
       const result = c.end === "report" ? [c.status, c.outcome].filter(Boolean).join(": ") : c.outcome
       return {
+        n: c.n,
+        resumed: !!c.resumed,
+        ...(c.of && { of: c.of }),
         role: c.role,
         depth,
         ask: c.ask,
@@ -144,7 +169,7 @@ export function callsText(calls: CallRecord[], task?: TaskState): string {
   if (!calls.length) return "The team has made no agent call yet."
   const lines = callTree([...calls].sort((a, b) => a.started - b.started).slice(-25)).flatMap(({ call: c, depth }) => {
     const pad = "  ".repeat(depth)
-    const head = `${pad}${c.n ? `#${c.n} ` : ""}${c.role}${c.parent !== undefined ? ` (asked by #${c.parent})` : ""} · ${c.end ? mins(c.ms ?? 0) : "no end recorded"}${c.model ? ` · ${c.model}` : ""}`
+    const head = `${pad}${c.n ? `#${c.n} ` : ""}${c.role}${c.parent !== undefined ? ` (asked by #${c.parent})` : ""}${c.resumed ? ` (same session${c.of ? ` as #${c.of}` : ""}, remembers it)` : " (new session)"} · ${c.end ? mins(c.ms ?? 0) : "no end recorded"}${c.model ? ` · ${c.model}` : ""}`
     const result = c.end === "report" ? `${c.status ?? "reported"}${c.outcome ? `: ${c.outcome}` : ""}` : c.end ? `FAILED (${c.end})${c.outcome ? `: ${c.outcome}` : ""}` : "unfinished"
     return [head, `${pad}  asked: ${c.ask}`, `${pad}  result: ${result}`, ...c.notes.map((n) => `${pad}  note: ${n}`)]
   })

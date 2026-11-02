@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js"
 import { compact, line, modelsText, TeamStats, type SidebarStats, type StatsRow } from "./rpc.ts"
+import { setupConfirm } from "./confirm.tsx"
 import { setupReview } from "./review.tsx"
 
 interface Prefs {
@@ -69,6 +70,7 @@ export default Plugin.define({
     }
 
     const review = setupReview(context, rpc, rootOf, rpcOptions, { ...color, accent: color.running })
+    const confirm = setupConfirm(context, rpc, rootOf, rpcOptions, { ...color, accent: color.running })
 
     function TeamSection(props: { sessionID: string }) {
       const [stats, setStats] = createSignal<SidebarStats | undefined>()
@@ -170,7 +172,7 @@ export default Plugin.define({
                   void setPrefs((d) => void (d.calls = d.calls === false)).catch(() => {})
                 }}
               >
-                <text fg={color.muted()}>{`${prefs.calls === false ? "▶" : "▼"} Calls`}</text>
+                <text fg={color.muted()}>{`${prefs.calls === false ? "▶" : "▼"} Calls · ↺#n same session as #n`}</text>
               </box>
               <Show when={prefs.calls !== false}>
                 <For each={stats()?.calls ?? []}>
@@ -179,8 +181,10 @@ export default Plugin.define({
                     const hue = () => (c.state === "running" ? color.running() : c.state === "failed" ? color.warning() : color.header())
                     return (
                       <>
-                        <text fg={hue()}>{fit(`${pad}${c.depth ? "└" : " "}${MARK[c.state]} ${c.role} ${duration(c.secs)}`)}</text>
-                        <text fg={color.muted()}>{fit(`${pad}   ${c.ask}`)}</text>
+                        <text fg={hue()}>{fit(`${pad}${c.depth ? "└" : " "}${MARK[c.state]} ${c.n ? `#${c.n} ` : ""}${c.role} ${duration(c.secs)}`)}</text>
+                        <For each={wrap(`${c.resumed ? (c.of ? `↺#${c.of}` : "↺") : "new"} · ${c.ask}`, WIDTH - pad.length - 3)}>
+                          {(l) => <text fg={color.muted()}>{`${pad}   ${l}`}</text>}
+                        </For>
                         <Show when={c.state === "failed" && c.result}>
                           <text fg={color.warning()}>{fit(`${pad}   ${c.result}`)}</text>
                         </Show>
@@ -261,6 +265,7 @@ export default Plugin.define({
     return () => {
       stopSlot()
       review.stop()
+      confirm.stop()
     }
   },
 })

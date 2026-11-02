@@ -97,6 +97,9 @@ export const TeamStats = Rpc.define({
               type: "object",
               properties: {
                 role: { type: "string" },
+                n: { type: "number" },
+                resumed: { type: "boolean" },
+                of: { type: "number" },
                 depth: { type: "number" },
                 ask: { type: "string" },
                 state: { type: "string", enum: ["running", "done", "failed", "cut"] },
@@ -105,7 +108,7 @@ export const TeamStats = Rpc.define({
                 result: { type: "string" },
                 notes: { type: "array", items: { type: "string" } },
               },
-              required: ["role", "depth", "ask", "state", "secs", "notes"],
+              required: ["n", "resumed", "role", "depth", "ask", "state", "secs", "notes"],
               additionalProperties: false,
             },
           },
@@ -187,6 +190,32 @@ export const TeamStats = Rpc.define({
         additionalProperties: false,
       },
     },
+    /** A TUI takes the text that waits for the user's choice (Send, Edit, Cancel); empty when none waits or another TUI took it. */
+    confirmClaim: {
+      input: sessionInput,
+      output: {
+        type: "object",
+        properties: {
+          offer: {
+            type: "object",
+            properties: { id: { type: "number" }, title: { type: "string" }, text: { type: "string" }, original: { type: "string" } },
+            required: ["id", "title", "text"],
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    /** The user's choice; text is their own version when they edited it. */
+    confirmDone: {
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" }, id: { type: "number" }, send: { type: "boolean" }, text: { type: "string" } },
+        required: ["sessionID", "id", "send"],
+        additionalProperties: false,
+      },
+      output: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false },
+    },
     /** The user closed the review dialog before the end: their progress is kept for the next open. */
     reviewSave: {
       input: {
@@ -207,6 +236,9 @@ export const TeamStats = Rpc.define({
     changed: { schema: sessionInput },
     /** A draft waits for review in this session: a TUI showing it opens the dialog. */
     review: { schema: sessionInput },
+    /** A text waits for the user's choice in this session, or no longer does (the run was stopped). */
+    confirm: { schema: sessionInput },
+    unconfirm: { schema: sessionInput },
   },
 })
 
@@ -272,7 +304,7 @@ export interface SidebarStats {
   /** A review waits in the dialog: done of total sections gone through. */
   review?: { title: string; done: number; total: number }
   /** The latest agent calls as a tree: who was asked what, how it went, what was off. */
-  calls?: { role: string; depth: number; ask: string; state: "running" | "done" | "failed" | "cut"; secs: number; model?: string; result?: string; notes: string[] }[]
+  calls?: { n: number; resumed: boolean; of?: number; role: string; depth: number; ask: string; state: "running" | "done" | "failed" | "cut"; secs: number; model?: string; result?: string; notes: string[] }[]
   /** Each role's configured models, main first. */
   models: { role: string; models: string[] }[]
   session: { tasks: number; questions: number; total: { calls: number; prompts: number; tools: number; tokens: number } }

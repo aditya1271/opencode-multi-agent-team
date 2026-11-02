@@ -175,7 +175,7 @@ export const TEAM_SCHEMA = {
       items: { type: "string" },
       description: "start only: open points that change what gets built, one per item, each with the options and a line `Recommended: <option>`. The plugin adds the chosen answers to the request (D1, D2, …).",
     },
-    decisions: { type: "array", items: { type: "string" }, description: "send, or start after the user answered: the user's answer to each question, in order." },
+    decisions: { type: "array", items: { type: "string" }, description: "Only for a request with open points (questions): the user's answer to each, in order, on send or on start. Never the text to confirm." },
   },
   required: ["action"],
   additionalProperties: false,
@@ -197,6 +197,30 @@ const SESSION_MODES: Partial<Record<Mode, WorkerRole>> = {
   planner_stepfix: "planner",
 }
 
+/** A text waiting for the user's choice in the TUI dialog. */
+interface Offer {
+  id: number
+  title: string
+  text: string
+  /** The user's own latest message, when the polished text differs from it. */
+  original?: string
+  claimed: boolean
+  settle: (answer: { send: boolean; text?: string } | undefined) => void
+}
+
+const CONFIRM_TITLES: Partial<Record<TeamAction, string>> = {
+  start: "Send this request to the team?",
+  ask: "Ask the team this?",
+  answer: "Send this answer to the team?",
+  run: "Have the team run this?",
+  change: "Send these comments to the team?",
+  section: "Send this comment to the team?",
+  review: "Send this to the team?",
+}
+
+/** No TUI takes a waiting text within this time: the front agent asks instead. */
+const CLAIM_WAIT_MS = 3000
+
 export class Team {
   readonly root: string
   private tasks = new Map<string, TaskState>()
@@ -216,6 +240,11 @@ export class Team {
   onChange: (managerSession: string) => void = () => {}
   /** Tells the TUIs a review waits in this session; one showing it opens the dialog. Unset: chat only. */
   offerDialog?: (managerSession: string) => void
+  /** Tells the TUIs a text waits for the user's choice (offerConfirm), or no longer does (withdrawConfirm). */
+  offerConfirm?: (managerSession: string) => void
+  withdrawConfirm?: (managerSession: string) => void
+  private offers = new Map<string, Offer>()
+  claimWaitMs = CLAIM_WAIT_MS
 
   constructor(
     private ctx: Context,
@@ -224,6 +253,61 @@ export class Team {
   ) {
     this.root = expandHome(config.taskDir)
     setOnWrite((task, file, before) => this.trackEdit(task.managerSession, [{ path: file, before }]))
+  }
+
+  // ---- confirm dialog (TUI) ----
+
+  /**
+   * Default mode: the polished text goes to the user in a TUI dialog ([Send] [Edit] [Cancel]) and this call waits for the
+   * choice, so no front-agent turn is spent on it. Undefined when no TUI shows the session: the front agent asks instead.
+   */
+  private async confirmInDialog(managerSession: string, input: TeamInput, signal: AbortSignal): Promise<{ send: boolean; text?: string } | undefined> {
+    if (!this.offerConfirm || signal.aborted) return undefined
+    const text = (input.text ?? "").replace(/\[R\d+\]\s*/g, "").trim()
+    const latest = (await this.lastUserMessage(managerSession))?.text?.trim()
+    const same = (a: string, b: string) => a.replace(/\s+/g, " ").toLowerCase() === b.replace(/\s+/g, " ").toLowerCase()
+    const offer: Offer = {
+      id: (this.offers.get(managerSession)?.id ?? 0) + 1,
+      title: CONFIRM_TITLES[input.action] ?? "Send this to the team?",
+      text,
+      ...(latest && !same(latest, text) && { original: latest.length > 600 ? `${latest.slice(0, 599)}…` : latest }),
+      claimed: false,
+      settle: () => {},
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => !offer.claimed && end(undefined), this.claimWaitMs)
+      const onAbort = () => {
+        this.withdrawConfirm?.(managerSession)
+        end({ send: false })
+      }
+      const end = (answer: { send: boolean; text?: string } | undefined) => {
+        clearTimeout(timer)
+        signal.removeEventListener("abort", onAbort)
+        if (this.offers.get(managerSession) === offer) this.offers.delete(managerSession)
+        resolve(answer)
+      }
+      offer.settle = end
+      signal.addEventListener("abort", onAbort, { once: true })
+      this.offers.set(managerSession, offer)
+      this.offerConfirm!(managerSession)
+    })
+  }
+
+  /** A TUI takes the waiting text to show it. */
+  confirmClaim(managerSession: string): Pick<Offer, "id" | "title" | "text" | "original"> | undefined {
+    const offer = this.offers.get(managerSession)
+    if (!offer || offer.claimed) return undefined
+    offer.claimed = true
+    const { id, title, text, original } = offer
+    return { id, title, text, original }
+  }
+
+  /** The user's choice in the dialog; text is their own version when they edited it. */
+  confirmDone(managerSession: string, id: number, send: boolean, text?: string): boolean {
+    const offer = this.offers.get(managerSession)
+    if (!offer || offer.id !== id) return false
+    offer.settle({ send, ...(send && text?.trim() && { text: text.trim() }) })
+    return true
   }
 
   // ---- review dialog (TUI) ----
@@ -436,14 +520,20 @@ export class Team {
       if ((counter(managerSession).asked ?? 0) <= draft.asked)
         return 'The user hasn\'t confirmed it yet. NEXT ACTION: show the polished text and ask with the question tool: [Send] [Edit] [Cancel]. Send → team "send".'
       const questions = draft.input.action === "start" ? (draft.input.questions?.length ?? 0) : 0
-      if (input.decisions?.length && input.decisions.length !== questions)
+      // Decisions answer open points; with none, whatever came in decisions is not one (the front agent passes the confirmed text there).
+      if (questions && input.decisions?.length && input.decisions.length !== questions)
         return `decisions needs one answer per question, in order: ${questions} question(s), ${input.decisions.length} answer(s). NEXT ACTION: call team "send" again with decisions fixed.`
       this.drafts.delete(managerSession)
-      return this.handle({ ...draft.input, decisions: input.decisions?.length ? input.decisions : draft.input.decisions, confirmed: true }, managerSession, signal)
+      return this.handle({ ...draft.input, decisions: questions && input.decisions?.length ? input.decisions : draft.input.decisions, confirmed: true }, managerSession, signal)
     }
     if (input.confirmed || !this.needsConfirm(managerSession, task, input)) return undefined
-    this.drafts.set(managerSession, { input, asked: counter(managerSession).asked ?? 0 })
     const mode = this.modeFor(managerSession, task, input)
+    if (!this.asksUser(input, mode)) {
+      const answer = await this.confirmInDialog(managerSession, input, signal)
+      if (answer?.send === false) return "Not sent: the user chose Cancel. NEXT ACTION: tell the user nothing was sent and ask what they want instead."
+      if (answer) return this.handle({ ...input, text: answer.text ?? input.text, confirmed: true }, managerSession, signal)
+    }
+    this.drafts.set(managerSession, { input, asked: counter(managerSession).asked ?? 0 })
     if (this.asksUser(input, mode)) {
       const list = input.questions!.map((q, i) => `D${i + 1}. ${q}`).join("\n")
       const send = mode === "off" ? ', and as the last question [Send] [Edit] [Cancel]' : ""
@@ -715,6 +805,7 @@ export class Team {
     const tries = this.polishTries.get(managerSession) ?? 0
     const fixOnly = "Fix only these and keep the rest as it is; then call team \"start\" again with the whole input."
     // Layout slips are fixed here rather than sent back: a mode request ("Mode: safe auto") is not a requirement.
+    if (input.skipped) input.skipped = input.skipped.filter((s) => s.trim())
     if (input.requirements?.length) Object.assign(input, dropModeOnly(input.requirements, input.text ?? ""))
     const reqs = input.requirements ?? []
     const sources = await this.userMessages(managerSession)
@@ -970,7 +1061,7 @@ export class Team {
     const mode: Mode = `${role}_reply`
     const sessionID = task.sessions[role]
     this.log(`task ${task.id}: user question → ${role}`)
-    const record = this.begin((task.calls ??= []), role, mode, `question: ${lineOf(note)}`)
+    const record = this.begin((task.calls ??= []), role, mode, `question: ${lineOf(note)}`, { session: sessionID })
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -1381,7 +1472,19 @@ export class Team {
 
   // ---- running one agent ----
 
+  /**
+   * Runs the task until it needs the user (a question, an approval, a result) or stops: the front agent isn't woken
+   * between steps. Every call is in the sidebar's Calls list meanwhile. The call and attempt limits end it.
+   */
   private async step(task: TaskState, signal: AbortSignal): Promise<string> {
+    for (;;) {
+      const out = await this.stepOnce(task, signal)
+      const going = (task.phase === "running" && !!task.pending) || autoDecides(task)
+      if (!going || signal.aborted) return out
+    }
+  }
+
+  private async stepOnce(task: TaskState, signal: AbortSignal): Promise<string> {
     const auto = await this.autoStep(task, signal)
     if (auto !== undefined) return auto
     if (task.phase !== "running" || !task.pending) return render(task)
@@ -1405,7 +1508,7 @@ export class Team {
     save(task)
     this.onChange(task.managerSession)
     this.log(`task ${task.id}: call ${task.agentCalls} → ${role} (${pending.mode}), failed attempts ${task.attempts}/${task.attemptLimit}`)
-    const record = this.begin((task.calls ??= []), role, pending.mode, askOf(pending, task.calls), { n: task.agentCalls, asker: pending.asker })
+    const record = this.begin((task.calls ??= []), role, pending.mode, askOf(pending, task.calls), { n: task.agentCalls, asker: pending.asker, session: sessionID })
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -1415,7 +1518,7 @@ export class Team {
         task,
         sessionID,
         parentID: task.managerSession,
-        title: `team: ${role} (${pending.mode}${pending.mode === "fix" ? ` plan ${task.plan} step ${task.step}` : ""})`,
+        title: `team: ${role} #${task.agentCalls} (${pending.mode}${pending.mode === "fix" ? ` plan ${task.plan} step ${task.step}` : ""})`,
         prompt,
         signal,
         verdicts: this.verdictSpec(task, pending),
@@ -1451,12 +1554,13 @@ export class Team {
   }
 
   /** Records an agent call as it starts: in the task's list, or in the session's own for calls with no task. */
-  private begin(list: CallRecord[], role: WorkerRole, mode: Mode, ask: string, extra: { n?: number; asker?: Mode } = {}): CallRecord {
+  private begin(list: CallRecord[], role: WorkerRole, mode: Mode, ask: string, extra: { n?: number; asker?: Mode; session?: string } = {}): CallRecord {
     const first = modelsFor(this.config, role)[0]
     return startCall(list, { ...extra, role, mode, ask, model: first && modelLabel(first) })
   }
 
   private close(record: CallRecord, res: RunResult) {
+    if (res.sessionID) record.session = res.sessionID
     endCall(record, { end: res.end, ms: res.usage.ms, model: res.usage.model, status: res.report?.status, outcome: res.report?.summary ?? res.failure, notes: notesOf(res.run) })
   }
 
