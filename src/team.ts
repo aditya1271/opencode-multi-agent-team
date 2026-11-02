@@ -1461,323 +1461,375 @@ export class Team {
     if (p.adviceIds?.length && r.addressed && task.lastAdvice) appendFile(task, task.lastAdvice.file, `\n## How ${MODE_ROLE[p.mode]} handled it\n\n${r.addressed}\n`)
     switch (p.mode) {
       case "planner_advice":
-      case "architect_draft_advice": {
-        if (r.status === "ASK") return this.askAnalyst(task, p, r)
-        const start = task.adviceSeq ?? 0
-        const ids = (r.items ?? []).map((_, i) => `ADV${start + i + 1}`)
-        task.adviceSeq = start + ids.length
-        const role = MODE_ROLE[p.mode] === "planner" ? "Planner" : "Architect"
-        const file = writeNumbered(task, "advice", join(`# ${role}'s advice`, r.content, (r.items ?? []).map((x, i) => `- **${ids[i]}**: ${x}`).join("\n")))
-        this.record(task, p.mode, r, file)
-        task.advisors = [...(task.advisors ?? []), p.mode]
-        task.adviceFiles = [...(task.adviceFiles ?? []), file]
-        task.lastAdvice = { role, file }
-        const then = p.then ?? { mode: p.advise === "planner" ? "planner" : "analyst" }
-        const follow = `${role} reviewed the draft and the user's comments and gave advice (${file}, items ${ids.join(", ")}). Address every item: follow it, or say why not. Treat the user's material as a starting point, not the boundary. In \`addressed\`, say for each id what you changed.`
-        if (then.mode === "planner") task.plannerUnseen.push(file)
-        task.pending = { ...then, adviceIds: ids, note: join(then.note, follow), files: then.mode === "planner" ? then.files : [...(then.files ?? []), file] }
-        return
-      }
-      case "planner_consult": {
-        const asker = p.asker === "fix" ? "Developer" : "Analyst"
-        const file = writeNumbered(task, "consult-answer", `# The Planner's answer to ${asker} (${(p.files ?? []).join(", ")})\n\n${r.content}`)
-        this.record(task, p.mode, r, file)
-        const back = p.then ?? { mode: p.asker ?? "fix" }
-        task.pending = {
-          ...back,
-          note: join(`The Planner answered your question (${file}):`, `<answer>\n${r.content}\n</answer>`, "Carry on with your work; report as usual when done."),
-        }
-        return
-      }
-      case "operator": {
-        const file = writeNumbered(task, "run-result", `# The Operator's ${r.status} (${(p.files ?? []).join(", ")})\n\n${r.summary}\n\n${r.content}`)
-        this.record(task, p.mode, r, file)
-        task.pending = {
-          ...(p.then ?? { mode: "fix" }),
-          note: join(`The Operator ran your request (${r.status}, ${file}):`, `<result>\n${r.content}\n</result>`, "Carry on with your work; report as usual when done."),
-        }
-        return
-      }
-      case "planner_stepfix": {
-        if (r.status === "STEP" && this.fixStep(task, r)) return
-        const file = this.reportFile(task, "analysis", p.mode, r)
-        this.record(task, p.mode, r, file)
-        return this.planFailure(task, `${p.note ?? `Developer is blocked on step ${task.step}`}; the Planner found the plan can't be patched: ${r.summary}`)
-      }
+      case "architect_draft_advice":
+        return this.afterPlannerAdvice(task, p, r)
+      case "planner_consult":
+        return this.afterPlannerConsult(task, p, r)
+      case "operator":
+        return this.afterOperator(task, p, r)
+      case "planner_stepfix":
+        return this.afterPlannerStepfix(task, p, r)
       case "analyst":
-      case "analyst_fail": {
-        if (r.status === "CONSULT") return this.consult(task, p, r)
-        if (r.status === "RUN") return this.runFor(task, p, r)
-        if (r.status === "NEED_INFO") {
-          task.analystSearches = (task.analystSearches ?? 0) + 1
-          this.record(task, p.mode, r)
-          task.pending = { mode: "intern", note: queries(r), asker: "analyst" }
-          return
-        }
-        task.analystSearches = 0
-        if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
-        if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
-        if (task.revising) {
-          task.revising = false
-          const file = writeNumbered(task, "revision", r.content)
-          this.record(task, p.mode, r, file)
-          task.plannerUnseen.push(file)
-          const doc = draftIsDoc(task)
-          const revise: Pending = {
-            mode: "planner",
-            note: join(
-              `The user asked for changes to the ${docName(task)} (${draftFile(task)}); Analyst's revision brief is ${file}. Revise it accordingly and ${reviseAs(task, doc ? "DOC" : "PLAN", doc ? "document" : "plan")}${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
-              scopeText(task, true),
-            ),
-          }
-          task.pending = this.withAdvice(task, "planner", revise, `Analyst's revision brief for the user's latest comments is ${file}.`, [file])
-          return
-        }
-        if (r.status === "STUCK") return this.writerStuck(task, "analyst", p, r)
-        if (r.status === "TRIVIAL") {
-          writeFile(task, "brief.md", r.content)
-          this.record(task, p.mode, r, "brief.md")
-          task.pending = { mode: "fix_trivial", fresh: true }
-          return
-        }
-        // Code: a failed trivial attempt, or behaviour the request already fixes, goes straight to the how stage.
-        if (!task.workflow && !task.stage && (p.mode === "analyst_fail" || r.what === "settled")) this.setStage(task, "how")
-        else if (task.workflow !== "research" && !task.stage) this.setStage(task, "what")
-        writeFile(task, briefName(task), this.draftText(task, "brief", r))
-        this.record(task, p.mode, r, briefName(task))
-        if (task.workflow === "research") task.depth = r.depth ?? task.depth ?? "breadth"
-        const confirm =
-          task.workflow === "research"
-            ? this.config.workflows.research.confirmBrief && task.depth !== "quick"
-            : task.stage === "what" && this.config.workflows[task.workflow === "plan" ? "plan" : "code"].confirmBrief
-        if (confirm) {
-          task.phase = "brief"
-          task.askedAt = Date.now()
-          return
-        }
-        task.pending = { mode: "planner", fresh: task.stage === "how" && !!task.doc }
-        return
-      }
-      case "analyst_answer": {
-        if (r.status === "NEED_INFO") {
-          task.analystSearches = (task.analystSearches ?? 0) + 1
-          this.record(task, p.mode, r)
-          task.pending = { mode: "intern", note: queries(r), asker: "analyst", then: p }
-          return
-        }
-        task.analystSearches = 0
-        const kind = `${briefName(task).slice(0, -3)}-answer`
-        const file = writeNumbered(task, kind, `# Analyst's answers (${(p.ids ?? []).join(", ")})\n\n${r.content}`)
-        this.record(task, p.mode, r, file)
-        const asker = p.asker ?? "planner"
-        const note = `Analyst answered your questions ${(p.ids ?? []).join(", ")} in ${file}.`
-        if (asker === "planner") {
-          task.plannerUnseen.push(file)
-          task.pending = { mode: "planner", note, afterReview: p.afterReview, adviceIds: p.adviceIds }
-        } else task.pending = { mode: asker, note, files: [file], afterReview: p.afterReview, advise: p.advise, then: p.then }
-        return
-      }
-      case "fix_trivial": {
-        const file = this.reportFile(task, "report", p.mode, r)
-        this.record(task, p.mode, r, file)
-        if (r.status === "DONE") {
-          if ((res.run?.edited.size ?? 0) <= 1) return this.done(task, r.summary)
-          task.pending = { mode: "review_trivial" }
-          return
-        }
-        task.attempts++
-        task.trivialFailed = true
-        task.pending = { mode: "analyst_fail" }
-        return
-      }
-      case "review_trivial": {
-        const file = this.reportFile(task, "analysis", p.mode, r)
-        this.record(task, p.mode, r, file)
-        if (r.status === "PASS") return this.done(task, r.summary)
-        task.attempts++
-        task.trivialFailed = true
-        task.pending = { mode: "analyst_fail" }
-        return
-      }
-      case "planner": {
-        if (r.status === "ASK" || r.status === "NEED_INFO") task.draftAsks = (task.draftAsks ?? 0) + 1
-        if (r.status === "PLAN" || r.status === "DOC") task.draftAsks = 0
-        if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
-        if (r.status === "ASK") return this.askAnalyst(task, p, r)
-        if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
-        if (r.status === "STUCK") return this.writerStuck(task, "planner", p, r)
-        if (r.status === "NEED_INFO") {
-          task.needInfo++
-          this.record(task, p.mode, r)
-          task.pending = { mode: "intern", note: queries(r), afterReview: p.afterReview }
-          return
-        }
-        if (r.status === "ESCALATE") {
-          const file = writeNumbered(task, "escalation", r.content)
-          this.record(task, p.mode, r, file)
-          return this.toAdvice(task, `planner escalated (${file})`, { mode: "planner", note: `Retry: write the ${docName(task)}, or escalate again.` })
-        }
-        task.architectNote = p.afterReview
-        if (r.status === "DOC") {
-          const text = this.draftText(task, "doc", r)
-          const file = writeNumbered(task, "doc", text)
-          this.record(task, p.mode, r, file)
-          task.doc = task.seq.doc
-          const failed = task.output ? this.writeOutput(task, task.output, text, file) : undefined
-          task.docSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
-          if (this.checkAssumptions(task, text)) return
-          return this.afterDraft(task)
-        }
-        const scoped = !!(task.scope && r.sections?.length)
-        const text = this.draftText(task, "plan", r)
-        const file = writeNumbered(task, "plan", text)
-        this.record(task, p.mode, r, file)
-        const failed = task.workflow === "plan" && task.output ? this.writeOutput(task, howOutput(task.output), text, file) : undefined
-        task.plan = task.seq.plan
-        task.stepFix = undefined
-        task.planSteps = (scoped && split(text).sections.filter((s) => s.step).length) || r.steps || 1
-        task.planRisk = r.risk === "yes"
-        task.planHadFailure = task.planFailures > 0
-        task.step = 1
-        task.rounds = 0
-        task.planSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
-        const review = task.planRisk && !task.skipArchitectReview
-        task.skipArchitectReview = false
-        const next: Pending | undefined = review ? { mode: "architect_review", fresh: true } : undefined
-        if (this.checkAssumptions(task, text, next)) return
-        if (next) task.pending = next
-        else this.afterDraft(task)
-        return
-      }
-      case "request_check": {
-        const file = this.reportFile(task, "analysis", p.mode, r)
-        this.record(task, p.mode, r, file)
-        const spec = this.verdictSpec(task, p)!
-        const wrong = [...verdicts(r.content, spec)].filter(([, v]) => v.verdict === "wrong").map(([id]) => id)
-        if (wrong.length) {
-          task.plannerUnseen.push(file)
-          task.pending = {
-            mode: "planner",
-            note: `The Intern checked your assumptions in the code (${file}): ${wrong.join(", ")} ${wrong.length === 1 ? "is" : "are"} wrong. Revise the ${docName(task)} so it rests on what the code does, and ${reviseAs(task, draftIsDoc(task) ? "DOC" : "PLAN", docName(task))}.`,
-            afterReview: task.architectNote,
-          }
-          return
-        }
-        if (p.then) task.pending = p.then
-        else this.afterDraft(task)
-        return
-      }
-      case "architect_doc_review": {
-        if (r.status === "ASK") return this.askAnalyst(task, p, r)
-        const file = this.reportFile(task, "architect", p.mode, r)
-        this.record(task, p.mode, r, file)
-        task.architectNote = file
-        if (r.status === "APPROVE") return this.toApproval(task)
-        task.plannerUnseen.push(file)
-        const doc = draftIsDoc(task)
-        // Architect's review doesn't override the user's final sections: every other section is open.
-        const idx = sectionIndex(task, "draft")
-        task.scope = idx?.ids.length ? { draft: "draft", revise: idx.ids.filter((id) => !idx.final.includes(id)), finetune: [], add: [], open: true } : undefined
-        const ask = reviseAs(task, doc ? "DOC" : "PLAN", doc ? "document" : "plan")
-        task.pending = {
-          mode: "planner",
-          afterReview: file,
-          note: join(
-            `Architect critically reviewed the ${docName(task)} (${draftFile(task)}) at the user's request (${file}). Revise it: fix every must-fix item, or say in the ${doc ? "document" : "plan"} why not. ${ask[0]!.toUpperCase()}${ask.slice(1)}.`,
-            scopeText(task, true),
-          ),
-        }
-        return
-      }
-      case "intern": {
-        const numbered = numberQuotes(task.dir, r.content, task.workspace, task.seq.quote ?? 0)
-        task.seq.quote = numbered.next
-        const file = writeNumbered(task, "findings", `# Findings (${r.status})\n\n${numbered.content}`)
-        this.record(task, p.mode, r, file)
-        if (p.asker === "analyst") {
-          const left = this.config.limits.analystSearchRounds - (task.analystSearches ?? 0)
-          const more = left > 0 ? `You may send ${left} more round${left === 1 ? "" : "s"} of queries (NEED_INFO).` : "No more search rounds: report with what you have."
-          const note = `The Intern answered your queries (${r.status}), below. ${QUOTES_CHECKED} Read a file only for what the findings leave out, then report. ${more}`
-          task.pending = p.then?.mode === "analyst_answer" ? { ...p.then, note: join(note, p.then.note), files: [file] } : { mode: "analyst", note, files: [file] }
-          return
-        }
-        task.plannerUnseen.push(file)
-        task.pending = { mode: "planner", note: `Intern answered your queries (${r.status}). ${QUOTES_CHECKED}`, afterReview: p.afterReview }
-        return
-      }
-      case "architect_review": {
-        if (r.status === "ASK") return this.askAnalyst(task, p, r)
-        const file = this.reportFile(task, "architect", p.mode, r)
-        this.record(task, p.mode, r, file)
-        task.architectNote = file
-        if (r.status === "APPROVE") return this.toApproval(task)
-        task.plannerUnseen.push(file)
-        task.attempts++
-        task.skipArchitectReview = true
-        task.pending = { mode: "planner", afterReview: file, note: `Architect requested changes to plan ${task.plan} (${file}). Revise the plan once.` }
-        return
-      }
-      case "fix": {
-        if (r.status === "CONSULT") return this.consult(task, p, r)
-        if (r.status === "RUN") return this.runFor(task, p, r)
-        const file = this.reportFile(task, "report", p.mode, r)
-        this.record(task, p.mode, r, file)
-        task.plannerUnseen.push(file)
-        if (r.status !== "DONE") task.attempts++
-        if (r.status === "BLOCKED") {
-          const reason = `Developer is blocked on step ${task.step}: ${r.summary}`
-          const sf = task.stepFix
-          // One step fix per step: a fixed step that blocks again fails the plan.
-          if (sf?.plan === task.plan && task.step >= sf.from && task.step <= sf.to) return this.planFailure(task, `${reason} (after the step fix)`)
-          task.planHadFailure = true
-          task.pending = { mode: "planner_stepfix", note: reason }
-          return
-        }
-        if (r.status === "DONE") {
-          if (task.step < task.planSteps) {
-            task.step++
-            task.rounds = 0
-            task.pending = { mode: "fix" }
-            return
-          }
-          if (this.reviewRequired(task)) task.pending = { mode: "review" }
-          else this.done(task, r.summary)
-          return
-        }
-        task.planHadFailure = true
-        task.pending = { mode: "diagnose" }
-        return
-      }
-      case "diagnose": {
-        const file = this.reportFile(task, "analysis", p.mode, r)
-        this.record(task, p.mode, r, file)
-        task.plannerUnseen.push(file)
-        if (r.status === "LOCAL") return this.round(task, file, r)
-        if (r.status === "REPLAN") return this.planFailure(task, `the reviewer asked for a new plan (${file}): ${r.summary}`)
-        return this.toAdvice(task, `the reviewer escalated (${file})`, { mode: "diagnose" })
-      }
-      case "review": {
-        const file = this.reportFile(task, "analysis", p.mode, r)
-        this.record(task, p.mode, r, file)
-        task.plannerUnseen.push(file)
-        if (r.status === "PASS") return this.done(task, r.summary)
-        task.attempts++
-        task.step = task.planSteps
-        return this.round(task, file, r)
-      }
-      case "architect_advice": {
-        if (r.status === "ASK") return this.askAnalyst(task, p, r)
-        // Counted once advice is given: a question round before it is part of the same advice.
-        if (r.status === "ADVICE") task.architectAdviceUsed++
-        const file = this.reportFile(task, "architect", p.mode, r)
-        this.record(task, p.mode, r, file)
-        task.plannerUnseen.push(file)
-        if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
-        task.pending = { mode: "planner", note: `Architect's advice is in ${file}. Write the next plan following it.` }
-        return
-      }
+      case "analyst_fail":
+        return this.afterAnalyst(task, p, r)
+      case "analyst_answer":
+        return this.afterAnalystAnswer(task, p, r)
+      case "fix_trivial":
+        return this.afterFixTrivial(task, p, r, res)
+      case "review_trivial":
+        return this.afterReviewTrivial(task, p, r)
+      case "planner":
+        return this.afterPlanner(task, p, r)
+      case "request_check":
+        return this.afterRequestCheck(task, p, r)
+      case "architect_doc_review":
+        return this.afterArchitectDocReview(task, p, r)
+      case "intern":
+        return this.afterIntern(task, p, r)
+      case "architect_review":
+        return this.afterArchitectReview(task, p, r)
+      case "fix":
+        return this.afterFix(task, p, r)
+      case "diagnose":
+        return this.afterDiagnose(task, p, r)
+      case "review":
+        return this.afterReview(task, p, r)
+      case "architect_advice":
+        return this.afterArchitectAdvice(task, p, r)
     }
   }
+
+  private afterPlannerAdvice(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "ASK") return this.askAnalyst(task, p, r)
+    const start = task.adviceSeq ?? 0
+    const ids = (r.items ?? []).map((_, i) => `ADV${start + i + 1}`)
+    task.adviceSeq = start + ids.length
+    const role = MODE_ROLE[p.mode] === "planner" ? "Planner" : "Architect"
+    const file = writeNumbered(task, "advice", join(`# ${role}'s advice`, r.content, (r.items ?? []).map((x, i) => `- **${ids[i]}**: ${x}`).join("\n")))
+    this.record(task, p.mode, r, file)
+    task.advisors = [...(task.advisors ?? []), p.mode]
+    task.adviceFiles = [...(task.adviceFiles ?? []), file]
+    task.lastAdvice = { role, file }
+    const then = p.then ?? { mode: p.advise === "planner" ? "planner" : "analyst" }
+    const follow = `${role} reviewed the draft and the user's comments and gave advice (${file}, items ${ids.join(", ")}). Address every item: follow it, or say why not. Treat the user's material as a starting point, not the boundary. In \`addressed\`, say for each id what you changed.`
+    if (then.mode === "planner") task.plannerUnseen.push(file)
+    task.pending = { ...then, adviceIds: ids, note: join(then.note, follow), files: then.mode === "planner" ? then.files : [...(then.files ?? []), file] }
+    return
+  }
+
+  private afterPlannerConsult(task: TaskState, p: Pending, r: Report) {
+    const asker = p.asker === "fix" ? "Developer" : "Analyst"
+    const file = writeNumbered(task, "consult-answer", `# The Planner's answer to ${asker} (${(p.files ?? []).join(", ")})\n\n${r.content}`)
+    this.record(task, p.mode, r, file)
+    const back = p.then ?? { mode: p.asker ?? "fix" }
+    task.pending = {
+      ...back,
+      note: join(`The Planner answered your question (${file}):`, `<answer>\n${r.content}\n</answer>`, "Carry on with your work; report as usual when done."),
+    }
+    return
+  }
+
+  private afterOperator(task: TaskState, p: Pending, r: Report) {
+    const file = writeNumbered(task, "run-result", `# The Operator's ${r.status} (${(p.files ?? []).join(", ")})\n\n${r.summary}\n\n${r.content}`)
+    this.record(task, p.mode, r, file)
+    task.pending = {
+      ...(p.then ?? { mode: "fix" }),
+      note: join(`The Operator ran your request (${r.status}, ${file}):`, `<result>\n${r.content}\n</result>`, "Carry on with your work; report as usual when done."),
+    }
+    return
+  }
+
+  private afterPlannerStepfix(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "STEP" && this.fixStep(task, r)) return
+    const file = this.reportFile(task, "analysis", p.mode, r)
+    this.record(task, p.mode, r, file)
+    return this.planFailure(task, `${p.note ?? `Developer is blocked on step ${task.step}`}; the Planner found the plan can't be patched: ${r.summary}`)
+  }
+
+  private afterAnalyst(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "CONSULT") return this.consult(task, p, r)
+    if (r.status === "RUN") return this.runFor(task, p, r)
+    if (r.status === "NEED_INFO") {
+      task.analystSearches = (task.analystSearches ?? 0) + 1
+      this.record(task, p.mode, r)
+      task.pending = { mode: "intern", note: queries(r), asker: "analyst" }
+      return
+    }
+    task.analystSearches = 0
+    if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
+    if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
+    if (task.revising) {
+      task.revising = false
+      const file = writeNumbered(task, "revision", r.content)
+      this.record(task, p.mode, r, file)
+      task.plannerUnseen.push(file)
+      const doc = draftIsDoc(task)
+      const revise: Pending = {
+        mode: "planner",
+        note: join(
+          `The user asked for changes to the ${docName(task)} (${draftFile(task)}); Analyst's revision brief is ${file}. Revise it accordingly and ${reviseAs(task, doc ? "DOC" : "PLAN", doc ? "document" : "plan")}${task.workflow === "research" ? "; new questions get a `## Follow-up <date>: <topic>` section (use NEED_INFO first if they need new evidence)" : ""}.`,
+          scopeText(task, true),
+        ),
+      }
+      task.pending = this.withAdvice(task, "planner", revise, `Analyst's revision brief for the user's latest comments is ${file}.`, [file])
+      return
+    }
+    if (r.status === "STUCK") return this.writerStuck(task, "analyst", p, r)
+    if (r.status === "TRIVIAL") {
+      writeFile(task, "brief.md", r.content)
+      this.record(task, p.mode, r, "brief.md")
+      task.pending = { mode: "fix_trivial", fresh: true }
+      return
+    }
+    // Code: a failed trivial attempt, or behaviour the request already fixes, goes straight to the how stage.
+    if (!task.workflow && !task.stage && (p.mode === "analyst_fail" || r.what === "settled")) this.setStage(task, "how")
+    else if (task.workflow !== "research" && !task.stage) this.setStage(task, "what")
+    writeFile(task, briefName(task), this.draftText(task, "brief", r))
+    this.record(task, p.mode, r, briefName(task))
+    if (task.workflow === "research") task.depth = r.depth ?? task.depth ?? "breadth"
+    const confirm =
+      task.workflow === "research"
+        ? this.config.workflows.research.confirmBrief && task.depth !== "quick"
+        : task.stage === "what" && this.config.workflows[task.workflow === "plan" ? "plan" : "code"].confirmBrief
+    if (confirm) {
+      task.phase = "brief"
+      task.askedAt = Date.now()
+      return
+    }
+    task.pending = { mode: "planner", fresh: task.stage === "how" && !!task.doc }
+    return
+  }
+
+  private afterAnalystAnswer(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "NEED_INFO") {
+      task.analystSearches = (task.analystSearches ?? 0) + 1
+      this.record(task, p.mode, r)
+      task.pending = { mode: "intern", note: queries(r), asker: "analyst", then: p }
+      return
+    }
+    task.analystSearches = 0
+    const kind = `${briefName(task).slice(0, -3)}-answer`
+    const file = writeNumbered(task, kind, `# Analyst's answers (${(p.ids ?? []).join(", ")})\n\n${r.content}`)
+    this.record(task, p.mode, r, file)
+    const asker = p.asker ?? "planner"
+    const note = `Analyst answered your questions ${(p.ids ?? []).join(", ")} in ${file}.`
+    if (asker === "planner") {
+      task.plannerUnseen.push(file)
+      task.pending = { mode: "planner", note, afterReview: p.afterReview, adviceIds: p.adviceIds }
+    } else task.pending = { mode: asker, note, files: [file], afterReview: p.afterReview, advise: p.advise, then: p.then }
+    return
+  }
+
+  private afterFixTrivial(task: TaskState, p: Pending, r: Report, res: RunResult) {
+    const file = this.reportFile(task, "report", p.mode, r)
+    this.record(task, p.mode, r, file)
+    if (r.status === "DONE") {
+      if ((res.run?.edited.size ?? 0) <= 1) return this.done(task, r.summary)
+      task.pending = { mode: "review_trivial" }
+      return
+    }
+    task.attempts++
+    task.trivialFailed = true
+    task.pending = { mode: "analyst_fail" }
+    return
+  }
+
+  private afterReviewTrivial(task: TaskState, p: Pending, r: Report) {
+    const file = this.reportFile(task, "analysis", p.mode, r)
+    this.record(task, p.mode, r, file)
+    if (r.status === "PASS") return this.done(task, r.summary)
+    task.attempts++
+    task.trivialFailed = true
+    task.pending = { mode: "analyst_fail" }
+    return
+  }
+
+  private afterPlanner(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "ASK" || r.status === "NEED_INFO") task.draftAsks = (task.draftAsks ?? 0) + 1
+    if (r.status === "PLAN" || r.status === "DOC") task.draftAsks = 0
+    if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
+    if (r.status === "ASK") return this.askAnalyst(task, p, r)
+    if (r.status === "INFEASIBLE") return this.infeasible(task, p.mode, r)
+    if (r.status === "STUCK") return this.writerStuck(task, "planner", p, r)
+    if (r.status === "NEED_INFO") {
+      task.needInfo++
+      this.record(task, p.mode, r)
+      task.pending = { mode: "intern", note: queries(r), afterReview: p.afterReview }
+      return
+    }
+    if (r.status === "ESCALATE") {
+      const file = writeNumbered(task, "escalation", r.content)
+      this.record(task, p.mode, r, file)
+      return this.toAdvice(task, `planner escalated (${file})`, { mode: "planner", note: `Retry: write the ${docName(task)}, or escalate again.` })
+    }
+    task.architectNote = p.afterReview
+    if (r.status === "DOC") {
+      const text = this.draftText(task, "doc", r)
+      const file = writeNumbered(task, "doc", text)
+      this.record(task, p.mode, r, file)
+      task.doc = task.seq.doc
+      const failed = task.output ? this.writeOutput(task, task.output, text, file) : undefined
+      task.docSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
+      if (this.checkAssumptions(task, text)) return
+      return this.afterDraft(task)
+    }
+    const scoped = !!(task.scope && r.sections?.length)
+    const text = this.draftText(task, "plan", r)
+    const file = writeNumbered(task, "plan", text)
+    this.record(task, p.mode, r, file)
+    const failed = task.workflow === "plan" && task.output ? this.writeOutput(task, howOutput(task.output), text, file) : undefined
+    task.plan = task.seq.plan
+    task.stepFix = undefined
+    task.planSteps = (scoped && split(text).sections.filter((s) => s.step).length) || r.steps || 1
+    task.planRisk = r.risk === "yes"
+    task.planHadFailure = task.planFailures > 0
+    task.step = 1
+    task.rounds = 0
+    task.planSummary = failed ? `${r.summary}\n\n${failed}` : r.summary
+    const review = task.planRisk && !task.skipArchitectReview
+    task.skipArchitectReview = false
+    const next: Pending | undefined = review ? { mode: "architect_review", fresh: true } : undefined
+    if (this.checkAssumptions(task, text, next)) return
+    if (next) task.pending = next
+    else this.afterDraft(task)
+    return
+  }
+
+  private afterRequestCheck(task: TaskState, p: Pending, r: Report) {
+    const file = this.reportFile(task, "analysis", p.mode, r)
+    this.record(task, p.mode, r, file)
+    const spec = this.verdictSpec(task, p)!
+    const wrong = [...verdicts(r.content, spec)].filter(([, v]) => v.verdict === "wrong").map(([id]) => id)
+    if (wrong.length) {
+      task.plannerUnseen.push(file)
+      task.pending = {
+        mode: "planner",
+        note: `The Intern checked your assumptions in the code (${file}): ${wrong.join(", ")} ${wrong.length === 1 ? "is" : "are"} wrong. Revise the ${docName(task)} so it rests on what the code does, and ${reviseAs(task, draftIsDoc(task) ? "DOC" : "PLAN", docName(task))}.`,
+        afterReview: task.architectNote,
+      }
+      return
+    }
+    if (p.then) task.pending = p.then
+    else this.afterDraft(task)
+    return
+  }
+
+  private afterArchitectDocReview(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "ASK") return this.askAnalyst(task, p, r)
+    const file = this.reportFile(task, "architect", p.mode, r)
+    this.record(task, p.mode, r, file)
+    task.architectNote = file
+    if (r.status === "APPROVE") return this.toApproval(task)
+    task.plannerUnseen.push(file)
+    const doc = draftIsDoc(task)
+    // Architect's review doesn't override the user's final sections: every other section is open.
+    const idx = sectionIndex(task, "draft")
+    task.scope = idx?.ids.length ? { draft: "draft", revise: idx.ids.filter((id) => !idx.final.includes(id)), finetune: [], add: [], open: true } : undefined
+    const ask = reviseAs(task, doc ? "DOC" : "PLAN", doc ? "document" : "plan")
+    task.pending = {
+      mode: "planner",
+      afterReview: file,
+      note: join(
+        `Architect critically reviewed the ${docName(task)} (${draftFile(task)}) at the user's request (${file}). Revise it: fix every must-fix item, or say in the ${doc ? "document" : "plan"} why not. ${ask[0]!.toUpperCase()}${ask.slice(1)}.`,
+        scopeText(task, true),
+      ),
+    }
+    return
+  }
+
+  private afterIntern(task: TaskState, p: Pending, r: Report) {
+    const numbered = numberQuotes(task.dir, r.content, task.workspace, task.seq.quote ?? 0)
+    task.seq.quote = numbered.next
+    const file = writeNumbered(task, "findings", `# Findings (${r.status})\n\n${numbered.content}`)
+    this.record(task, p.mode, r, file)
+    if (p.asker === "analyst") {
+      const left = this.config.limits.analystSearchRounds - (task.analystSearches ?? 0)
+      const more = left > 0 ? `You may send ${left} more round${left === 1 ? "" : "s"} of queries (NEED_INFO).` : "No more search rounds: report with what you have."
+      const note = `The Intern answered your queries (${r.status}), below. ${QUOTES_CHECKED} Read a file only for what the findings leave out, then report. ${more}`
+      task.pending = p.then?.mode === "analyst_answer" ? { ...p.then, note: join(note, p.then.note), files: [file] } : { mode: "analyst", note, files: [file] }
+      return
+    }
+    task.plannerUnseen.push(file)
+    task.pending = { mode: "planner", note: `Intern answered your queries (${r.status}). ${QUOTES_CHECKED}`, afterReview: p.afterReview }
+    return
+  }
+
+  private afterArchitectReview(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "ASK") return this.askAnalyst(task, p, r)
+    const file = this.reportFile(task, "architect", p.mode, r)
+    this.record(task, p.mode, r, file)
+    task.architectNote = file
+    if (r.status === "APPROVE") return this.toApproval(task)
+    task.plannerUnseen.push(file)
+    task.attempts++
+    task.skipArchitectReview = true
+    task.pending = { mode: "planner", afterReview: file, note: `Architect requested changes to plan ${task.plan} (${file}). Revise the plan once.` }
+    return
+  }
+
+  private afterFix(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "CONSULT") return this.consult(task, p, r)
+    if (r.status === "RUN") return this.runFor(task, p, r)
+    const file = this.reportFile(task, "report", p.mode, r)
+    this.record(task, p.mode, r, file)
+    task.plannerUnseen.push(file)
+    if (r.status !== "DONE") task.attempts++
+    if (r.status === "BLOCKED") {
+      const reason = `Developer is blocked on step ${task.step}: ${r.summary}`
+      const sf = task.stepFix
+      // One step fix per step: a fixed step that blocks again fails the plan.
+      if (sf?.plan === task.plan && task.step >= sf.from && task.step <= sf.to) return this.planFailure(task, `${reason} (after the step fix)`)
+      task.planHadFailure = true
+      task.pending = { mode: "planner_stepfix", note: reason }
+      return
+    }
+    if (r.status === "DONE") {
+      if (task.step < task.planSteps) {
+        task.step++
+        task.rounds = 0
+        task.pending = { mode: "fix" }
+        return
+      }
+      if (this.reviewRequired(task)) task.pending = { mode: "review" }
+      else this.done(task, r.summary)
+      return
+    }
+    task.planHadFailure = true
+    task.pending = { mode: "diagnose" }
+    return
+  }
+
+  private afterDiagnose(task: TaskState, p: Pending, r: Report) {
+    const file = this.reportFile(task, "analysis", p.mode, r)
+    this.record(task, p.mode, r, file)
+    task.plannerUnseen.push(file)
+    if (r.status === "LOCAL") return this.round(task, file, r)
+    if (r.status === "REPLAN") return this.planFailure(task, `the reviewer asked for a new plan (${file}): ${r.summary}`)
+    return this.toAdvice(task, `the reviewer escalated (${file})`, { mode: "diagnose" })
+  }
+
+  private afterReview(task: TaskState, p: Pending, r: Report) {
+    const file = this.reportFile(task, "analysis", p.mode, r)
+    this.record(task, p.mode, r, file)
+    task.plannerUnseen.push(file)
+    if (r.status === "PASS") return this.done(task, r.summary)
+    task.attempts++
+    task.step = task.planSteps
+    return this.round(task, file, r)
+  }
+
+  private afterArchitectAdvice(task: TaskState, p: Pending, r: Report) {
+    if (r.status === "ASK") return this.askAnalyst(task, p, r)
+    // Counted once advice is given: a question round before it is part of the same advice.
+    if (r.status === "ADVICE") task.architectAdviceUsed++
+    const file = this.reportFile(task, "architect", p.mode, r)
+    this.record(task, p.mode, r, file)
+    task.plannerUnseen.push(file)
+    if (r.status === "QUESTIONS") return this.askUser(task, p.mode, r)
+    task.pending = { mode: "planner", note: `Architect's advice is in ${file}. Write the next plan following it.` }
+    return
+  }
+
 
   private reviewRequired(task: TaskState) {
     return task.planHadFailure || task.planRisk || task.editedFiles.length >= this.config.review.minFiles
