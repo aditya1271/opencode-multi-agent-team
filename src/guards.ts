@@ -6,7 +6,7 @@ import { evaluate, permissionsFor, roleOf, toolVisible, type Rule } from "./agen
 import { matchesAny } from "./match.ts"
 import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
 import { loose } from "./quotes.ts"
-import { allowedStatuses, reportSchema } from "./report.ts"
+import { allowedStatuses, blocksActive, reportSchema } from "./report.ts"
 import { counter, note, runs, touch, type ToolKind } from "./runtime.ts"
 import { nextLogPath, save, type TaskState } from "./state.ts"
 
@@ -141,7 +141,7 @@ export async function registerGuards(ctx: Context, config: Config) {
     const report = event.tools.report
     if (report) {
       const statuses = allowedStatuses(config, run.mode, run.task)
-      event.tools.report = { ...report, input: reportSchema(run.mode, statuses, run.task) as never }
+      event.tools.report = { ...report, input: reportSchema(run.mode, statuses, run.task, blocksActive(config, run.mode, run.task)) as never }
     }
   })
 

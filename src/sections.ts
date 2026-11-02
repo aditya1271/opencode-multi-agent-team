@@ -220,7 +220,10 @@ export function annotate(text: string, index: SectionIndex): string {
 /** A section's title without numbering, emphasis or id tag, as written (for showing). */
 export const shownTitle = (title: string) => title.replace(/\s*\[S\d+(?: ✅)?\]\s*$/, "").replace(/\*\*/g, "").trim()
 
-const body = (s: Section) => s.text.split("\n").slice(1).join("\n").trim()
+/** A section the writer's tool wrote for decisions says so on a line of its own, whatever its title. */
+const DECIDE_MARK = /^<!--\s*decide\s*-->\s*$/m
+
+const body = (s: Section) => s.text.split("\n").slice(1).join("\n").replace(DECIDE_MARK, "").trim()
 
 /**
  * The sections a user reviews (indices): those with text under their heading, and for a brief only those under its
@@ -288,7 +291,7 @@ function withKinds(sections: Section[]): Section[] {
     }
     const depth = /^(#+)/.exec(s.text)?.[1]?.length ?? 99
     while (stack.length && stack.at(-1)!.depth >= depth) stack.pop()
-    const kind = titleKind(s.title) ?? stack.at(-1)?.kind ?? "understand"
+    const kind = (DECIDE_MARK.test(s.text) ? "decide" : undefined) ?? titleKind(s.title) ?? stack.at(-1)?.kind ?? "understand"
     s.kind = kind
     stack.push({ depth, kind })
   }
@@ -346,7 +349,7 @@ export function userView(s: Section): string | undefined {
   }
   if (!summary) return undefined
   const raw = body(s).split("\n")
-  const parts = ["team chose", "risk"].map((name) => labelBlock(raw, name))
+  const parts = ["covers", "team chose", "risk"].map((name) => labelBlock(raw, name))
   // A fact about the code taken for true is shown wherever it sits: the user can't judge a plan on facts they never saw.
   const shown = parts.join("\n")
   const facts = raw.filter((l) => /\[A\d+\]/.test(l) && !shown.includes(l) && !l.includes(summary))

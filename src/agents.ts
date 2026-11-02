@@ -145,9 +145,9 @@ export function ignoredTools(config: Config): string[] {
  * A document standard: the configured text or file, else the built-in prompt.
  * what: plan.instructions(.md); how: plan.howInstructions (how.instructions.md); research: research.instructions(.md).
  */
-export function workflowInstructions(config: Config, kind: "what" | "how" | "research"): string {
+export function workflowInstructions(config: Config, kind: "what" | "blocks" | "how" | "research"): string {
   const configured = kind === "research" ? config.workflows.research.instructions : kind === "how" ? config.workflows.plan.howInstructions : config.workflows.plan.instructions
-  const file = kind === "research" ? "research" : kind === "how" ? "how" : "plan"
+  const file = kind === "research" ? "research" : kind === "how" ? "how" : kind === "blocks" ? "plan.blocks" : "plan"
   return configured?.trim() ? textOrFile(configured) : readPrompt(path.join(PROMPT_DIR, `${file}.instructions.md`))
 }
 

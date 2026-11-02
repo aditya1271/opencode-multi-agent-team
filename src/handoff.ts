@@ -3,7 +3,7 @@ import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
 import { docName, draftFile, fileBlock, howOutput, join, scopeText } from "./messages.ts"
 import { ADVICE_RULES, ANALYST_ANSWER, ANALYST_ASK, ANALYST_CODE, ANALYST_INFEASIBLE, ANALYST_RESEARCH, ANALYST_REVISION, ANALYST_WHAT, HOW_BRIEF, INTERN_RESEARCH, REVIEW_PLAN, REVIEW_RESEARCH } from "./notes.ts"
-import { needInfoLimit } from "./report.ts"
+import { blocksActive, needInfoLimit } from "./report.ts"
 import { answerFiles, answersName, briefName, draftIsDoc, MODE_ROLE, readTaskFile, type Mode, type Pending, type TaskState } from "./state.ts"
 import { reportBlock } from "./statuses.ts"
 
@@ -439,7 +439,7 @@ function plannerHandoff(config: Config, task: TaskState): string {
       `${task.output ? `The plugin saves the document to ${task.output}. ` : ""}\`summary\`: the first line says what the user decides by approving ("Approving this settles …").`,
       readTaskFile(task, "existing.md") && "That file already exists (below): keep it and change only what the request asks for.",
       fileBlock(task, "existing.md"),
-      `<standard>\n${workflowInstructions(config, "what")}\n</standard>`,
+      `<standard>\n${workflowInstructions(config, blocksActive(config, "planner", task) ? "blocks" : "what")}\n</standard>`,
     )
   const plan = task.workflow === "plan"
   return join(

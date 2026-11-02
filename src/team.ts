@@ -1811,6 +1811,7 @@ export class Team {
     if (r.status === "DOC") {
       const text = this.draftText(task, "doc", r)
       const file = writeNumbered(task, "doc", text)
+      if (r.blocks) writeFile(task, file.replace(/\.md$/, ".blocks.json"), JSON.stringify(r.blocks, null, 2))
       this.record(task, p.mode, r, file)
       task.doc = task.seq.doc
       const failed = task.output ? this.writeOutput(task, task.output, text, file) : undefined

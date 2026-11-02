@@ -1,5 +1,6 @@
 import type { WorkerRole } from "./config.ts"
 import type { Evidence } from "./evidence.ts"
+import type { Block, BlockDraft, FillMap } from "./blocks.ts"
 import type { Fix, GivenFix } from "./fixes.ts"
 import type { VerdictSpec } from "./polish.ts"
 import type { SectionEdit } from "./sections.ts"
@@ -26,6 +27,11 @@ export interface Report {
   fixes?: GivenFix[]
   /** The Intern: where the code that proves its findings is; the plugin writes the code from the files. */
   evidence?: Evidence[]
+  /** A what-document as blocks (config workflows.plan.blocks): the layout, then the fill of each block; `content` is written from them. */
+  title?: string
+  layout?: Block[]
+  fill?: FillMap
+  blocks?: { title: string; layout: Block[]; fill: FillMap }
 }
 
 export interface ShellRun {
@@ -59,6 +65,8 @@ export interface SessionRun {
   base?: { input: number; cacheRead: number; output: number }
   /** The role's skills, added to each request's system prompt so the agent doesn't spend steps loading them. */
   skills?: string
+  /** A what-document being built: the accepted layout and the blocks filled so far. */
+  blocks?: BlockDraft
   /** A report refused for parts code checks, kept until the writer sends the fixes asked for. */
   draft?: Report
   fixes?: Fix[]

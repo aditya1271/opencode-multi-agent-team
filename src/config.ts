@@ -107,7 +107,7 @@ export interface Config {
    */
   workflows: {
     code: { confirmBrief: boolean }
-    plan: { output: string; instructions: string; howInstructions: string; confirmBrief: boolean }
+    plan: { output: string; instructions: string; howInstructions: string; confirmBrief: boolean; blocks: boolean }
     research: { output: string; instructions: string; confirmBrief: boolean; internRounds: { quick: number; breadth: number; depth: number } }
   }
   /** The project's build and test commands. When both are empty, whenMissing decides. */
@@ -151,7 +151,7 @@ export const DEFAULTS: Config = {
   review: { minFiles: 4 },
   workflows: {
     code: { confirmBrief: false },
-    plan: { output: "docs/{task}.md", instructions: "", howInstructions: "", confirmBrief: true },
+    plan: { output: "docs/{task}.md", instructions: "", howInstructions: "", confirmBrief: true, blocks: false },
     research: { output: "docs/{task}.md", instructions: "", confirmBrief: true, internRounds: { quick: 1, breadth: 2, depth: 3 } },
   },
   checks: { build: "", test: "", whenMissing: "ask" },

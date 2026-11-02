@@ -1,10 +1,11 @@
+import { FILL_HELP, fillProblems, layoutProblems, outline, renderDoc, type FillMap } from "./blocks.ts"
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { applyFixes, blockFixes, fixRequest, lineFixes, numbered, sectionFixes, type Fix } from "./fixes.ts"
 import { verdictProblems, verdicts, type VerdictSpec } from "./polish.ts"
 import { renderEvidence } from "./evidence.ts"
 import { checkOutput, checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
-import { runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
+import { note, runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
 import { checkEdits, lineProblems, splice, split, titleOf, unrecommended, unsummarized, type Section } from "./sections.ts"
 import { consultSide, consultsUsed, draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
 
@@ -117,11 +118,21 @@ export function allowedStatuses(config: Config, mode: Mode, task?: TaskState): s
   return list
 }
 
-export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
+/** The what-document is built as blocks (a layout, then a fill) when config workflows.plan.blocks is on, except in a scoped revision. */
+export const blocksActive = (config: Config, mode: Mode, task: TaskState | undefined) =>
+  config.workflows.plan.blocks && mode === "planner" && !!task && task.workflow !== "research" && draftIsDoc(task) && !isScopedWriter(mode, task)
+
+export function reportSchema(mode: Mode, statuses: string[], task?: TaskState, blocks = false) {
   const properties: Record<string, unknown> = {
     status: { type: "string", enum: statuses },
     summary: { type: "string", description: "At most 5 lines, shown to the user." },
     content: { type: "string", description: "Markdown. The plugin writes it to the task folder." },
+  }
+  if (blocks && statuses.includes("DOC")) {
+    properties.content = { type: "string", description: "Not for DOC: the plugin writes the document from `layout` and `fill`. For the other statuses: markdown." }
+    properties.title = { type: "string", description: "DOC: the document's title." }
+    properties.layout = { type: "array", items: { type: "object" }, description: "DOC, first call: the blocks, each { kind, title, intent, children? } (see your standard)." }
+    properties.fill = { type: "object", description: "DOC, second call (with summary): { <block path>: { in_short, … } } for every block the plugin listed. After a refusal: only the paths it names, each whole." }
   }
   const asks = [statuses.includes("QUESTIONS") && "QUESTIONS (to the user)", statuses.includes("ASK") && "ASK (to Analyst)", statuses.includes("CONSULT") && "CONSULT (to the Planner)"].filter(Boolean)
   if (asks.length)
@@ -196,6 +207,9 @@ export const REPORT_INPUT = {
     addressed: { type: "string" },
     sections: { type: "array", items: SECTION_EDIT },
     fixes: { type: "array", items: FIX },
+    title: { type: "string" },
+    layout: { type: "array", items: { type: "object" } },
+    fill: { type: "object" },
   },
   required: ["status"],
 }
@@ -336,6 +350,11 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (!run) throw new Error("report is only for team agents running a task.")
   const statuses = allowedStatuses(config, run.mode, run.task)
   if (!statuses.includes(input.status)) throw new Error(`Invalid status "${input.status}". Allowed now: ${statuses.join(", ")}.`)
+  if (input.status === "DOC" && !input.fixes?.length && blocksActive(config, run.mode, run.task)) {
+    const step = buildBlocks(run, input)
+    if (typeof step === "string") return step
+    input = step
+  }
   input = withFixes(run, input)
   if ((input.status === "QUESTIONS" || input.status === "ASK" || input.status === "CONSULT") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
   if (input.status === "CONSULT" && !EVIDENCE.test(input.content))
@@ -405,8 +424,38 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   run.report = { ...input, summary: input.summary.split("\n").slice(0, 5).join("\n") }
   delete run.report.fixes
   delete run.report.evidence
+  delete run.report.layout
+  delete run.report.fill
   run.draft = run.fixes = undefined
   return "Report received. You are done; reply with the single word: done."
+}
+
+/**
+ * The what-document in two calls: the layout (checked, then kept), then the fill of each block (checked, kept, and
+ * asked again only for the blocks that are wrong). The report that goes on has the markdown written from them.
+ */
+function buildBlocks(run: SessionRun, input: Report): Report | string {
+  const b = (run.blocks ??= { fill: {} })
+  const sendBack = (what: string, lines: string[], ask: string): never => {
+    note(run, `${what} sent back (${lines.length})`, lines[0])
+    throw new Error(`${ask}\n${lines.map((l) => `- ${l}`).join("\n")}`)
+  }
+  if (input.layout !== undefined) {
+    const bad = layoutProblems(input.layout)
+    if (bad.length) sendBack("layout", bad, "The layout is not accepted. Send `layout` again, whole, with these fixed:")
+    b.layout = input.layout
+    b.fill = {}
+  }
+  if (typeof input.title === "string" && input.title.trim()) b.title = input.title.trim()
+  if (!b.layout) throw new Error("Send `layout` first: the tree of blocks, with status DOC. The plugin asks for the fill after it.")
+  if (input.fill === undefined || typeof input.fill !== "object" || Array.isArray(input.fill))
+    return `Layout accepted. Call \`report\` again with status DOC, \`summary\` and \`fill\`: one entry for every block below, by its path.\n${outline(b.layout)}\n\n${FILL_HELP}`
+  b.fill = { ...b.fill, ...(input.fill as FillMap) }
+  const bad = fillProblems(b.layout, b.fill)
+  if (bad.length) sendBack("fill", bad, "The fill is kept, so send `fill` again with only the blocks below, each whole:")
+  if (typeof input.summary !== "string" || !input.summary.trim()) throw new Error("Send `summary` with the fill: at most 5 lines; the first says what the user decides by approving.")
+  const title = b.title ?? "What-document"
+  return { ...input, content: renderDoc(title, b.layout, b.fill), blocks: { title, layout: b.layout, fill: b.fill } }
 }
 
 /** Keeps the report and refuses it, asking only for the missing parts. */
