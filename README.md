@@ -4,7 +4,7 @@ An OpenCode V2 plugin that runs a fixed multi-agent coding workflow. Code decide
 runs next and enforces the limits; no model routes work. Cheap models do most of the work.
 Strong models write plans and give advice only when the team is stuck.
 
-See [overview.md](overview.md) for the workflow, and [plan.md](plan.md) for the full design.
+See [overview.md](overview.md) for the workflow.
 
 The agents are named after coding-team roles. Earlier versions used polisher, triage,
 senior, explorer, fixer, analyser and oracle; configs and saved tasks with those names still
