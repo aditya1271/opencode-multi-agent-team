@@ -12,7 +12,7 @@ import { appendFile, loadTask, migrateNames, newTask, save, taskId, WORKFLOWS } 
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, join, render, stepTitles } from "../src/messages.ts"
-import { annotate, checkEdits, idRanges, indexOf, missingRecommendations, missingSummaries, shortView, splice, split, userView } from "../src/sections.ts"
+import { annotate, checkEdits, idRanges, indexOf, kindOf, lineProblems, missingRecommendations, missingSummaries, shortView, splice, split, userView, walkIds } from "../src/sections.ts"
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -478,21 +478,41 @@ describe("sections", () => {
     expect([next.ids, next.final]).toEqual([["S2", "S7", "S6"], ["S2"]])
     expect(idRanges(["S1", "S2", "S3", "S5", "S7", "S8"])).toBe("S1–S3, S5, S7, S8")
   })
+  test("section types come from the heading; a sub-section takes its parent's type; reference sections are no review stop", () => {
+    const doc = "# D\n\n## What it does\n\n**Summary:** x\n\n## Choices\n\n**Summary:** two\n\n### 1. Scope\n\n**Summary:** s\n\n**Recommended:** a: b\n\n## Excerpts\n\nE\n\n## Steps\n\n1. **Do it**: now\n\nmechanics"
+    const { sections } = split(doc)
+    expect(sections.map((s) => kindOf(s))).toEqual(["understand", "understand", "decide", "decide", "reference", "reference", "reference"])
+    const idx = indexOf(doc, "d:1")
+    const walked = walkIds(doc, idx).map((id) => sections[idx.ids.indexOf(id)]!.title)
+    expect(walked).toEqual(["What it does", "Choices", "1. Scope", "1. Do it"])
+  })
+  test("an explaining section shows its Summary, the Team chose and Risk lists, and the facts it assumes", () => {
+    const sec = split("## Process\n\n**Summary:** It checks first.\n\n**Team chose:**\n- check before each call\n- off by default\n\n1. step one\n\n[A1] assumed: calls go through one function\n\n**Risk:** a call may overrun.\n\nmore detail").sections[0]!
+    expect(userView(sec)).toBe("**Summary:** It checks first.\n\n**Team chose:**\n- check before each call\n- off by default\n\n**Risk:** a call may overrun.\n\n[A1] assumed: calls go through one function")
+    // Bullets under Team chose may say assumed; the same words elsewhere need an id.
+    const text = (line: string) => "## Process\n\n**Summary:** It checks first.\n\n**Team chose:**\n- the limit is assumed in minutes\n\n" + line
+    expect(lineProblems(text("detail"))).toEqual([])
+    expect(lineProblems(text("The unit is assumed.")).map((p) => p.ask)).toEqual([expect.stringContaining("says assumed")])
+  })
   test("the user view: Summary and Recommended lines, a step's purpose; the details stay for the agents", () => {
     const plan = [
       "# Plan",
       "## Summary\n\nApproving this moves the files.",
-      "## Approach\n\n**Summary:** Move the files with history kept.\n\nUse p4 move for each file, then p4 delete the stubs.\n\n**Recommended:** p4 move: keeps history",
+      "## Approach\n\n**Summary:** Move the files with history kept.\n\nUse p4 move for each file, then p4 delete the stubs.\n\n**Team chose:** [A1] p4 move over copy, to keep history.\n\n**Risk:** stubs left behind.",
+      "## Choices\n\n- Keep history? Move or copy. **Recommended:** move: history stays\n- Delete stubs? Yes or no. **Recommended:** yes: no dead files",
       "## Steps\n\n1. **Move the sources**: they live under lib/\n\np4 move src/a.cpp lib/a.cpp\n\n2. **Fix the build**\n\nedit CMakeLists.txt:12",
     ].join("\n\n")
     const { sections } = split(plan)
-    expect(userView(sections[2]!)).toBe("**Summary:** Move the files with history kept.\n\n**Recommended:** p4 move: keeps history")
-    expect(userView(sections[4]!)).toBe("they live under lib/")
+    expect(userView(sections[2]!)).toBe("**Summary:** Move the files with history kept.\n\n**Team chose:** [A1] p4 move over copy, to keep history.\n\n**Risk:** stubs left behind.")
+    expect(userView(sections[3]!)).toBe("- Keep history? Move or copy. **Recommended:** move: history stays\n- Delete stubs? Yes or no. **Recommended:** yes: no dead files")
+    expect(userView(sections[4]!)).toBeUndefined()
+    expect(userView(sections[5]!)).toBe("they live under lib/")
     expect(missingSummaries(plan)).toEqual(["2. Fix the build"])
     expect(missingSummaries(plan.replace("**Summary:** Move", "Move"))).toEqual(["Approach", "2. Fix the build"])
     const short = shortView(plan)
     expect(short).toContain("Approving this moves the files.")
-    expect(short).toContain("## Approach\n\n**Summary:** Move the files with history kept.\n\n**Recommended:** p4 move: keeps history")
+    expect(short).toContain("## Approach\n\n**Summary:** Move the files with history kept.\n\n**Team chose:** [A1] p4 move over copy, to keep history.\n\n**Risk:** stubs left behind.")
+    expect(short).toContain("- Keep history? Move or copy. **Recommended:** move: history stays")
     expect(short).toContain("1. **Move the sources**: they live under lib/")
     expect(short).not.toContain("p4 move src")
     expect(short).not.toContain("p4 delete")
@@ -1061,9 +1081,9 @@ describe("plan and research workflows", () => {
         }
       }
       const brief = "## Concept brief\n\n### Concerns\n\nA or B\n\n### Assumptions\n\nx\n\n## Excerpts\n\nE"
-      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: brief })).toThrow('F1: section "Concerns" has no Summary line')
+      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: brief })).toThrow('F1: section "Concerns" decides something')
       const recs = brief.replace("A or B", "A or B\n\n**Recommended:** A: simpler").replace("x\n", "x\n\n- **Recommended:** as written\n")
-      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: recs })).toThrow('F1: section "Concerns" has no Summary line')
+      expect(() => check("analyst", "analyst", { status: "ESCALATE", content: recs })).toThrow('F1: section "Concerns" decides something')
       const fixed = recs.replace("A or B", "**Summary:** Keep it simple.\n\nA or B").replace("### Assumptions\n\n", "### Assumptions\n\n**Summary:** Defaults.\n\n")
       expect(() => check("analyst", "analyst", { status: "ESCALATE", content: fixed })).not.toThrow()
       expect(() => check("analyst", "analyst", { status: "ESCALATE", content: "## Code\n\n`a.ts:1`" })).not.toThrow()
@@ -1094,9 +1114,15 @@ describe("plan and research workflows", () => {
       expect(userView(split(after).sections.at(-1)!)).toBe("**Summary:** Log it.\n\n**Recommended:** log at the end")
       const plan = "# Plan\n\n## Risks\n\n**Summary:** Low risk.\n\nnone\n\n## Steps\n\nIn order.\n\n1. **Edit a.ts**: the flag exists\n\nchange it\n\n2. **Test**: it is proven\n\nrun it"
       t.stage = "how"
-      expect(() => check("planner", "planner", { status: "PLAN", content: plan, risk: "no", steps: 2 })).toThrow('F1: section "Risks" has no Recommended line')
-      const planOk = plan.replace("none", "none\n\n**Recommended:** as written")
-      expect(() => check("planner", "planner", { status: "PLAN", content: planOk, risk: "no", steps: 2 })).not.toThrow()
+      // Risks explain, so they need no pick; a decision does, each item its own, and "as written" is no pick for something assumed.
+      expect(() => check("planner", "planner", { status: "PLAN", content: plan, risk: "no", steps: 2 })).not.toThrow()
+      const planOk = plan
+      const withChoices = (items: string) => plan.replace("## Steps", `## Choices\n\n${items}\n\n## Steps`)
+      expect(() => check("planner", "planner", { status: "PLAN", content: withChoices("- Log to file or stdout? **Recommended:** file: survives restarts\n- Rotate logs?"), risk: "no", steps: 2 })).toThrow('F1: section "Choices", item "- Rotate logs?" has no pick')
+      expect(() => check("planner", "planner", { status: "PLAN", content: withChoices("- Rotate logs? assumed yes. **Recommended:** as written"), risk: "no", steps: 2 })).toThrow('is assumed, so "as written" is no pick')
+      expect(() => check("planner", "planner", { status: "PLAN", content: withChoices("- Rotate logs? **Recommended:** yes: files stay small"), risk: "no", steps: 2 })).not.toThrow()
+      expect(() => check("planner", "planner", { status: "PLAN", content: plan.replace("none", "**Team chose:** x\n\nThe flag is assumed to exist."), risk: "no", steps: 2 })).toThrow("says assumed, and nothing checks it")
+      expect(() => check("planner", "planner", { status: "PLAN", content: plan.replace("none", "**Risk:** " + "word ".repeat(120)), risk: "no", steps: 2 })).toThrow("the risk line has 121 words")
       expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Test**: it is proven", "**Test**"), risk: "no", steps: 2 })).toThrow('F1: step "2. Test" has no purpose')
       expect(() => check("planner", "planner", { status: "PLAN", content: planOk.replace("**Summary:** Low risk.\n\n", ""), risk: "no", steps: 2 })).toThrow('F1: section "Risks" has no Summary line')
       // Every question to the user carries a recommendation (auto mode answers from it); findings quote the lines.
@@ -1582,7 +1608,7 @@ describe("plan approval", () => {
       writeFileSync(path.join(t.dir, "plan-1.md"), plan)
       const text = render(t)
       expect(text).toContain("- S3 1. Move the sources: they live under lib/")
-      expect(text).toContain("- S1 Behaviour: Same behaviour, new place. · **Recommended:** as written")
+      expect(text).toContain("- S1 Behaviour: Same behaviour, new place.")
       expect(text).not.toContain("p4 move")
       expect(text).not.toContain("All includes change")
       expect(text).toContain('team "details"')

@@ -2,7 +2,7 @@
 // missing parts, by fix id, and the plugin puts each in its place. Nothing is written twice.
 
 import { CITE, FENCE, type QuotedBlock } from "./quotes.ts"
-import { RECOMMENDED_LINE, SUMMARY_LINE, titleOf, type Section } from "./sections.ts"
+import { kindOf, RECOMMENDED_LINE, SUMMARY_LINE, titleOf, type LineProblem, type Section } from "./sections.ts"
 
 export interface Fix {
   id: string
@@ -29,18 +29,21 @@ export interface GivenFix {
 const lastLine = (s: Section) => s.line! + s.text.replace(/\s+$/, "").split("\n").length - 1
 
 /** Fixes for sections the user reviews: a missing Recommended or Summary line, a step with no purpose. */
-export function sectionFixes(unrecommended: Section[], unsummarized: Section[]): Omit<Fix, "id">[] {
+export function sectionFixes(unrecommended: Section[], unsummarized: Section[], lines: LineProblem[] = []): Omit<Fix, "id">[] {
   return [
     ...unsummarized.map((s) =>
       s.step
-        ? { kind: "purpose" as const, at: s.line!, ask: `step "${titleOf(s)}" has no purpose after its title: send one sentence on what the step achieves.` }
-        : { kind: "summary" as const, at: s.line!, ask: `section "${titleOf(s)}" has no Summary line: send "**Summary:** <1-3 plain sentences: the direction and why, not the mechanics>".` },
+        ? { kind: "purpose" as const, at: s.line!, ask: `step "${titleOf(s)}" has no purpose after its title: send one sentence on what the step achieves, and the choice in it.` }
+        : kindOf(s) === "decide"
+          ? { kind: "summary" as const, at: s.line!, ask: `section "${titleOf(s)}" decides something: send "**Summary:** <what is decided, in plain words>" (or write it as a list, one line per decision, each ending "**Recommended:** <option>: <short reason>").` }
+          : { kind: "summary" as const, at: s.line!, ask: `section "${titleOf(s)}" has no Summary line: send "**Summary:** <what it does or means, in plain terms: the logic, not the mechanics>"; add "**Team chose:** <each choice beyond the user's words, and the alternative>" and "**Risk:** <what could go wrong>" when there are any.` },
     ),
     ...unrecommended.map((s) => ({
       kind: "recommended" as const,
       at: lastLine(s),
-      ask: `section "${titleOf(s)}" has no Recommended line: send "**Recommended:** <option>: <short reason>" (several choices: the pick for each; nothing to decide: "**Recommended:** as written").`,
+      ask: `section "${titleOf(s)}" has no Recommended line: send "**Recommended:** <option>: <short reason>" (several choices: the pick for each).`,
     })),
+    ...lines.map((p) => ({ kind: "line" as const, at: p.at, ask: p.ask })),
   ].sort((a, b) => a.at - b.at)
 }
 

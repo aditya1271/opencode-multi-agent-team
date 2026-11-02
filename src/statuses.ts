@@ -97,16 +97,18 @@ function left(config: Config, task: TaskState, mode: Mode, status: string): stri
   return ""
 }
 
-/** How the user reads a reviewed draft: only the Summary and Recommended lines of each section, and each step's first line. */
+/** How the user reads a reviewed draft: a short view per section, by what the section is for. */
 export function reviewedFormat(kind: "brief" | "draft"): string {
   const which =
     kind === "brief"
       ? "The user reviews the brief's sections (those under its Concept or Research brief heading)"
       : "The user reviews every section of the draft except the plan steps"
   return [
-    `${which} and usually reads only two lines of each: open each with \`**Summary:** <1-3 plain sentences: the direction and why>\` (no paths, commands or mechanics; a section titled Summary or What you get needs none) and close it with \`**Recommended:** <option>: <short reason>\` (several choices: the pick for each; nothing open: \`as written\`). The rest of the section is for the agents and keeps its full detail.`,
-    kind === "draft" ? "A plan step's first line is `N. **Title**: <one sentence on what the step achieves>`, the details on the next lines; the user sees only that line." : "",
-    "The plugin refuses a draft without these lines.",
+    `${which} and reads a short view of each, opening the details on request. The view depends on what the section is for, which its heading says.`,
+    "A section that explains (what it does, the process, behaviour, risks) opens with `**Summary:**` (the logic in plain terms, under 100 words), then `**Team chose:**` (each choice beyond the user's words, and the alternative passed over) and `**Risk:**` (what could go wrong or can't be undone). A fact about the code taken for true is `[A1] assumed: <fact>` on its own line, its id named on the Team chose line; the Intern checks each.",
+    "A section that decides (choices, decisions, feasibility, open questions) is a list, one line per item: the question, the options, and `**Recommended:** <option>: <short reason>`, the pick auto mode takes.",
+    kind === "draft" ? "A plan step's first line is `N. **Title**: <what it achieves, and the choice in it>`; mechanics, impact and checks follow and stay in the details." : "",
+    "The plugin sends back any line that is missing or too long.",
   ]
     .filter(Boolean)
     .join(" ")

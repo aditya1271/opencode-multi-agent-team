@@ -7,6 +7,8 @@ export interface Section {
   step: boolean
   /** Index of its first line in the text it was split from. */
   line?: number
+  /** What it is for, set when split (see `kindOf`). */
+  kind?: Kind
 }
 
 /** The section ids of the current draft, and the ones the user marked final. */
@@ -78,7 +80,7 @@ export function split(text: string, inSteps = false): { head: string; sections: 
     } else if (s) parts.push({ title: line.replace(/^(\d+\.\s+)\*\*(.+?)\*\*.*$/, "$1$2"), lines: [line], step: true, line: i })
     else (parts.at(-1)?.lines ?? head).push(line)
   })
-  return { head: head.join("\n"), sections: parts.map((p) => ({ title: p.title, text: p.lines.join("\n"), step: p.step, line: p.line })) }
+  return { head: head.join("\n"), sections: withKinds(parts.map((p) => ({ title: p.title, text: p.lines.join("\n"), step: p.step, line: p.line }))) }
 }
 
 const assemble = (head: string, texts: string[]) => [...(head ? [head] : []), ...texts].join("\n")
@@ -243,7 +245,11 @@ function reviewed(sections: Section[], under?: string): number[] | undefined {
 export function walkIds(text: string, index: SectionIndex, under?: string): string[] {
   const { sections } = split(text)
   const all = reviewed(sections, under) ?? reviewed(sections)!
-  return all.map((i) => index.ids[i]!).filter((id) => !index.final.includes(id))
+  // Reference sections (evidence, step mechanics) sit under what they support and open on request; they are no stop of their own.
+  return all
+    .filter((i) => sections[i]!.step || kindOf(sections[i]!) !== "reference")
+    .map((i) => index.ids[i]!)
+    .filter((id) => !index.final.includes(id))
 }
 
 /** A section's closing line with the writer's pick: "**Recommended:** …". */
@@ -256,8 +262,47 @@ const labelled = (name: string) => new RegExp(`^[-*>\\s]*\\**\\s*${name}\\s*\\**
 export const titleOf = (s: Section) => shownTitle(s.title).replace(/^#+\s*/, "")
 
 /**
- * Reviewed sections (plan steps and their Steps heading aside) with no Recommended line.
- * A section followed by its own sub-sections is exempt: its picks close the sub-sections, which are checked themselves.
+ * What a section is for, from its heading. Understand: what happens and what could go wrong (the user reads a summary).
+ * Decide: choices, decisions, questions (the user reads each item with its recommended pick). Reference: step mechanics
+ * and evidence (under its section, on request). A heading the table doesn't know is Understand.
+ */
+export type Kind = "understand" | "decide" | "reference"
+
+const DECIDE = /\b(choices|decisions|feasibility|open questions|concerns|assumptions)\b/
+const REFERENCE = /^(steps|excerpts|further evidence|evidence)\b/
+
+const titleKind = (title: string): Kind | undefined => {
+  const t = plain(title)
+  return REFERENCE.test(t) ? "reference" : DECIDE.test(t) ? "decide" : undefined
+}
+
+/** A sub-section takes the type of the heading it sits under unless its own title says otherwise. */
+export const kindOf = (s: Section): Kind => s.kind ?? (s.step ? "reference" : (titleKind(s.title) ?? "understand"))
+
+function withKinds(sections: Section[]): Section[] {
+  const stack: { depth: number; kind: Kind }[] = []
+  for (const s of sections) {
+    if (s.step) {
+      s.kind = "reference"
+      continue
+    }
+    const depth = /^(#+)/.exec(s.text)?.[1]?.length ?? 99
+    while (stack.length && stack.at(-1)!.depth >= depth) stack.pop()
+    const kind = titleKind(s.title) ?? stack.at(-1)?.kind ?? "understand"
+    s.kind = kind
+    stack.push({ depth, kind })
+  }
+  return sections
+}
+
+/** The items of a decide section: its top-level list lines, each one decision with its pick. */
+const ITEM = /^(?:[-*]|\d+\.)\s+\S/
+const itemLines = (s: Section) => s.text.split("\n").flatMap((l, i) => (i > 0 && ITEM.test(l) ? [{ at: i, text: l }] : []))
+const hasPick = (l: string) => /\brecommended\b/i.test(l)
+
+/**
+ * Decide sections with no Recommended line. One written as a list needs its pick on each item (see `lineProblems`),
+ * and one followed by its own sub-sections gets its picks there: those sub-sections are checked themselves.
  */
 export function unrecommended(text: string, under?: string): Section[] {
   const { sections } = split(text)
@@ -265,7 +310,7 @@ export function unrecommended(text: string, under?: string): Section[] {
   return (reviewed(sections, under) ?? [])
     .filter((i) => !parent(i))
     .map((i) => sections[i]!)
-    .filter((s) => !s.step && !/^steps\b/.test(plain(s.title)) && !body(s).split("\n").some((l) => labelled("recommended").test(l)))
+    .filter((s) => kindOf(s) === "decide" && !itemLines(s).length && !body(s).split("\n").some((l) => labelled("recommended").test(l)))
 }
 
 export const missingRecommendations = (text: string, under?: string) => unrecommended(text, under).map(titleOf)
@@ -283,14 +328,42 @@ const stepPurpose = (s: Section) =>
 /** The section titled like a document summary needs no summary line of its own. */
 const isSummary = (s: Section) => /^(summary|what you get)\b/.test(plain(s.title))
 
-/** What the user sees of a section by default: its Summary and Recommended lines (a step: its purpose). Undefined without a summary. */
+/**
+ * What the user sees of a section by default (a step: its purpose; undefined without anything to show).
+ * Understand: its Summary, then the Team chose and Risk lines when it has them. Decide: its items, each with its pick
+ * (a section without items: Summary and Recommended lines). Reference: nothing.
+ */
 export function userView(s: Section): string | undefined {
   if (s.step) return stepPurpose(s) || undefined
+  const kind = kindOf(s)
+  if (kind === "reference") return undefined
   const lines = body(s).split("\n").filter((l) => l.trim())
   const summary = lines.find((l) => SUMMARY_LINE.test(l))
+  if (kind === "decide") {
+    const items = itemLines(s).map((i) => i.text)
+    if (items.length) return [summary, items.join("\n")].filter(Boolean).join("\n\n")
+    if (!summary) return undefined
+    const pick = lines.findLast((l) => RECOMMENDED_LINE.test(l) && l !== summary)
+    return pick ? `${summary}\n\n${pick}` : summary
+  }
   if (!summary) return undefined
-  const pick = lines.findLast((l) => RECOMMENDED_LINE.test(l) && l !== summary)
-  return pick ? `${summary}\n\n${pick}` : summary
+  const raw = body(s).split("\n")
+  const parts = ["team chose", "risk"].map((name) => labelBlock(raw, name))
+  // A fact about the code taken for true is shown wherever it sits: the user can't judge a plan on facts they never saw.
+  const shown = parts.join("\n")
+  const facts = raw.filter((l) => /\[A\d+\]/.test(l) && !shown.includes(l) && !l.includes(summary))
+  return [summary, ...parts, facts.join("\n")].filter(Boolean).join("\n\n")
+}
+
+const LIST_LINE = /^\s*(?:[-*]|\d+\.)\s|^\s+\S/
+
+/** A labelled line with the list lines that follow it ("**Team chose:**" and its bullets). */
+function labelBlock(raw: string[], name: string): string {
+  const at = raw.findIndex((l) => labelled(name).test(l))
+  if (at < 0) return ""
+  let end = at + 1
+  while (end < raw.length && LIST_LINE.test(raw[end]!)) end++
+  return raw.slice(at, end).join("\n")
 }
 
 /** A section's text under its heading line. */
@@ -303,15 +376,71 @@ export const oneLine = (s: Section) =>
     .replace(/\s*\n+\s*/g, " · ")
     .trim()
 
-/** Reviewed sections with no Summary line, and plan steps with no purpose after the title. */
+/** Reviewed sections with no Summary line (a decide section written as a list needs none), and plan steps with no purpose after the title. */
 export function unsummarized(text: string, under?: string): Section[] {
   const { sections } = split(text)
   return (reviewed(sections, under) ?? [])
     .map((i) => sections[i]!)
-    .filter((s) => (s.step ? !stepPurpose(s) : !/^steps\b/.test(plain(s.title)) && !isSummary(s) && !body(s).split("\n").some((l) => labelled("summary").test(l))))
+    .filter((s) => {
+      if (s.step) return !stepPurpose(s)
+      const kind = kindOf(s)
+      if (kind === "reference" || isSummary(s) || body(s).split("\n").some((l) => labelled("summary").test(l))) return false
+      return kind === "understand" || !itemLines(s).length
+    })
 }
 
 export const missingSummaries = (text: string, under?: string) => unsummarized(text, under).map(titleOf)
+
+/** A line the section's type makes wrong; `at` is its index in the text, so only that line is sent again. */
+export interface LineProblem {
+  section: Section
+  at: number
+  ask: string
+}
+
+/** The most words a Summary, Team chose or Risk line has: the user reads it at a glance. */
+const MAX_WORDS = 110
+const VIEW_LABELS = ["summary", "team chose", "risk"]
+const clip = (l: string) => {
+  const t = l.replace(/\s+/g, " ").trim()
+  return t.length > 60 ? `${t.slice(0, 60)}…` : t
+}
+
+/**
+ * Lines to send again, by section type. Decide: an item with no pick, or "as written" for something assumed. Understand: a
+ * Summary, Team chose or Risk line too long to read at a glance, and an "assumed" nobody checks (a fact about the code
+ * is `[A1] assumed: …`, which the Intern checks; the team's own choice goes on the Team chose line).
+ */
+export function lineProblems(text: string, under?: string): LineProblem[] {
+  const { sections } = split(text)
+  const out: LineProblem[] = []
+  for (const i of reviewed(sections, under) ?? []) {
+    const s = sections[i]!
+    const kind = kindOf(s)
+    const where = `section "${titleOf(s)}"`
+    if (kind === "decide") {
+      for (const it of itemLines(s)) {
+        if (!hasPick(it.text)) out.push({ section: s, at: s.line! + it.at, ask: `${where}, item "${clip(it.text)}" has no pick: send the whole item again, ending "**Recommended:** <option>: <short reason>".` })
+        else if (/recommended\W*(as written|no change|as is)\b/i.test(it.text) && /\bassumed\b/i.test(it.text))
+          out.push({ section: s, at: s.line! + it.at, ask: `${where}, item "${clip(it.text)}" is assumed, so "as written" is no pick: send the item again with the option you take and why.` })
+      }
+    } else if (kind === "understand") {
+      let chose = false
+      s.text.split("\n").forEach((l, j) => {
+        if (!j) return
+        const label = VIEW_LABELS.find((name) => labelled(name).test(l))
+        const words = l.split(/\s+/).filter(Boolean).length
+        if (label) chose = label === "team chose"
+        else if (chose && !LIST_LINE.test(l)) chose = false
+        if (label && words > MAX_WORDS)
+          out.push({ section: s, at: s.line! + j, ask: `${where}: the ${label} line has ${words} words; the user reads it at a glance. Send it again in at most ${MAX_WORDS}, the rest stays in the section's details.` })
+        else if (/\bassumed\b/i.test(l) && !/\[A\d+\]/.test(l) && !chose)
+          out.push({ section: s, at: s.line! + j, ask: `${where}: "${clip(l)}" says assumed, and nothing checks it. Send the line again: a fact about the code as "[A1] assumed: <the fact>" (the Intern checks it), the team's own choice on the "**Team chose:**" line.` })
+      })
+    }
+  }
+  return out
+}
 
 /** The draft as the user sees it by default: each reviewed section's user view; other sections show only their heading. */
 export function shortView(text: string, under?: string): string {
@@ -323,7 +452,7 @@ export function shortView(text: string, under?: string): string {
       const first = s.text.split("\n")[0]!
       if (s.step) return first
       if (!body(s)) return s.text
-      if (!shown.has(i)) return `${first}\n\n_(details on request)_\n`
+      if (!shown.has(i) || kindOf(s) === "reference") return `${first}\n\n_(details on request)_\n`
       const view = userView(s)
       return view ? `${first}\n\n${view}\n` : s.text
     }),

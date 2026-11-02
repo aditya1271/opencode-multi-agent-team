@@ -5,7 +5,7 @@ import { verdictProblems, verdicts } from "./polish.ts"
 import { renderEvidence } from "./evidence.ts"
 import { checkOutput, checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
 import { runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
-import { checkEdits, splice, split, titleOf, unrecommended, unsummarized, type Section } from "./sections.ts"
+import { checkEdits, lineProblems, splice, split, titleOf, unrecommended, unsummarized, type Section } from "./sections.ts"
 import { consultSide, consultsUsed, draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
 
 const EVIDENCE_MARK = /\[E\d+\]/
@@ -226,19 +226,21 @@ function recommendProblem(role: string, input: Report, task: TaskState | undefin
     (analyst ? [...f(text, "Concept brief"), ...f(text, "Research brief")] : f(text)).filter((s) => !returned || returned.has(titleOf(s)))
   const unrec = check(unrecommended)
   const unsum = check(unsummarized)
-  if (!unrec.length && !unsum.length) return undefined
+  const wrong = (analyst ? [...lineProblems(text, "Concept brief"), ...lineProblems(text, "Research brief")] : lineProblems(text)).filter((p) => !returned || returned.has(titleOf(p.section)))
+  if (!unrec.length && !unsum.length && !wrong.length) return undefined
   // A whole draft is kept and gets only the missing lines; a scoped one returns its sections again.
-  if (!returned) return sectionFixes(unrec, unsum)
+  if (!returned) return sectionFixes(unrec, unsum, wrong)
   const missing = unrec.map(titleOf)
   const unsummed = unsum.map(titleOf)
   return [
     missing.length
-      ? `These sections have no line "**Recommended:** <option>: <short reason>": ${missing.join("; ")}. Every section the user reviews closes with one (several choices in one section: the pick for each, in that line; nothing to decide: "**Recommended:** as written").`
+      ? `These sections decide something and have no line "**Recommended:** <option>: <short reason>": ${missing.join("; ")}. A section that decides closes with one (several choices: the pick for each, in that line), or lists its decisions one per line, each with its pick.`
       : "",
     unsummed.length
-      ? `Every section the user reviews opens with a line "**Summary:** <1-3 plain sentences: the direction and why, not the mechanics>", and every plan step's first line is "N. **Title**: <one sentence on what the step achieves>". The user sees only those lines unless they ask for details. Missing in: ${unsummed.join("; ")}.`
+      ? `A section that explains opens with a line "**Summary:** <what it does or means, in plain terms>" (then "**Team chose:**" and "**Risk:**" lines when there are any), and every plan step's first line is "N. **Title**: <one sentence on what the step achieves>". The user sees only those lines unless they ask for details. Missing in: ${unsummed.join("; ")}.`
       : "",
-    scoped ? "Return those sections too, with only the missing lines added." : "",
+    ...wrong.map((p) => p.ask),
+    scoped ? "Return those sections too, with only those lines changed." : "",
   ]
     .filter(Boolean)
     .join(" ")
@@ -344,7 +346,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   const recommendErr = recommendProblem(run.role, input, task, !whole && isScopedWriter(run.mode, task))
   if (typeof recommendErr === "string") throw new Error(recommendErr)
   if (recommendErr)
-    refuse(run, input, recommendErr, "Every section the user reviews opens with a Summary line and closes with a Recommended line: the user sees only those lines unless they ask for details. These are missing.")
+    refuse(run, input, recommendErr, "The user reads a short view of each section unless they ask for details: a Summary (with Team chose and Risk lines) for a section that explains, each decision with its Recommended pick for a section that decides. These lines are missing or too long.")
   if (run.verdicts) {
     const problems = verdictProblems(input.content, run.verdicts)
     if (problems.length && (run.verdictRejects ?? 0) < VERDICT_RETRIES) {
