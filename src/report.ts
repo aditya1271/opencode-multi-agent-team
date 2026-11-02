@@ -1,7 +1,7 @@
 import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { applyFixes, blockFixes, fixRequest, lineFixes, numbered, sectionFixes, type Fix } from "./fixes.ts"
-import { verdictProblems, verdicts } from "./polish.ts"
+import { verdictProblems, verdicts, type VerdictSpec } from "./polish.ts"
 import { renderEvidence } from "./evidence.ts"
 import { checkOutput, checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
 import { runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
@@ -254,12 +254,8 @@ export function recommendationOf(question: string): string | undefined {
   return /^\W*Recommended\W*:\s*(.+)$/im.exec(question)?.[1].replace(/\**\s*$/, "").trim() || undefined
 }
 
-/** Validates and stores the report for the session. Throws a message the model sees. */
-export function acceptReport(config: Config, sessionID: string, input: Report): string {
-  const run = runs.get(sessionID)
-  if (!run) throw new Error("report is only for team agents running a task.")
-  const statuses = allowedStatuses(config, run.mode, run.task)
-  if (!statuses.includes(input.status)) throw new Error(`Invalid status "${input.status}". Allowed now: ${statuses.join(", ")}.`)
+/** The report to check: the one sent, or the kept report with the fixes (and evidence) sent for it put in. */
+function withFixes(run: SessionRun, input: Report): Report {
   // The Analyst links the Intern's checked blocks as [Qn]; the readers get the blocks themselves.
   const quotes = run.role === "analyst" && run.task ? loadQuotes(run.task.dir) : undefined
   // Evidence sent again for a kept report (no content) replaces the items of the same id.
@@ -288,15 +284,11 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     input.questions = input.questions?.map((q) => expandQuotes(q, quotes))
     input.sections = input.sections?.map((s) => ({ ...s, content: expandQuotes(s.content, quotes) }))
   }
-  if ((input.status === "QUESTIONS" || input.status === "ASK" || input.status === "CONSULT") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
-  if (input.status === "CONSULT" && !EVIDENCE.test(input.content))
-    throw new Error("CONSULT needs the evidence in content: the Planner has no file access. Quote the code (`path:line` and the lines, in a code block) and the exact output or facts the question rests on.")
-  if (input.status === "QUESTIONS") {
-    const missing = input.questions!.map((q, i) => (recommendationOf(q) ? 0 : i + 1)).filter(Boolean)
-    if (missing.length) throw new Error(`Every question needs a line \`Recommended: <option>\` (the option you would pick, and why); missing in item ${missing.join(", ")}.`)
-    if (input.content.split(/\s+/).length > QUESTIONS_CONTEXT_WORDS)
-      throw new Error(`QUESTIONS content is context for the questions (at most ${QUESTIONS_CONTEXT_WORDS} words), not your draft: you write the draft after the answers. Put what each question needs into the question itself.`)
-  }
+  return input
+}
+
+/** The Intern's findings, checked against the files and what its tools showed; the code of evidence items is written in. */
+function checkFindings(run: SessionRun, input: Report): Report {
   // Readers take the Intern's code as true. Evidence is written by the plugin from the files, so it only needs to be
   // found (and to have been shown to the Intern); code blocks the Intern wrote go back until they match their files.
   // After QUOTE_RETRIES what is still wrong is removed (shortened blocks are true, so they stay).
@@ -323,6 +315,38 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (blocks.some((b) => b.verdict !== "ok" && b.verdict !== "output")) input = { ...input, content: keepChecked(input.content, blocks) }
     if (drawn) input = { ...input, content: renderEvidence(input.content, input.evidence ?? [], root, true).content }
   }
+  return input
+}
+
+/** A review's verdict lines: one per id, each holding, and a status that fits them. */
+function checkVerdicts(run: SessionRun, input: Report, spec: VerdictSpec) {
+  const problems = verdictProblems(input.content, spec)
+  if (problems.length && (run.verdictRejects ?? 0) < VERDICT_RETRIES) {
+    run.verdictRejects = (run.verdictRejects ?? 0) + 1
+    refuse(run, input, lineFixes(problems), "The plugin checks your verdict lines, one per id; these are missing or don't hold.")
+  }
+  const bar = spec.notWith
+  const failing = bar && input.status === bar.status ? [...verdicts(input.content, spec)].filter(([, v]) => bar.words.includes(v.verdict)).map(([id]) => id) : []
+  if (failing.length) throw new Error(`${bar!.status} doesn't fit your own verdicts: ${failing.join(", ")} not met. Report ISSUES with the fix for each, or correct the verdict line.`)
+}
+
+/** Validates and stores the report for the session. Throws a message the model sees. */
+export function acceptReport(config: Config, sessionID: string, input: Report): string {
+  const run = runs.get(sessionID)
+  if (!run) throw new Error("report is only for team agents running a task.")
+  const statuses = allowedStatuses(config, run.mode, run.task)
+  if (!statuses.includes(input.status)) throw new Error(`Invalid status "${input.status}". Allowed now: ${statuses.join(", ")}.`)
+  input = withFixes(run, input)
+  if ((input.status === "QUESTIONS" || input.status === "ASK" || input.status === "CONSULT") && !input.questions?.length) throw new Error(`${input.status} needs a non-empty questions list.`)
+  if (input.status === "CONSULT" && !EVIDENCE.test(input.content))
+    throw new Error("CONSULT needs the evidence in content: the Planner has no file access. Quote the code (`path:line` and the lines, in a code block) and the exact output or facts the question rests on.")
+  if (input.status === "QUESTIONS") {
+    const missing = input.questions!.map((q, i) => (recommendationOf(q) ? 0 : i + 1)).filter(Boolean)
+    if (missing.length) throw new Error(`Every question needs a line \`Recommended: <option>\` (the option you would pick, and why); missing in item ${missing.join(", ")}.`)
+    if (input.content.split(/\s+/).length > QUESTIONS_CONTEXT_WORDS)
+      throw new Error(`QUESTIONS content is context for the questions (at most ${QUESTIONS_CONTEXT_WORDS} words), not your draft: you write the draft after the answers. Put what each question needs into the question itself.`)
+  }
+  input = checkFindings(run, input)
   if (input.status === "FOUND" && !input.content.includes("```"))
     throw new Error("FOUND needs the code that proves each finding: `evidence` items (file, first and last line), each marked [E1], [E2] … on a line of its own in content. The asker passes the code to agents who see no files.")
   if (input.status === "ESCALATE" && needsWhat(run.mode, run.task)) {
@@ -347,16 +371,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (typeof recommendErr === "string") throw new Error(recommendErr)
   if (recommendErr)
     refuse(run, input, recommendErr, "The user reads a short view of each section unless they ask for details: a Summary (with Team chose and Risk lines) for a section that explains, each decision with its Recommended pick for a section that decides. These lines are missing or too long.")
-  if (run.verdicts) {
-    const problems = verdictProblems(input.content, run.verdicts)
-    if (problems.length && (run.verdictRejects ?? 0) < VERDICT_RETRIES) {
-      run.verdictRejects = (run.verdictRejects ?? 0) + 1
-      refuse(run, input, lineFixes(problems), "The plugin checks your verdict lines, one per id; these are missing or don't hold.")
-    }
-    const bar = run.verdicts.notWith
-    const failing = bar && input.status === bar.status ? [...verdicts(input.content, run.verdicts)].filter(([, v]) => bar.words.includes(v.verdict)).map(([id]) => id) : []
-    if (failing.length) throw new Error(`${bar!.status} doesn't fit your own verdicts: ${failing.join(", ")} not met. Report ISSUES with the fix for each, or correct the verdict line.`)
-  }
+  if (run.verdicts) checkVerdicts(run, input, run.verdicts)
   if (run.mode === "analyst_answer") {
     const missing = (run.task?.pending?.ids ?? []).filter((id) => !new RegExp(`\\b${id}\\b`).test(input.content))
     if (missing.length) throw new Error(`Answer every question by its id; missing: ${missing.join(", ")}.`)
