@@ -8,7 +8,7 @@ type Context = Plugin.Context
 const client = (context: Context) => context.client.rpc(TeamStats)
 type Rpc = ReturnType<typeof client>
 type CallOptions = Parameters<Rpc["stats"]>[1]
-type Choice = "ok" | "skip" | "comment" | "question" | "rest" | "stop" | "pause"
+type Choice = "ok" | "skip" | "comment" | "question" | "rest" | "stop" | "pause" | "prev" | "next" | "jump"
 
 const KEYS: { key: string; choice: Choice; title: string }[] = [
   { key: "o", choice: "ok", title: "OK" },
@@ -18,6 +18,15 @@ const KEYS: { key: string; choice: Choice; title: string }[] = [
   { key: "r", choice: "rest", title: "Show the rest" },
   { key: "x", choice: "stop", title: "Stop" },
 ]
+
+/** Moving about: ← and → (or p and n) go to the neighbouring section, g lists them all. */
+const NAV: { key: string; alt?: string; choice: Choice; title: string }[] = [
+  { key: "p", alt: "left", choice: "prev", title: "← Previous" },
+  { key: "n", alt: "right", choice: "next", title: "Next →" },
+  { key: "g", choice: "jump", title: "Go to…" },
+]
+
+const MARK = { ok: "✓", skip: "~", comment: "✎" } as const
 
 export function setupReview(
   context: Context,
@@ -30,7 +39,7 @@ export function setupReview(
   let active = false
 
   /** Shows one section; resolves with the user's choice (Esc: pause). */
-  const showSection = (draft: ReviewDraft, i: number, notes: string[]) =>
+  const showSection = (draft: ReviewDraft, i: number, notes: string[], marks: string) =>
     new Promise<Choice>((resolve) => {
       let settled = false
       let scroll: ScrollBoxRenderable | undefined
@@ -51,6 +60,9 @@ export function setupReview(
           enabled: () => !settled,
           commands: [
             ...KEYS.map((k) => ({ title: k.title, group: "Team review", bind: k.key, run: () => finish(k.choice) })),
+            ...NAV.flatMap((k) =>
+              [k.key, k.alt].filter(Boolean).map((bind) => ({ title: k.title, group: "Team review", bind: bind!, run: () => finish(k.choice) })),
+            ),
             ...(s.summary ? [{ title: "Details", group: "Team review", bind: "d", run: () => setFull(!full()) }] : []),
             { title: "Scroll up", group: "Team review", bind: "up", run: () => scroll?.scrollBy(-1) },
             { title: "Scroll down", group: "Team review", bind: "down", run: () => scroll?.scrollBy(1) },
@@ -60,14 +72,31 @@ export function setupReview(
         }))
         return (
           <box flexDirection="column" paddingX={2} paddingY={1} gap={1}>
-            <text fg={color.header()}>{`${draft.title}, ${s.id} · ${s.title}  (${i + 1} of ${draft.sections.length})`}</text>
+            <box flexDirection="column">
+              <text fg={color.header()}>{`${draft.title}, ${s.id} · ${s.title}  (${i + 1} of ${draft.sections.length})`}</text>
+              <text fg={color.muted()}>{marks}</text>
+            </box>
             <scrollbox ref={(r: ScrollBoxRenderable) => (scroll = r)} height={Math.max(6, Math.min(30, (context.renderer.height ?? 40) - 20))} scrollY>
               <text fg={color.header()} wrapMode="word">
-                {view(full() ? s.body : s.summary!)}
+                {view(full() ? s.body : s.summary!).replace(/\*\*/g, "")}
               </text>
             </scrollbox>
             <box flexDirection="row" gap={2}>
               <For each={KEYS}>
+                {(k) => (
+                  <box
+                    onMouseDown={(event: { stopPropagation(): void }) => {
+                      event.stopPropagation()
+                      finish(k.choice)
+                    }}
+                  >
+                    <text fg={color.accent()}>{`[${k.key}] ${k.title}`}</text>
+                  </box>
+                )}
+              </For>
+            </box>
+            <box flexDirection="row" gap={2}>
+              <For each={NAV}>
                 {(k) => (
                   <box
                     onMouseDown={(event: { stopPropagation(): void }) => {
@@ -106,39 +135,81 @@ export function setupReview(
       if (!style) return paused()
       if (style !== "walk") return ended("rest")
     }
-    while (out.at < n) {
+    const verdictOf = (id: string) => out.replies.find((r) => r.id === id)?.verdict ?? (out.comments.some((c) => c.id === id) ? "comment" : undefined)
+    const markOf = (id: string) => {
+      const v = verdictOf(id)
+      return v ? MARK[v] : "·"
+    }
+    const marks = () => draft.sections.map((s, j) => (j === out.at ? `[${markOf(s.id)}]` : markOf(s.id))).join(" ")
+    /** The answer to a section is the latest one: going back replaces it. */
+    const answer = (id: string, put: () => void) => {
+      out.replies = out.replies.filter((r) => r.id !== id)
+      out.comments = out.comments.filter((c) => c.id !== id)
+      put()
+    }
+    const unanswered = () => draft.sections.findIndex((s) => !verdictOf(s.id))
+    const STATE = { ok: "OK", skip: "skipped", comment: "your comment" }
+    const jump = async () => {
+      const picked = await dialog.select({
+        title: "Go to section",
+        options: draft.sections.map((s, j) => ({ title: `${j + 1}. ${s.title}`, value: j, description: STATE[verdictOf(s.id) as keyof typeof STATE] ?? "not answered yet" })),
+        current: Math.min(out.at, n - 1),
+      })
+      if (picked !== undefined) out.at = picked
+    }
+    const plural = (k: number, word: string) => `${k} ${word}${k === 1 ? "" : "s"}`
+    for (;;) {
+      if (out.at >= n) {
+        const open = unanswered()
+        if (open >= 0) {
+          out.at = open
+          continue
+        }
+        const said = out.comments.length || out.questions.length
+        const last = await dialog.select({
+          title: `All ${plural(n, "section")} reviewed, ${said ? [plural(out.comments.length, "comment"), out.questions.length ? plural(out.questions.length, "question") : ""].filter(Boolean).join(", ") : "no comments"}`,
+          options: [
+            said ? { title: "Send to the team", value: "done" as const } : { title: "Approve", value: "approve" as const },
+            { title: "Go back to a section…", value: "back" as const },
+            { title: "Show it all at once", value: "rest" as const, description: "The whole draft shows in the chat." },
+          ],
+        })
+        if (!last) return paused()
+        if (last === "back") {
+          await jump()
+          if (out.at >= n) out.at = n - 1
+          continue
+        }
+        return ended(last)
+      }
       const s = draft.sections[out.at]!
       const notes = [
         ...out.questions.filter((q) => q.id === s.id).map((q) => `(Your question, answered at the end: ${q.text})`),
+        ...out.comments.filter((c) => c.id === s.id).map((c) => `(Your comment: ${c.text})`),
       ]
-      const choice = await showSection(draft, out.at, notes)
+      const choice = await showSection(draft, out.at, notes, marks())
       if (choice === "pause") return paused()
       if (choice === "rest" || choice === "stop") return ended(choice)
-      if (choice === "ok" || choice === "skip") {
-        out.replies.push({ id: s.id, verdict: choice })
+      if (choice === "prev") out.at = Math.max(0, out.at - 1)
+      else if (choice === "next") out.at++
+      else if (choice === "jump") await jump()
+      else if (choice === "ok" || choice === "skip") {
+        answer(s.id, () => out.replies.push({ id: s.id, verdict: choice }))
         out.at++
-        continue
+      } else {
+        const before = out.comments.find((c) => c.id === s.id)?.text
+        const text = await dialog.prompt(
+          choice === "comment"
+            ? { title: `Comment on ${s.id} · ${s.title}`, description: "What should change? State the exact edit, or what is wrong. It is polished and confirmed at the end.", ...(before && { value: before }) }
+            : { title: `Question on ${s.id} · ${s.title}`, description: "Answered at the end, before your comments go to the team." },
+        )
+        if (!text?.trim()) continue
+        if (choice === "comment") {
+          answer(s.id, () => out.comments.push({ id: s.id, text: text.trim() }))
+          out.at++
+        } else out.questions.push({ id: s.id, text: text.trim() })
       }
-      const text = await dialog.prompt(
-        choice === "comment"
-          ? { title: `Comment on ${s.id} · ${s.title}`, description: "What should change? State the exact edit, or what's wrong. It is polished and confirmed at the end." }
-          : { title: `Question on ${s.id} · ${s.title}`, description: "Answered at the end, before your comments go to the team." },
-      )
-      if (!text?.trim()) continue
-      if (choice === "comment") {
-        out.comments.push({ id: s.id, text: text.trim() })
-        out.at++
-      } else out.questions.push({ id: s.id, text: text.trim() })
     }
-    if (out.comments.length || out.questions.length) return ended("done")
-    const last = await dialog.select({
-      title: `All ${n} section${n > 1 ? "s" : ""} reviewed, no comments`,
-      options: [
-        { title: "Approve", value: "approve" as const },
-        { title: "Show it all at once", value: "rest" as const, description: "The whole draft shows in the chat." },
-      ],
-    })
-    return last ? ended(last) : paused()
   }
 
   /** Opens the waiting review: on its own (only in a TUI showing the session), or from the sidebar or /team-review. */
