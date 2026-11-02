@@ -375,6 +375,16 @@ function walkSection(task: TaskState, w: NonNullable<TaskState["walk"]>): string
   )
 }
 
+/** What a phase's message draws on besides the task: its last step, the changed files, the usage report. */
+interface Progress {
+  task: TaskState
+  lastLine: string
+  files: string
+  attempts: string
+  usage: () => string
+  decided: string
+}
+
 function renderPhase(task: TaskState): string {
   const last = task.history[task.history.length - 1]
   const lastLine = last ? `${last.role} → ${last.status}: ${last.summary.split("\n")[0].replace(/[.\s]+$/, "")}` : "started"
@@ -393,157 +403,200 @@ function renderPhase(task: TaskState): string {
     return `PROGRESS: ${lastLine}. Next, on ${task.auto} auto: ${next}. ${attempts}\nNEXT ACTION: show this progress line to the user in one line, then call team with action "continue".`
   }
   const decided = task.autoLog?.length ? `**Decided on auto:**\n${task.autoLog.map((l) => `- ${l}`).join("\n")}` : ""
+  const h: Progress = { task, lastLine, files, attempts, usage, decided }
   switch (task.phase) {
-    case "running": {
-      const progress =
-        task.pending?.mode === "fix" ? ` Next: developer, step ${task.step} of ${task.planSteps}.` : task.pending ? ` Next: ${MODE_ROLE[task.pending.mode]} (${task.pending.mode}).` : ""
-      return `PROGRESS: ${lastLine}.${progress} ${attempts}\nNEXT ACTION: show this progress line to the user in one line, then call team with action "continue".`
-    }
+    case "running":
+      return runningView(h)
     case "checks":
-      return join(
-        "No build or test commands are configured for this project (checks.build / checks.test).",
-        `NEXT ACTION: ask the user [Skip build/test] [Give commands] [Stop]. Skip → team "answer" with text "skip". Give commands → ask for the build and test commands as free text, then team "answer" with them word for word. Stop → team "stop".`,
-      )
+      return checksView(h)
     case "questions":
-      return join(
-        `QUESTIONS from ${task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"}:`,
-        (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"),
-        `NEXT ACTION: ask the user these questions as free text (no fixed options). Polish their answer, then call team with action "answer" and the polished answer. If they ask something back instead, polish it, then call team with action "ask".`,
-      )
-    case "brief": {
-      const research = task.workflow === "research"
-      const raw = readTaskFile(task, "brief.md")
-      const idx = sectionIndex(task, "brief")
-      const brief = shortView(idx ? annotate(raw, idx) : raw, research ? "Research brief" : "Concept brief")
-      const title = research ? `**Research brief** (${task.depth ?? "?"} research)` : "**Concept brief**"
-      const shown = research ? researchBrief(brief) : section(brief, "Concept brief") || brief
-      return join(
-        `${research ? "RESEARCH" : "CONCEPT"} BRIEF ready. Show this block to the user exactly as written:`,
-        `<show>\n${join(title, shown, changeLine(task), adviceLine(task))}\n</show>`,
-        `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, ask for details, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish it, then team "change"; a question → polish it, then team "ask"; ${DETAILS_ROUTE}.`,
-        idx && SCOPE_RULE,
-      )
-    }
-    case "approval": {
-      const name = docName(task)
-      const Name = `${name[0]!.toUpperCase()}${name.slice(1)}`
-      if (draftIsDoc(task)) {
-        const doc = readTaskFile(task, `doc-${task.doc}.md`)
-        const research = task.workflow === "research"
-        // With summaries, the section list carries each section's direction; the details are on request.
-        const long = missingSummaries(doc).length > 0
-        const decisions = long && !research && section(doc, "Decisions")
-        const findings = long && research && section(doc, "Key findings")
-        const conflicts = long && research && section(doc, "Conflicts")
-        const block = join(
-          `**${Name}** (version ${task.doc})`,
-          `**What you get**\n${task.docSummary ?? "(no summary)"}`,
-          task.infeasible && `**The how stage found a decision that can't work** (${task.infeasible})\n${clip(readTaskFile(task, task.infeasible), 30)}`,
-          decisions ? `**Decisions**\n${clip(decisions)}` : "",
-          findings ? `**Key findings**\n${clip(findings)}` : "",
-          conflicts ? `**Conflicts between sources**\n${clip(conflicts, 20)}` : "",
-          `**Sections**\n${idList(task, doc, false) || sectionTitles(doc).map((t) => `- ${t}`).join("\n") || "(none)"}`,
-          changeLine(task),
-          architectBlock(task),
-          adviceLine(task),
-          `**File:** ${task.output ?? path.join(task.dir, `doc-${task.doc}.md`)}`,
-        )
-        const reply =
-          task.stage === "what"
-            ? task.infeasible
-              ? "Reply with how to change the what-document, approve it as it is (the team plans again), stop, ask about it or for details, or have Architect review it."
-              : "Reply to approve the behaviour (the team then plans the change), change or stop it, ask about it or for details, or have Architect review it."
-            : "Reply to approve, change or stop it, ask about it or for details, or have Architect review it."
-        return join(
-          `${name.toUpperCase()} ready for the user. Show this block to the user exactly as written, without rewording or shortening it:`,
-          `<show>\n${block}\n</show>`,
-          `NEXT ACTION: show the block above and end with one line: "${reply}" No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
-          task.sections && SCOPE_RULE,
-        )
-      }
-      const planText = readTaskFile(task, `plan-${task.plan}.md`)
-      const howDoc = task.workflow === "plan" && task.output ? howOutput(task.output) : undefined
-      const steps = idList(task, planText, true)
-      const titles = steps ? [steps] : stepTitles(planText)
-      const others = idList(task, planText, false)
-      const behaviour = (!others || missingSummaries(planText).length > 0) && section(planText, "Behaviour")
-      const block = join(
-        `**${howDoc ? `${Name} (plan ${task.plan})` : `Plan ${task.plan}`}**`,
-        `**What you get**\n${task.planSummary ?? "(no summary)"}`,
-        behaviour ? `**Behaviour**\n${clip(behaviour, 20)}` : "",
-        `**Steps**\n${titles.length ? titles.join("\n") : `${task.planSteps} step(s); see the plan file.`}`,
-        others && `**Other sections**\n${others}`,
-        `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}`,
-        changeLine(task),
-        architectBlock(task),
-        task.auto === "safe" && task.planRisk && "**Safe auto stopped here:** this plan has destructive or irreversible steps, so it needs your approval.",
-        decided,
-        adviceLine(task),
-        `**Plan file:** ${howDoc ?? path.join(task.dir, `plan-${task.plan}.md`)}`,
-      )
-      return join(
-        `PLAN ${task.plan} ready for approval. Show this block to the user exactly as written, without rewording or shortening it:`,
-        `<show>\n${block}\n</show>`,
-        `NEXT ACTION: show the block above and end with one line: "${howDoc ? "Reply to approve (then you can implement it)" : "Reply to approve"}, change or stop the plan, ask about it or for details, or have Architect review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
-        task.sections && SCOPE_RULE,
-      )
-    }
+      return questionsView(h)
+    case "brief":
+      return briefView(h)
+    case "approval":
+      return approvalView(h)
     case "stuck":
-      return join(
-        `STUCK: ${task.stuckReason}`,
-        `What was tried: ${task.plan} plan(s), ${task.planFailures} plan failure(s), round ${task.rounds} on step ${task.step}.`,
-        lastErrors(task),
-        decided,
-        `Files changed so far (kept, not reverted):\n${files}`,
-        usage(),
-        attempts,
-        `NEXT ACTION: show this to the user and ask [Retry] [Stop]. Retry → team "retry" (runs the agent once more in a fresh session). Stop → team "stop".`,
-      )
+      return stuckView(h)
     case "budget":
-      return join(
-        task.budgetReason === "calls"
-          ? `AGENT CALL LIMIT REACHED: ${task.agentCalls ?? 0} agent calls (runaway guard; failed attempts ${task.attempts}/${task.attemptLimit}). Last: ${lastLine}.`
-          : `ATTEMPT BUDGET USED UP: ${task.attempts} failed attempts (failed steps, work sent back, broken agent calls). Last: ${lastLine}.`,
-        task.pending ? `Left to do: ${task.pending.mode}${task.planSteps ? `, step ${task.step} of ${task.planSteps}` : ""}.` : "",
-        `Files changed so far:\n${files}`,
-        decided,
-        usage(),
-        `NEXT ACTION: show this to the user and ask [${task.budgetReason === "calls" ? "Continue +25 calls" : "Continue +5 attempts"}] [Stop]. Continue → team "extend". Stop → team "stop".`,
-      )
+      return budgetView(h)
     case "done":
-      if (isDocWorkflow(task))
-        return join(
-          task.workflow === "plan" && task.stage === "how" && task.output
-            ? `DONE: the plan is approved. What-document: ${task.output}${task.plan ? `\nHow-document: ${howOutput(task.output)}` : ""}`
-            : `DONE: the ${docName(task)} is approved: ${task.output}`,
-          task.workflow === "plan" && task.stage === "how" ? task.planSummary : task.docSummary,
-          decided,
-          usage(),
-          `Task folder: ${task.dir}`,
-          task.workflow === "plan"
-            ? `NEXT ACTION: tell the user the result, then ask with the question tool: [Implement it] [Done]. Implement it → team "implement" (it switches to build-manager and starts the code task; follow its NEXT ACTION). Done → stop. If the user later says "implement it", do the same.`
-            : `NEXT ACTION: tell the user the result. A follow-up question on this report → polish it, then team "start" with output "${task.output}", so the answer is appended to the report.`,
-        )
-      return join(
-        `DONE: ${task.doneSummary ?? lastLine}`,
-        task.skipChecks ? "Not built or tested: build and test were skipped." : "",
-        `Changed files:\n${files}`,
-        decided,
-        usage(),
-        `Task folder: ${task.dir}`,
-        "NEXT ACTION: tell the user the result. The task is finished.",
-      )
+      return doneView(h)
     case "stopped":
-      return join(
-        isDocWorkflow(task)
-          ? `STOPPED: task ${task.id}.${task.doc ? ` The latest ${docName(task)} is at ${task.output}.` : ""}`
-          : `STOPPED: task ${task.id}. Files already edited stay as they are; nothing was reverted.`,
-        `Files changed:\n${files}`,
-        usage(),
-        "NEXT ACTION: tell the user. They can resume it later (team \"resume\").",
-      )
+      return stoppedView(h)
   }
 }
+
+function runningView(h: Progress): string {
+  const { task, lastLine, attempts } = h
+  const progress =
+    task.pending?.mode === "fix" ? ` Next: developer, step ${task.step} of ${task.planSteps}.` : task.pending ? ` Next: ${MODE_ROLE[task.pending.mode]} (${task.pending.mode}).` : ""
+  return `PROGRESS: ${lastLine}.${progress} ${attempts}\nNEXT ACTION: show this progress line to the user in one line, then call team with action "continue".`
+}
+
+function checksView(_h: Progress): string {
+  return join(
+    "No build or test commands are configured for this project (checks.build / checks.test).",
+    `NEXT ACTION: ask the user [Skip build/test] [Give commands] [Stop]. Skip → team "answer" with text "skip". Give commands → ask for the build and test commands as free text, then team "answer" with them word for word. Stop → team "stop".`,
+  )
+}
+
+function questionsView(h: Progress): string {
+  const { task } = h
+  return join(
+    `QUESTIONS from ${task.questionsFrom ? MODE_ROLE[task.questionsFrom] : "an agent"}:`,
+    (task.questions ?? []).map((q, i) => `${i + 1}. ${q}`).join("\n"),
+    `NEXT ACTION: ask the user these questions as free text (no fixed options). Polish their answer, then call team with action "answer" and the polished answer. If they ask something back instead, polish it, then call team with action "ask".`,
+  )
+}
+
+function briefView(h: Progress): string {
+  const { task } = h
+  const research = task.workflow === "research"
+  const raw = readTaskFile(task, "brief.md")
+  const idx = sectionIndex(task, "brief")
+  const brief = shortView(idx ? annotate(raw, idx) : raw, research ? "Research brief" : "Concept brief")
+  const title = research ? `**Research brief** (${task.depth ?? "?"} research)` : "**Concept brief**"
+  const shown = research ? researchBrief(brief) : section(brief, "Concept brief") || brief
+  return join(
+    `${research ? "RESEARCH" : "CONCEPT"} BRIEF ready. Show this block to the user exactly as written:`,
+    `<show>\n${join(title, shown, changeLine(task), adviceLine(task))}\n</show>`,
+    `NEXT ACTION: show the block above and end with one line: "${research ? "Reply to start the research" : "Reply to have the what-document written"}, adjust the brief, ask for details, or stop." No buttons. Then act on the reply: a clear go ("go", "looks good") → team "approve"; a clear stop → team "stop"; adjustments → polish it, then team "change"; a question → polish it, then team "ask"; ${DETAILS_ROUTE}.`,
+    idx && SCOPE_RULE,
+  )
+}
+
+function approvalView(h: Progress): string {
+  const { task, decided } = h
+  const name = docName(task)
+  const Name = `${name[0]!.toUpperCase()}${name.slice(1)}`
+  if (draftIsDoc(task)) {
+    const doc = readTaskFile(task, `doc-${task.doc}.md`)
+    const research = task.workflow === "research"
+    // With summaries, the section list carries each section's direction; the details are on request.
+    const long = missingSummaries(doc).length > 0
+    const decisions = long && !research && section(doc, "Decisions")
+    const findings = long && research && section(doc, "Key findings")
+    const conflicts = long && research && section(doc, "Conflicts")
+    const block = join(
+      `**${Name}** (version ${task.doc})`,
+      `**What you get**\n${task.docSummary ?? "(no summary)"}`,
+      task.infeasible && `**The how stage found a decision that can't work** (${task.infeasible})\n${clip(readTaskFile(task, task.infeasible), 30)}`,
+      decisions ? `**Decisions**\n${clip(decisions)}` : "",
+      findings ? `**Key findings**\n${clip(findings)}` : "",
+      conflicts ? `**Conflicts between sources**\n${clip(conflicts, 20)}` : "",
+      `**Sections**\n${idList(task, doc, false) || sectionTitles(doc).map((t) => `- ${t}`).join("\n") || "(none)"}`,
+      changeLine(task),
+      architectBlock(task),
+      adviceLine(task),
+      `**File:** ${task.output ?? path.join(task.dir, `doc-${task.doc}.md`)}`,
+    )
+    const reply =
+      task.stage === "what"
+        ? task.infeasible
+          ? "Reply with how to change the what-document, approve it as it is (the team plans again), stop, ask about it or for details, or have Architect review it."
+          : "Reply to approve the behaviour (the team then plans the change), change or stop it, ask about it or for details, or have Architect review it."
+        : "Reply to approve, change or stop it, ask about it or for details, or have Architect review it."
+    return join(
+      `${name.toUpperCase()} ready for the user. Show this block to the user exactly as written, without rewording or shortening it:`,
+      `<show>\n${block}\n</show>`,
+      `NEXT ACTION: show the block above and end with one line: "${reply}" No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+      task.sections && SCOPE_RULE,
+    )
+  }
+  const planText = readTaskFile(task, `plan-${task.plan}.md`)
+  const howDoc = task.workflow === "plan" && task.output ? howOutput(task.output) : undefined
+  const steps = idList(task, planText, true)
+  const titles = steps ? [steps] : stepTitles(planText)
+  const others = idList(task, planText, false)
+  const behaviour = (!others || missingSummaries(planText).length > 0) && section(planText, "Behaviour")
+  const block = join(
+    `**${howDoc ? `${Name} (plan ${task.plan})` : `Plan ${task.plan}`}**`,
+    `**What you get**\n${task.planSummary ?? "(no summary)"}`,
+    behaviour ? `**Behaviour**\n${clip(behaviour, 20)}` : "",
+    `**Steps**\n${titles.length ? titles.join("\n") : `${task.planSteps} step(s); see the plan file.`}`,
+    others && `**Other sections**\n${others}`,
+    `**Risk:** ${task.planRisk ? "yes (destructive or irreversible steps)" : "no"}`,
+    changeLine(task),
+    architectBlock(task),
+    task.auto === "safe" && task.planRisk && "**Safe auto stopped here:** this plan has destructive or irreversible steps, so it needs your approval.",
+    decided,
+    adviceLine(task),
+    `**Plan file:** ${howDoc ?? path.join(task.dir, `plan-${task.plan}.md`)}`,
+  )
+  return join(
+    `PLAN ${task.plan} ready for approval. Show this block to the user exactly as written, without rewording or shortening it:`,
+    `<show>\n${block}\n</show>`,
+    `NEXT ACTION: show the block above and end with one line: "${howDoc ? "Reply to approve (then you can implement it)" : "Reply to approve"}, change or stop the plan, ask about it or for details, or have Architect review it." No buttons. Then act on the user's reply: ${REPLY_ROUTES}`,
+    task.sections && SCOPE_RULE,
+  )
+}
+
+function stuckView(h: Progress): string {
+  const { task, files, attempts, usage, decided } = h
+  return join(
+    `STUCK: ${task.stuckReason}`,
+    `What was tried: ${task.plan} plan(s), ${task.planFailures} plan failure(s), round ${task.rounds} on step ${task.step}.`,
+    lastErrors(task),
+    decided,
+    `Files changed so far (kept, not reverted):\n${files}`,
+    usage(),
+    attempts,
+    `NEXT ACTION: show this to the user and ask [Retry] [Stop]. Retry → team "retry" (runs the agent once more in a fresh session). Stop → team "stop".`,
+  )
+}
+
+function budgetView(h: Progress): string {
+  const { task, lastLine, files, usage, decided } = h
+  return join(
+    task.budgetReason === "calls"
+      ? `AGENT CALL LIMIT REACHED: ${task.agentCalls ?? 0} agent calls (runaway guard; failed attempts ${task.attempts}/${task.attemptLimit}). Last: ${lastLine}.`
+      : `ATTEMPT BUDGET USED UP: ${task.attempts} failed attempts (failed steps, work sent back, broken agent calls). Last: ${lastLine}.`,
+    task.pending ? `Left to do: ${task.pending.mode}${task.planSteps ? `, step ${task.step} of ${task.planSteps}` : ""}.` : "",
+    `Files changed so far:\n${files}`,
+    decided,
+    usage(),
+    `NEXT ACTION: show this to the user and ask [${task.budgetReason === "calls" ? "Continue +25 calls" : "Continue +5 attempts"}] [Stop]. Continue → team "extend". Stop → team "stop".`,
+  )
+}
+
+function doneView(h: Progress): string {
+  const { task, lastLine, files, usage, decided } = h
+  if (isDocWorkflow(task))
+    return join(
+      task.workflow === "plan" && task.stage === "how" && task.output
+        ? `DONE: the plan is approved. What-document: ${task.output}${task.plan ? `\nHow-document: ${howOutput(task.output)}` : ""}`
+        : `DONE: the ${docName(task)} is approved: ${task.output}`,
+      task.workflow === "plan" && task.stage === "how" ? task.planSummary : task.docSummary,
+      decided,
+      usage(),
+      `Task folder: ${task.dir}`,
+      task.workflow === "plan"
+        ? `NEXT ACTION: tell the user the result, then ask with the question tool: [Implement it] [Done]. Implement it → team "implement" (it switches to build-manager and starts the code task; follow its NEXT ACTION). Done → stop. If the user later says "implement it", do the same.`
+        : `NEXT ACTION: tell the user the result. A follow-up question on this report → polish it, then team "start" with output "${task.output}", so the answer is appended to the report.`,
+    )
+  return join(
+    `DONE: ${task.doneSummary ?? lastLine}`,
+    task.skipChecks ? "Not built or tested: build and test were skipped." : "",
+    `Changed files:\n${files}`,
+    decided,
+    usage(),
+    `Task folder: ${task.dir}`,
+    "NEXT ACTION: tell the user the result. The task is finished.",
+  )
+}
+
+function stoppedView(h: Progress): string {
+  const { task, files, usage } = h
+  return join(
+    isDocWorkflow(task)
+      ? `STOPPED: task ${task.id}.${task.doc ? ` The latest ${docName(task)} is at ${task.output}.` : ""}`
+      : `STOPPED: task ${task.id}. Files already edited stay as they are; nothing was reverted.`,
+    `Files changed:\n${files}`,
+    usage(),
+    "NEXT ACTION: tell the user. They can resume it later (team \"resume\").",
+  )
+}
+
 
 function lastErrors(task: TaskState): string {
   const lastFail = [...task.history].reverse().find((h) => ["FAILED", "BLOCKED", "REPLAN", "ESCALATE", "ISSUES"].includes(h.status))
