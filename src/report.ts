@@ -2,10 +2,13 @@ import type { Config } from "./config.ts"
 import { commandParts } from "./match.ts"
 import { applyFixes, blockFixes, fixRequest, lineFixes, numbered, sectionFixes, type Fix } from "./fixes.ts"
 import { verdictProblems, verdicts } from "./polish.ts"
+import { renderEvidence } from "./evidence.ts"
 import { checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
 import { runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
 import { checkEdits, splice, split, titleOf, unrecommended, unsummarized, type Section } from "./sections.ts"
 import { consultSide, consultsUsed, draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
+
+const EVIDENCE_MARK = /\[E\d+\]/
 
 /** Times the Intern's findings go back for code blocks that don't match their files. */
 const QUOTE_RETRIES = 2
@@ -143,6 +146,13 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
       items: SECTION_EDIT,
       description: "Required for your revised draft: only the sections that change (id, the whole section from its heading line; reason for one outside the scope; id \"new\" with after for a new one).",
     }
+  if (mode === "intern")
+    properties.evidence = {
+      type: "array",
+      items: EVIDENCE_ITEM,
+      description:
+        "The code that proves your findings, one item per place: id (E1, E2, …), file, the first and last line of the code copied from the file, and line (about where the first line is). Put [E1] on a line of its own in content where the code belongs: the plugin writes the code from the file.",
+    }
   if (mode === "fix" || mode === "fix_trivial")
     properties.checkCommand = { type: "string", description: "Required for DONE: the exact check command you ran last." }
   if (!FIXABLE.includes(mode)) return { type: "object", properties, required: ["status", "summary", "content"], additionalProperties: false }
@@ -154,6 +164,13 @@ export function reportSchema(mode: Mode, statuses: string[], task?: TaskState) {
 
 /** Modes whose reports can be refused for parts code checks, and then fixed part by part. */
 const FIXABLE: Mode[] = ["intern", "analyst", "planner", "review", "review_trivial", "request_check"]
+
+const EVIDENCE_ITEM = {
+  type: "object",
+  properties: { id: { type: "string" }, file: { type: "string" }, first: { type: "string" }, last: { type: "string" }, line: { type: "integer" } },
+  required: ["id", "file", "first"],
+  additionalProperties: false,
+}
 
 const FIX = {
   type: "object",
@@ -243,13 +260,22 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   if (!statuses.includes(input.status)) throw new Error(`Invalid status "${input.status}". Allowed now: ${statuses.join(", ")}.`)
   // The Analyst links the Intern's checked blocks as [Qn]; the readers get the blocks themselves.
   const quotes = run.role === "analyst" && run.task ? loadQuotes(run.task.dir) : undefined
-  if (input.fixes?.length) {
+  // Evidence sent again for a kept report (no content) replaces the items of the same id.
+  const resend = !!run.draft && input.content === undefined && !!input.evidence?.length
+  if (input.fixes?.length || resend) {
     if (!run.draft || !run.fixes) throw new Error("No report of yours is kept: send the whole report.")
     if (input.status !== run.draft.status) throw new Error(`Your kept report has status ${run.draft.status}: send its fixes with that status, or a whole new report.`)
-    const given = quotes ? input.fixes.map((f) => ({ ...f, text: expandQuotes(f.text, quotes) })) : input.fixes
+    const sent = input.fixes ?? []
+    const given = quotes ? sent.map((f) => ({ ...f, text: expandQuotes(f.text, quotes) })) : sent
     const { content, unknown } = applyFixes(run.draft.content, run.fixes, given)
     if (unknown.length) throw new Error(`No fix ${unknown.join(", ")} was asked for. Asked for: ${run.fixes.map((f) => f.id).join(", ")}.`)
-    input = { ...run.draft, content }
+    const evidence = [...(run.draft.evidence ?? [])]
+    for (const e of input.evidence ?? []) {
+      const at = evidence.findIndex((x) => x.id === e.id)
+      if (at < 0) evidence.push(e)
+      else evidence[at] = e
+    }
+    input = { ...run.draft, content, ...(evidence.length ? { evidence } : {}) }
   } else {
     run.draft = run.fixes = undefined
     if (typeof input.summary !== "string" || typeof input.content !== "string")
@@ -269,24 +295,33 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     if (input.content.split(/\s+/).length > QUESTIONS_CONTEXT_WORDS)
       throw new Error(`QUESTIONS content is context for the questions (at most ${QUESTIONS_CONTEXT_WORDS} words), not your draft: you write the draft after the answers. Put what each question needs into the question itself.`)
   }
-  if (input.status === "FOUND" && !input.content.includes("```"))
-    throw new Error("FOUND needs the lines that prove each finding, quoted exactly in a code block with `path:line`: the asker passes them to agents who see no files.")
-  // Readers take the Intern's code blocks as true: they go back until they match the files, and after
-  // QUOTE_RETRIES the blocks that are wrong are removed (shortened ones are true, so they stay).
+  // Readers take the Intern's code as true. Evidence is written by the plugin from the files, so it only needs to be
+  // found (and to have been shown to the Intern); code blocks the Intern wrote go back until they match their files.
+  // After QUOTE_RETRIES what is still wrong is removed (shortened blocks are true, so they stay).
   if (run.role === "intern" && run.task) {
+    const root = run.task.workspace
     // Citations that are only off by some lines the plugin corrects itself.
-    let blocks = checkQuotes(input.content, run.task.workspace)
+    let blocks = checkQuotes(input.content, root)
     if (blocks.some((b) => b.verdict === "moved")) {
       input = { ...input, content: fixCites(input.content, blocks) }
-      blocks = checkQuotes(input.content, run.task.workspace)
+      blocks = checkQuotes(input.content, root)
     }
-    const fixes = blockFixes(blocks)
+    const drawn = !!input.evidence?.length || EVIDENCE_MARK.test(input.content)
+    const found = drawn ? renderEvidence(input.content, input.evidence ?? [], root, run.seen, false).problems : []
+    const fixes = [...blockFixes(blocks), ...found.map((p) => ({ kind: "evidence" as const, at: p.at, ask: p.ask }))]
     if (fixes.length && (run.quoteRejects ?? 0) < QUOTE_RETRIES) {
       run.quoteRejects = (run.quoteRejects ?? 0) + 1
-      refuse(run, input, fixes, "The plugin compares each code block with the file cited just above it, and your asker quotes your blocks as they are; the blocks below don't match.")
+      const why = [
+        blockFixes(blocks).length && "The plugin compares each code block with the file cited just above it, and your asker quotes your blocks as they are; the blocks below don't match.",
+        found.length && "The plugin writes the code of each evidence item from its file; the items below couldn't be placed.",
+      ].filter(Boolean)
+      refuse(run, input, fixes, why.join(" "))
     }
-    if (fixes.length) input = { ...input, content: keepChecked(input.content, blocks) }
+    if (blocks.some((b) => b.verdict !== "ok" && b.verdict !== "output")) input = { ...input, content: keepChecked(input.content, blocks) }
+    if (drawn) input = { ...input, content: renderEvidence(input.content, input.evidence ?? [], root, run.seen, true).content }
   }
+  if (input.status === "FOUND" && !input.content.includes("```"))
+    throw new Error("FOUND needs the code that proves each finding: `evidence` items (file, first and last line), each marked [E1], [E2] … on a line of its own in content. The asker passes the code to agents who see no files.")
   if (input.status === "ESCALATE" && needsWhat(run.mode, run.task)) {
     if (input.what !== "settled" && input.what !== "open") throw new Error('ESCALATE needs what: "settled" or "open".')
     if (input.what === "settled" && !/^#+\s*Why the behaviour is settled/im.test(input.content))
@@ -351,6 +386,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
   }
   run.report = { ...input, summary: input.summary.split("\n").slice(0, 5).join("\n") }
   delete run.report.fixes
+  delete run.report.evidence
   run.draft = run.fixes = undefined
   return "Report received. You are done; reply with the single word: done."
 }

@@ -477,7 +477,7 @@ function taskMessage(config: Config, task: TaskState, p: Pending, freshSession: 
     case "intern":
       if (task.workflow === "research") return join(INTERN_RESEARCH, `<queries>\n${p.note ?? ""}\n</queries>`)
       return join(
-        `MODE: planner search. Answer these queries for ${p.asker === "analyst" ? "Analyst" : "the Planner"} with path:line findings and short code excerpts. End with what you searched (terms, paths, graph queries), so a missing result can be judged. Report FOUND, or NOT_FOUND.`,
+        `MODE: planner search. Answer these queries for ${p.asker === "analyst" ? "Analyst" : "the Planner"} with findings. End with what you searched (terms, paths, graph queries), so a missing result can be judged. Report FOUND, or NOT_FOUND.`,
         `<queries>\n${p.note ?? ""}\n</queries>`,
       )
     case "architect_review":

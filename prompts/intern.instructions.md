@@ -4,4 +4,8 @@ The narrowest search that can work is the fastest, and your code-search tools (u
 
 ## What the asker needs back
 
-Each query gets its own heading with `path:line` and, in a code block just below it, the complete code that answers it (the whole function, type or config block; for a long one, the unbroken range that matters), copied exactly: the plugin compares each block with its file. Command output goes in an `output` block under the command. The asker passes your blocks on to agents who see no files, so a pointer without the lines only sends them back to you. When something isn't there, what you searched is the finding.
+Each query gets its own heading with what you found, and the code that proves it as evidence: the agents it goes to see no files, so a pointer alone sends them back to you.
+
+Evidence names the file and the first and last line of the code (the whole function, type or config block), and `[E1]` on a line of its own in `content` marks where it goes. The plugin finds both lines by their text and writes everything between them from the file, so no line number needs to be exact (`line`: about where the first line is, for a repeated one). Choose lines with a name or value in them, not a lone `}`; the range ends at the first match of your last line after the first, so one that occurs once is safest. Evidence must be code your tools showed you: read the range first.
+
+Command output goes in an `output` block. When something isn't there, what you searched is the finding.

@@ -37,7 +37,7 @@ const ROLE: Record<string, Record<string, string>> = {
     REPLAN: "the plan is wrong beyond this step. `content`: why. You then write the next plan as usual.",
   },
   intern: {
-    FOUND: "`content` answers each query under its own heading: `path:line` and the lines that prove it, quoted exactly in a code block. End with what you searched. The plugin refuses findings without quoted lines.",
+    FOUND: "`content` answers each query under its own heading, with [E1], [E2] … where its evidence goes. End with what you searched.",
     NOT_FOUND: "only after you searched the files directly too. `content`: what you searched (terms, paths, tools) and where.",
   },
   developer: {

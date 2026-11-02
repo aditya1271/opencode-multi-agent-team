@@ -6,7 +6,7 @@ import { RECOMMENDED_LINE, SUMMARY_LINE, titleOf, type Section } from "./section
 
 export interface Fix {
   id: string
-  kind: "recommended" | "summary" | "purpose" | "block" | "line" | "append"
+  kind: "recommended" | "summary" | "purpose" | "block" | "line" | "append" | "evidence"
   /** What to send, as the refusal says it. */
   ask: string
   /**
@@ -79,8 +79,9 @@ export const numbered = (fixes: Omit<Fix, "id">[]): Fix[] => fixes.map((f, i) =>
 
 /** The refusal: the report is kept, and only these parts are asked for. */
 export function fixRequest(fixes: Fix[], intro: string): string {
+  const sends = [fixes.some((f) => f.kind !== "evidence") && "`fixes` (one { id, text } for each item without an evidence id)", fixes.some((f) => f.kind === "evidence") && "`evidence` (the items asked for, same ids)"].filter(Boolean)
   return [
-    `${intro} The plugin keeps your report, so don't send it again. Call \`report\` with the same status and \`fixes\` only: one { id, text } for each item, and the plugin puts each text in its place.`,
+    `${intro} The plugin keeps your report, so don't send it again. Call \`report\` with the same status and only ${sends.join(" and ")}; the plugin puts each in its place.`,
     ...fixes.map((f) => `- ${f.id}: ${f.ask}`),
   ].join("\n")
 }
@@ -93,7 +94,7 @@ export function applyFixes(content: string, fixes: Fix[], given: GivenFix[]): { 
   // From the bottom up, so each fix's line index still holds.
   // At the same line a Recommended line goes in first, so a Summary added there lands above it.
   const rank = (g: GivenFix) => byId.get(g.id)!.at * 2 + (byId.get(g.id)!.kind === "recommended" ? 1 : 0)
-  const todo = given.filter((g) => byId.has(g.id)).sort((a, b) => rank(b) - rank(a))
+  const todo = given.filter((g) => byId.has(g.id) && byId.get(g.id)!.kind !== "evidence").sort((a, b) => rank(b) - rank(a))
   // Added lines go in together, in the order given.
   const appends = given.filter((g) => byId.get(g.id)?.kind === "append")
   let appended = false

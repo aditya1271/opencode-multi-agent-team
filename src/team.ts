@@ -996,7 +996,7 @@ export class Team {
         mode: "intern",
         parentID: managerSession,
         title: `team: ${role} (question)`,
-        prompt: join("MODE: user question. Answer the user's question about the code. Report FOUND with the answer in content (path:line references, short excerpts), or NOT_FOUND with what you searched.", `<question>\n${question}\n</question>`),
+        prompt: join("MODE: user question. Answer the user's question about the code. Report FOUND with the answer in content and the code behind it as evidence, or NOT_FOUND with what you searched.", `<question>\n${question}\n</question>`),
         signal,
       },
       this.log,

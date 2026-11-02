@@ -4,6 +4,7 @@ import { buildPatterns, DEFAULTS, fallbackModels, merge, modelLabel, modelsFor, 
 import { analystReadProblem, registerGuards, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { checkQuotes, expandQuotes, keepChecked, loadQuotes, numberQuotes, fixCites } from "../src/quotes.ts"
+import { findEvidence, loose, renderEvidence, type Evidence } from "../src/evidence.ts"
 import { applyFixes, blockFixes, numbered, sectionFixes } from "../src/fixes.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, counter, runs } from "../src/runtime.ts"
@@ -379,7 +380,7 @@ describe("prompts", () => {
       ["planner", { workflow: "plan", stage: "how", doc: 1 }, { mode: "planner" }, 2000],
       ["architect", { workflow: "plan", stage: "how", plan: 1 }, { mode: "architect_doc_review" }, 1600],
       ["developer", { plan: 1, step: 1, planSteps: 2 }, { mode: "fix" }, 1000],
-      ["intern", {}, { mode: "intern", note: "" }, 700],
+      ["intern", {}, { mode: "intern", note: "" }, 720],
     ]
     try {
       for (const [role, patch, p, max] of calls)
@@ -1102,7 +1103,7 @@ describe("plan and research workflows", () => {
       expect(() => check("planner", "planner", { status: "QUESTIONS", content: "", questions: ["A or B?\nRecommended: A", "C or D?"] })).toThrow("missing in item 2")
       expect(() => check("planner", "planner", { status: "QUESTIONS", content: "", questions: ["A or B?\n**Recommended:** A, simpler"] })).not.toThrow()
       expect(() => check("planner", "planner", { status: "QUESTIONS", content: "word ".repeat(300), questions: ["A or B?\nRecommended: A"] })).toThrow("not your draft")
-      expect(() => check("intern", "intern", { status: "FOUND", content: "see `a.ts:10`" })).toThrow("quoted exactly in a code block")
+      expect(() => check("intern", "intern", { status: "FOUND", content: "see `a.ts:10`" })).toThrow("FOUND needs the code that proves")
       expect(() => check("intern", "intern", { status: "FOUND", content: "`grep x`\n```output\nx = 1\n```" })).not.toThrow()
       // Quoted code goes back until it matches the cited file; after two tries the blocks that don't are removed.
       const ws = mkdtempSync(path.join(tmpdir(), "omat-q-"))
@@ -1785,6 +1786,85 @@ describe("quoted code", () => {
       expect([r.content, r.questions[0]]).toEqual([quotes.Q1, `Keep it?\n${quotes.Q2}\nRecommended: yes`])
     } finally {
       runs.delete("ses_qa")
+    }
+  })
+})
+
+describe("evidence by selector", () => {
+  const ws = mkdtempSync(path.join(tmpdir(), "omat-ev-"))
+  const src = ["// head", "export function run(a: number, b: number) {", "  const total = a + b;", "  if (total > 9) {", "    return 9", "  }", "  return total", "}", "", "export function other() {", "  return 1", "}", "", "export function twin() {", "  return 2", "}", "export function twin() {", "  return 3", "}"]
+  writeFileSync(path.join(ws, "x.ts"), src.join("\n"))
+  const find = (item: Partial<Evidence>, seen?: string) => findEvidence({ id: "E1", file: "x.ts", first: "x", ...item } as Evidence, ws, seen)
+
+  test("the range comes from the file: both lines are found by their text, a closing brace joins, numbers are hints", () => {
+    const f = find({ first: "export function run(a: number,b: number){", last: "return total" }) as any
+    expect([f.from, f.to, f.text.at(-1)]).toEqual([2, 8, "}"])
+    // Line numbers in the anchors and whitespace don't matter; one line alone needs no last line.
+    expect((find({ first: "12:   const total = a + b" }) as any).text).toEqual(["  const total = a + b;"])
+    // A last line that occurs earlier ends the range there: the first match after the first line.
+    expect((find({ first: "export function run(a: number, b: number) {", last: "return 9" }) as any).to).toBe(6)
+  })
+
+  test("what can't be placed is told by item: lines with nothing to find by, misses, repeats", () => {
+    expect(find({ first: "}" })).toContain("too short or has no name")
+    expect(find({ first: "export function run(a: number, b: number) {", last: "  }" })).toContain("too short")
+    expect(find({ first: "const nothing = 0" })).toContain("isn't a line of x.ts")
+    expect(find({ first: "export function run(a: number, b: number) {", last: "return nothing" })).toContain("doesn't occur in x.ts after the first")
+    expect(find({ file: "gone.ts", first: "export function" })).toContain("there is no file")
+    const twin = find({ first: "export function twin() {", last: "return 2" }) as string
+    expect(twin).toContain("occurs 2 times")
+    expect(twin).toContain("lines 14, 17")
+    expect((find({ first: "export function twin() {", line: 16 }) as any).from).toBe(17)
+  })
+
+  test("big ranges are cut, and code the Intern's tools never showed it is told apart", () => {
+    const big = path.join(ws, "big.ts")
+    writeFileSync(big, [...Array(100).fill(0).map((_, i) => `const v${i} = ${i}`), "const end = 1"].join("\n"))
+    const f = findEvidence({ id: "E1", file: "big.ts", first: "const v0 = 0", last: "const end = 1" }, ws) as any
+    expect([f.text.length, f.more]).toEqual([60, 41])
+    const seen = loose("export function run(a: number, b: number) {\n  const total = a + b;\n")
+    const g = find({ first: "export function run(a: number, b: number) {", last: "return total" }, seen) as any
+    expect(g.unseen).toEqual([4, 5, 7])
+  })
+
+  test("markers become blocks with their citation; unused evidence goes last; unfound evidence is a problem, a note at the end", () => {
+    const items = [
+      { id: "E1", file: "x.ts", first: "export function other() {", last: "return 1" },
+      { id: "E2", file: "x.ts", first: "const nothing = 0" },
+    ]
+    const text = "## Query 1\n\nIt returns one, see [E1].\n\n[E1]\n\n[E2]"
+    const first = renderEvidence(text, items, ws, undefined, false)
+    expect(first.problems.map((p) => [p.id, p.at])).toEqual([["E2", 6]])
+    expect(first.content).toContain("It returns one, see x.ts:10-12.")
+    expect(first.content).toContain("`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```")
+    expect(first.content).toContain("\n[E2]")
+    const last = renderEvidence(text, [items[0]!], ws, undefined, true)
+    expect(last.content).toContain("The plugin removed evidence E2: there is no item E2")
+    expect(renderEvidence("none", [items[0]!], ws, undefined, false).content).toBe("none\n\n## Further evidence\n\n`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```")
+  })
+
+  test("a report: unfound evidence is kept and asked again by id; the same code keeps its [Qn]", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "omat-ev-task-"))
+    const t = { dir, workspace: ws } as any
+    beginRun("ses_ev", { role: "intern", mode: "intern", task: t, toolLimit: 10 } as any)
+    try {
+      const content = "## Q\n\nIt returns one.\n\n[E1]\n\n[E2]"
+      const evidence = [
+        { id: "E1", file: "x.ts", first: "export function other() {", last: "return 1" },
+        { id: "E2", file: "x.ts", first: "export function twin() {", last: "return 2" },
+      ]
+      expect(() => acceptReport(DEFAULTS, "ses_ev", { status: "FOUND", summary: "s", content, evidence } as any)).toThrow("F1: evidence E2 (`x.ts`): the first line occurs 2 times")
+      expect(() => acceptReport(DEFAULTS, "ses_ev", { status: "FOUND", evidence: [{ id: "E2", file: "x.ts", first: "export function twin() {", last: "return 2", line: 14 }] } as any)).not.toThrow()
+      const done = runs.get("ses_ev")!.report!
+      expect(done.content).toContain("`x.ts:10-12`\n```\nexport function other() {")
+      expect(done.content).toContain("`x.ts:14-16`\n```\nexport function twin() {\n  return 2\n}\n```")
+      expect(done.evidence).toBeUndefined()
+      const one = numberQuotes(dir, done.content, ws, 0)
+      expect(one.next).toBe(2)
+      const again = numberQuotes(dir, "`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```", ws, one.next)
+      expect([again.next, again.content.split("\n")[1]]).toEqual([2, "[Q1]"])
+    } finally {
+      runs.delete("ses_ev")
     }
   })
 })

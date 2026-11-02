@@ -35,7 +35,7 @@ export interface QuotedBlock {
 }
 
 /** Without whitespace, semicolons and commas, so code re-wrapped onto fewer lines still matches. */
-const squash = (s: string) => s.replace(/[\s;,]+/g, "")
+export const squash = (s: string) => s.replace(/[\s;,]+/g, "")
 
 /** The kept parts of a line shortened with "...". */
 const parts = (line: string) => line.split(DOTS).map(squash).filter((p) => p.length >= 4)
@@ -144,9 +144,11 @@ export function numberQuotes(dir: string, content: string, root: string, start: 
   let n = start
   for (const b of checkQuotes(content, root)) {
     if (b.verdict !== "ok" && b.verdict !== "shortened" && b.verdict !== "moved") continue
-    const id = `Q${++n}`
     const cite = b.verdict === "moved" ? `${b.file}:${b.at}` : b.cite
-    quotes[id] = [`\`${cite}\``, ...text.slice(b.from, b.to + 1)].join("\n")
+    const quote = [`\`${cite}\``, ...text.slice(b.from, b.to + 1)].join("\n")
+    // The same code again keeps its label.
+    const id = Object.keys(quotes).find((k) => quotes[k] === quote) ?? `Q${++n}`
+    quotes[id] = quote
     labels.push([b.from, `[${id}]`])
   }
   if (!labels.length) return { content, next: n }

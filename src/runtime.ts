@@ -1,4 +1,5 @@
 import type { WorkerRole } from "./config.ts"
+import type { Evidence } from "./evidence.ts"
 import type { Fix, GivenFix } from "./fixes.ts"
 import type { VerdictSpec } from "./polish.ts"
 import type { SectionEdit } from "./sections.ts"
@@ -23,6 +24,8 @@ export interface Report {
   sections?: SectionEdit[]
   /** After a refusal that kept the report: the missing parts, by fix id. */
   fixes?: GivenFix[]
+  /** The Intern: where the code that proves its findings is; the plugin writes the code from the files. */
+  evidence?: Evidence[]
 }
 
 export interface ShellRun {
@@ -61,6 +64,8 @@ export interface SessionRun {
   fixes?: Fix[]
   /** Why the last report call was refused, told again if the agent stops without reporting. */
   reportRefused?: string
+  /** The Intern: what its tools showed it, kept across the calls of a session, to check its evidence against. */
+  seen?: string
   /** Times the Intern's report went back for code blocks that don't match their files. */
   quoteRejects?: number
   /** The verdict lines this report must hold (read-back, assumption check, review), and times it went back for them. */
@@ -96,6 +101,7 @@ export function beginRun(sessionID: string, run: Omit<SessionRun, "toolCalls" | 
     shells: [],
     edited: new Set(),
     before: new Map(),
+    seen: runs.get(sessionID)?.seen,
   }
   runs.set(sessionID, r)
   return r

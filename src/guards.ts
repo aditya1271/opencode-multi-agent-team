@@ -5,12 +5,15 @@ type Context = Plugin.Context
 import { agentId, evaluate, permissionsFor, roleOf, toolVisible, type Rule } from "./agents.ts"
 import { matchesAny } from "./match.ts"
 import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
+import { loose } from "./evidence.ts"
 import { allowedStatuses, reportSchema } from "./report.ts"
 import { counter, runs, touch, type ToolKind } from "./runtime.ts"
 import { nextLogPath, save, type TaskState } from "./state.ts"
 
 const EDIT_TOOLS = new Set(["edit", "write", "patch"])
 const TRIM_LINES = 80
+/** Most of what an Intern session showed that is kept, to check its evidence against. */
+const SEEN_MAX = 8_000_000
 const ERROR_LINE = /\b(error|fatal|undefined reference|cannot find|no such file|failed|segmentation fault|assert(ion)?|traceback)\b/i
 
 export function toolKind(tool: string, input: unknown, config: Config): ToolKind {
@@ -181,6 +184,10 @@ export async function registerGuards(ctx: Context, config: Config) {
     if (event.status !== "completed") return
     const cwd = run.task?.workspace ?? ctx.location.directory
     if (EDIT_TOOLS.has(event.tool)) for (const file of editedPaths(event.input, cwd)) run.edited.add(file)
+    if (run.role === "intern") {
+      const shown = resultText(event.result)
+      run.seen = `${run.seen ?? ""}${loose(shown.trim() ? shown : JSON.stringify(event.result ?? ""))}`.slice(-SEEN_MAX)
+    }
     if (event.tool !== "shell") return
     const command = String((event.input as { command?: unknown })?.command ?? "")
     const exit = resultExit(event.result)
