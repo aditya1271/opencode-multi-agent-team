@@ -105,7 +105,7 @@ export function reviewedFormat(kind: "brief" | "draft"): string {
       : "The user reviews every section of the draft except the plan steps"
   return [
     `${which} and reads a short view of each, opening the details on request. The view depends on what the section is for, which its heading says.`,
-    "A section that explains (what it does, the process, behaviour, risks) opens with `**Summary:**` (the logic in plain terms, under 100 words), then `**Team chose:**` (each choice beyond the user's words, and the alternative passed over) and `**Risk:**` (what could go wrong or can't be undone). A fact about the code taken for true is `[A1] assumed: <fact>` on its own line, its id named on the Team chose line; the Intern checks each.",
+    "A section that explains (what it does, the process, behaviour, risks) opens with `**Summary:**` (the logic in plain terms, under 100 words), then `**Team chose:**` (each choice beyond the user's words, and the alternative passed over) and `**Risk:**` (what could go wrong or can't be undone), each only when there is something to say, in the user's words (no file names). A fact about the code taken for true is `[A1] assumed: <fact>` on its own line, its id named on the Team chose line; the Intern checks each.",
     "A section that decides (choices, decisions, feasibility, open questions) is a list, one line per item: the question, the options, and `**Recommended:** <option>: <short reason>`, the pick auto mode takes.",
     kind === "draft" ? "A plan step's first line is `N. **Title**: <what it achieves, and the choice in it>`; mechanics, impact and checks follow and stay in the details." : "",
     "The plugin sends back any line that is missing or too long.",

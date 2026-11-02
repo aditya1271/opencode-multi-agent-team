@@ -389,6 +389,17 @@ describe("prompts", () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+  test("a Summary or pick sent as a list item is put in as a plain line", () => {
+    const fixes = numbered([
+      { kind: "summary", at: 0, ask: "" },
+      { kind: "recommended", at: 0, ask: "" },
+    ])
+    const out = applyFixes("## Feasibility", fixes, [
+      { id: "F1", text: "- Every part exists." },
+      { id: "F2", text: "- Nothing is unproven. **Recommended:** no study: all parts are there." },
+    ]).content
+    expect(out).toBe("## Feasibility\n\n**Summary:** Every part exists.\n\n**Recommended:** no study: all parts are there.")
+  })
   test("default instructions fill the core prompt", () => {
     const p = systemPrompt(DEFAULTS, "intern")
     expect(p).toContain("You are the Intern")

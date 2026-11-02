@@ -92,6 +92,13 @@ export function fixRequest(fixes: Fix[], intro: string): string {
   ].join("\n")
 }
 
+/** A pick sent as a list item, or after other words: the line from its own "**Recommended:**" label on, without a bullet. */
+function lineText(text: string): string {
+  const t = text.trim().replace(/^[-*]\s+/, "")
+  const own = /\*\*recommended:?\*\*/i.exec(t)
+  return own ? t.slice(own.index) : t
+}
+
 /** The kept report's content with the given fixes in place; ids not asked for are returned as unknown. */
 export function applyFixes(content: string, fixes: Fix[], given: GivenFix[]): { content: string; unknown: string[] } {
   const byId = new Map(fixes.map((f) => [f.id, f]))
@@ -106,13 +113,16 @@ export function applyFixes(content: string, fixes: Fix[], given: GivenFix[]): { 
   let appended = false
   for (const g of todo) {
     const f = byId.get(g.id)!
-    const text = g.text.trim()
+    const text = f.kind === "recommended" ? lineText(g.text) : g.text.trim()
     if (f.kind === "append") {
       if (!appended) lines.splice(f.at + 1, 0, ...appends.map((a) => a.text.trim()))
       appended = true
     } else if (f.kind === "line") lines[f.at] = text
     else if (f.kind === "recommended") lines.splice(f.at + 1, 0, "", RECOMMENDED_LINE.test(text) ? text : `**Recommended:** ${text}`)
-    else if (f.kind === "summary") lines.splice(f.at + 1, 0, "", SUMMARY_LINE.test(text) ? text : `**Summary:** ${text}`)
+    else if (f.kind === "summary") {
+      const bare = text.replace(/^[-*]\s+/, "")
+      lines.splice(f.at + 1, 0, "", SUMMARY_LINE.test(bare) ? bare : `**Summary:** ${bare}`)
+    }
     else if (f.kind === "purpose") {
       const title = /^\d+\.\s+\*\*.+?\*\*/.exec(lines[f.at]!)?.[0] ?? lines[f.at]!
       lines[f.at] = `${title}: ${text.replace(/^\d+\.\s+\*\*.+?\*\*\s*[:.—–-]?\s*/, "")}`
