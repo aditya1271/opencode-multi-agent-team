@@ -1794,7 +1794,7 @@ describe("evidence by selector", () => {
   const ws = mkdtempSync(path.join(tmpdir(), "omat-ev-"))
   const src = ["// head", "export function run(a: number, b: number) {", "  const total = a + b;", "  if (total > 9) {", "    return 9", "  }", "  return total", "}", "", "export function other() {", "  return 1", "}", "", "export function twin() {", "  return 2", "}", "export function twin() {", "  return 3", "}"]
   writeFileSync(path.join(ws, "x.ts"), src.join("\n"))
-  const find = (item: Partial<Evidence>, seen?: string) => findEvidence({ id: "E1", file: "x.ts", first: "x", ...item } as Evidence, ws, seen)
+  const find = (item: Partial<Evidence>) => findEvidence({ id: "E1", file: "x.ts", first: "x", ...item } as Evidence, ws)
 
   test("the range comes from the file: both lines are found by their text, a closing brace joins, numbers are hints", () => {
     const f = find({ first: "export function run(a: number,b: number){", last: "return total" }) as any
@@ -1820,14 +1820,14 @@ describe("evidence by selector", () => {
     expect((find({ first: "export function twin() {", line: 16 }) as any).from).toBe(17)
   })
 
-  test("big ranges are cut, and code the Intern's tools never showed it is told apart", () => {
+  test("big ranges are cut, and a first line may span lines", () => {
     const big = path.join(ws, "big.ts")
     writeFileSync(big, [...Array(100).fill(0).map((_, i) => `const v${i} = ${i}`), "const end = 1"].join("\n"))
     const f = findEvidence({ id: "E1", file: "big.ts", first: "const v0 = 0", last: "const end = 1" }, ws) as any
     expect([f.text.length, f.more]).toEqual([60, 41])
-    const seen = loose("export function run(a: number, b: number) {\n  const total = a + b;\n")
-    const g = find({ first: "export function run(a: number, b: number) {", last: "return total" }, seen) as any
-    expect(g.unseen).toEqual([4, 5, 7])
+    // A first line that runs over several lines (a call with its arguments below) is found at the first of them.
+    writeFileSync(path.join(ws, "m.ts"), ["x", "const res = await run(", "  this.ctx,", "  {", "})"].join("\n"))
+    expect((find({ file: "m.ts", first: "const res = await run(this.ctx, {" }) as any).from).toBe(2)
   })
 
   test("markers become blocks with their citation; unused evidence goes last; unfound evidence is a problem, a note at the end", () => {
@@ -1836,14 +1836,14 @@ describe("evidence by selector", () => {
       { id: "E2", file: "x.ts", first: "const nothing = 0" },
     ]
     const text = "## Query 1\n\nIt returns one, see [E1].\n\n[E1]\n\n[E2]"
-    const first = renderEvidence(text, items, ws, undefined, false)
+    const first = renderEvidence(text, items, ws, false)
     expect(first.problems.map((p) => [p.id, p.at])).toEqual([["E2", 6]])
     expect(first.content).toContain("It returns one, see x.ts:10-12.")
     expect(first.content).toContain("`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```")
     expect(first.content).toContain("\n[E2]")
-    const last = renderEvidence(text, [items[0]!], ws, undefined, true)
+    const last = renderEvidence(text, [items[0]!], ws, true)
     expect(last.content).toContain("The plugin removed evidence E2: [E2] is in content, but the evidence list has no item E2")
-    expect(renderEvidence("none", [items[0]!], ws, undefined, false).content).toBe("none\n\n## Further evidence\n\n`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```")
+    expect(renderEvidence("none", [items[0]!], ws, false).content).toBe("none\n\n## Further evidence\n\n`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```")
   })
 
   test("a report: unfound evidence is kept and asked again by id; the same code keeps its [Qn]", () => {

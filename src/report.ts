@@ -268,7 +268,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     const sent = input.fixes ?? []
     const given = quotes ? sent.map((f) => ({ ...f, text: expandQuotes(f.text, quotes) })) : sent
     const { content, unknown } = applyFixes(run.draft.content, run.fixes, given)
-    if (unknown.length) throw new Error(`No fix ${unknown.join(", ")} was asked for. Asked for: ${run.fixes.map((f) => f.id).join(", ")}.`)
+    if (unknown.length) throw new Error(`No fix ${unknown.join(", ")} was asked for. Asked for: ${run.fixes.map((f) => f.id).join(", ")}.${unknown.some((u) => /^E\d+$/.test(u)) ? " Evidence items go in `evidence` (id, file, first, last), not in `fixes`." : ""}`)
     const evidence = [...(run.draft.evidence ?? [])]
     for (const e of input.evidence ?? []) {
       const at = evidence.findIndex((x) => x.id === e.id)
@@ -308,7 +308,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
     }
     blocks = checkOutput(blocks, input.content, run.seen)
     const drawn = !!input.evidence?.length || EVIDENCE_MARK.test(input.content)
-    const found = drawn ? renderEvidence(input.content, input.evidence ?? [], root, run.seen, false).problems : []
+    const found = drawn ? renderEvidence(input.content, input.evidence ?? [], root, false).problems : []
     const fixes = [...blockFixes(blocks), ...found.map((p) => ({ kind: "evidence" as const, at: p.at, ask: p.ask }))]
     if (fixes.length && (run.quoteRejects ?? 0) < QUOTE_RETRIES) {
       run.quoteRejects = (run.quoteRejects ?? 0) + 1
@@ -319,7 +319,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
       refuse(run, input, fixes, why.join(" "))
     }
     if (blocks.some((b) => b.verdict !== "ok" && b.verdict !== "output")) input = { ...input, content: keepChecked(input.content, blocks) }
-    if (drawn) input = { ...input, content: renderEvidence(input.content, input.evidence ?? [], root, run.seen, true).content }
+    if (drawn) input = { ...input, content: renderEvidence(input.content, input.evidence ?? [], root, true).content }
   }
   if (input.status === "FOUND" && !input.content.includes("```"))
     throw new Error("FOUND needs the code that proves each finding: `evidence` items (file, first and last line), each marked [E1], [E2] … on a line of its own in content. The asker passes the code to agents who see no files.")

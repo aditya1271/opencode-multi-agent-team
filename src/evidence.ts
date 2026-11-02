@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
-import { shown, squash } from "./quotes.ts"
+import { squash } from "./quotes.ts"
 
 /** Longest block the plugin writes for one piece of evidence. */
 const MAX_LINES = 60
@@ -41,8 +41,6 @@ interface Found {
   /** Lines of the range left out at the size cap. */
   more: number
   text: string[]
-  /** Lines of the range that none of the Intern's tools showed it. */
-  unseen?: number[]
 }
 
 /** Lines (indices) that hold the anchor from `from` on: the ones that are exactly it, else the ones that contain it. */
@@ -55,7 +53,17 @@ function matches(lines: string[], anchor: string, from = 0): number[] {
     if (l === key) exact.push(i)
     else if (l.includes(key)) within.push(i)
   }
-  return exact.length ? exact : within
+  if (exact.length || within.length) return exact.length ? exact : within
+  // An anchor that runs over several lines (a call with its arguments on the next ones) starts at the first of them.
+  const across: number[] = []
+  for (let i = from; i < lines.length; i++) {
+    const head = squash(lines[i]!)
+    if (head.length < MIN_ANCHOR || !key.startsWith(head)) continue
+    let joined = head
+    for (let k = i + 1; k < Math.min(i + 4, lines.length) && joined.length < key.length; k++) joined += squash(lines[k]!)
+    if (joined.startsWith(key)) across.push(i)
+  }
+  return across
 }
 
 /** Why a line can't be found by its text: it says too little. */
@@ -69,8 +77,8 @@ function anchorProblem(name: string, anchor: string | undefined, closing = false
 
 const indent = (l: string) => l.length - l.trimStart().length
 
-/** The code the item points at, taken from the file, or why it can't be found. `seen` is what the Intern's tools showed. */
-export function findEvidence(item: Evidence, root: string, seen?: string): Found | string {
+/** The code the item points at, taken from the file, or why it can't be found. */
+export function findEvidence(item: Evidence, root: string): Found | string {
   if (!item.file || !CITABLE.test(item.file.replace(/^~(?=\/)/, ""))) return `\`${item.file}\` isn't a file name the plugin can cite as path:line`
   const where = path.resolve(root, item.file.replace(/^~(?=\/)/, process.env.HOME ?? "~"))
   let lines: string[]
@@ -97,7 +105,7 @@ export function findEvidence(item: Evidence, root: string, seen?: string): Found
   if (last && !hasWord(last)) {
     // A closing line ("}") is the first one like it that sits as far out as the first line.
     const key = squash(last)
-    const end = lines.findIndex((l, i) => i > from && squash(l) === key && indent(l) <= indent(lines[from]!))
+    const end = lines.findIndex((l, i) => i > from && squash(l).startsWith(key) && indent(l) <= indent(lines[from]!))
     if (end < 0) return `the closing line \`${last}\` doesn't follow the first line (line ${from + 1}) at its indentation in ${item.file}`
     to = end
   } else if (last && squash(last) !== squash(first)) {
@@ -112,12 +120,7 @@ export function findEvidence(item: Evidence, root: string, seen?: string): Found
     to = from + MAX_LINES - 1
   }
   const text = lines.slice(from, to + 1)
-  const found: Found = { file: item.file, from: from + 1, to: to + 1, more, text }
-  if (seen) {
-    const unseen = text.flatMap((l, i) => (hasWord(l) && !shown(l, seen) ? [from + i + 1] : []))
-    if (unseen.length) found.unseen = unseen
-  }
-  return found
+  return { file: item.file, from: from + 1, to: to + 1, more, text }
 }
 
 const cite = (f: Found) => `${f.file}:${f.from === f.to ? f.from : `${f.from}-${f.to}`}`
@@ -133,7 +136,7 @@ function block(f: Found): string[] {
  * uses goes in at the end. Problems are what couldn't be found or wasn't shown to the Intern; with `final` the
  * content carries a note for the first kind (the second still gets its code, which is the file's own text).
  */
-export function renderEvidence(content: string, items: Evidence[], root: string, seen: string | undefined, final: boolean): { content: string; problems: EvidenceProblem[] } {
+export function renderEvidence(content: string, items: Evidence[], root: string, final: boolean): { content: string; problems: EvidenceProblem[] } {
   const byId = new Map(items.map((e) => [e.id, e]))
   const used = new Set([...content.matchAll(INLINE)].map((m) => m[1]!))
   const extra = items.filter((e) => !used.has(e.id))
@@ -143,7 +146,7 @@ export function renderEvidence(content: string, items: Evidence[], root: string,
   const lookup = (id: string): Found | string => {
     if (!found.has(id)) {
       const item = byId.get(id)
-      found.set(id, item ? findEvidence(item, root, seen) : `[${id}] is in content, but the evidence list has no item ${id}; send it (id, file, first, last)`)
+      found.set(id, item ? findEvidence(item, root) : `[${id}] is in content, but the evidence list has no item ${id}; send it (id, file, first, last)`)
     }
     return found.get(id)!
   }
@@ -153,14 +156,8 @@ export function renderEvidence(content: string, items: Evidence[], root: string,
     const whole = MARK.exec(line)
     for (const id of whole ? [whole[1]!] : [...line.matchAll(INLINE)].map((m) => m[1]!)) {
       const r = lookup(id)
-      const why =
-        typeof r === "string"
-          ? r
-          : r.unseen
-            ? `lines ${r.unseen[0]}${r.unseen.length > 1 ? `-${r.unseen.at(-1)}` : ""} of the code aren't in anything your tools showed you (read them first, or choose a range you read)`
-            : undefined
-      if (why && !problems.some((p) => p.id === id))
-        problems.push({ id, at: i, ask: `${id}${byId.has(id) ? ` (\`${byId.get(id)!.file}\`)` : ""}: ${why}.` })
+      if (typeof r === "string" && !problems.some((p) => p.id === id))
+        problems.push({ id, at: i, ask: `${id}${byId.has(id) ? ` (\`${byId.get(id)!.file}\`)` : ""}: ${r}.` })
     }
     const only = whole ? lookup(whole[1]!) : undefined
     if (whole) out.push(...(typeof only === "string" ? [final ? `_(The plugin removed evidence ${whole[1]}: ${only}.)_` : line] : block(only!)))
