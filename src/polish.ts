@@ -187,7 +187,7 @@ export function dropModeOnly(requirements: Requirement[], text: string): { requi
   const map = new Map<number, number>()
   let next = 0
   keep.forEach((k, i) => k && map.set(i + 1, ++next))
-  const out = text.replace(/\[R(\d+)\]/g, (m, n: string) => (map.has(Number(n)) ? `[R${map.get(Number(n))}]` : ""))
+  const out = text.replace(/\[R(\d+)\]/g, (_m, n: string) => (map.has(Number(n)) ? `[R${map.get(Number(n))}]` : ""))
   return { requirements: requirements.filter((_, i) => keep[i]), text: out }
 }
 

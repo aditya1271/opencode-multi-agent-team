@@ -2,9 +2,9 @@
 import path from "node:path"
 import { workflowInstructions } from "./agents.ts"
 import type { Config } from "./config.ts"
-import { allowedStatuses, needInfoLimit } from "./report.ts"
+import { needInfoLimit } from "./report.ts"
 import { annotate, ensureIndex, idRanges, missingSummaries, oneLine, sectionBody, shortView, shownTitle, split, userView, walkIds, type Section, type SectionIndex } from "./sections.ts"
-import { answerFiles, answersName, autoDecides, briefName, consultsUsed, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Mode, type Pending, type TaskState } from "./state.ts"
+import { answerFiles, answersName, autoDecides, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type Pending, type TaskState } from "./state.ts"
 import { reportBlock } from "./statuses.ts"
 import { report as usageReport } from "./usage.ts"
 

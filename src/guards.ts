@@ -1,8 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
-import { agentId, evaluate, permissionsFor, roleOf, toolVisible, type Rule } from "./agents.ts"
+import { evaluate, permissionsFor, roleOf, toolVisible, type Rule } from "./agents.ts"
 import { matchesAny } from "./match.ts"
 import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
 import { loose } from "./quotes.ts"

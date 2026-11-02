@@ -313,8 +313,6 @@ export function unrecommended(text: string, under?: string): Section[] {
     .filter((s) => kindOf(s) === "decide" && !itemLines(s).length && !body(s).split("\n").some((l) => labelled("recommended").test(l)))
 }
 
-export const missingRecommendations = (text: string, under?: string) => unrecommended(text, under).map(titleOf)
-
 /** A section's opening line for the user: "**Summary:** …". */
 export const SUMMARY_LINE = /^[-*>\s]*\**\s*summary\b\s*\**\s*:?\s*\**/i
 

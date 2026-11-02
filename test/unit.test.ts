@@ -12,7 +12,7 @@ import { appendFile, loadTask, migrateNames, newTask, save, taskId, WORKFLOWS } 
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
 import { buildPrompt, join, render, stepTitles } from "../src/messages.ts"
-import { annotate, checkEdits, idRanges, indexOf, kindOf, lineProblems, missingRecommendations, missingSummaries, shortView, splice, split, userView, walkIds } from "../src/sections.ts"
+import { annotate, checkEdits, idRanges, indexOf, kindOf, lineProblems, missingSummaries, shortView, splice, split, titleOf, unrecommended, userView, walkIds } from "../src/sections.ts"
 import { add, hints, table } from "../src/usage.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -1117,11 +1117,11 @@ describe("plan and research workflows", () => {
       }
       // A section that continues in sub-sections gets its picks there, not under its own heading.
       const choices = "## Choices\n\n**Summary:** Two picks.\n\n### Config\n\n**Summary:** One setting.\n\n**Recommended:** one default\n\n### Logging\n\n**Summary:** Log it.\n\nx"
-      expect(missingRecommendations(choices)).toEqual(["Logging"])
-      expect(missingRecommendations(choices + "\n\n**Recommended:** log at the end")).toEqual([])
+      expect(unrecommended(choices).map(titleOf)).toEqual(["Logging"])
+      expect(unrecommended(choices + "\n\n**Recommended:** log at the end").map(titleOf)).toEqual([])
       // The pick may be followed by more (assumptions, a rule): it still counts, and the user's view shows it.
       const after = choices + "\n\n**Recommended:** log at the end\n\n**Assumption:** logs exist\n\n---"
-      expect(missingRecommendations(after)).toEqual([])
+      expect(unrecommended(after).map(titleOf)).toEqual([])
       expect(userView(split(after).sections.at(-1)!)).toBe("**Summary:** Log it.\n\n**Recommended:** log at the end")
       const plan = "# Plan\n\n## Risks\n\n**Summary:** Low risk.\n\nnone\n\n## Steps\n\nIn order.\n\n1. **Edit a.ts**: the flag exists\n\nchange it\n\n2. **Test**: it is proven\n\nrun it"
       t.stage = "how"
