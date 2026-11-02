@@ -309,6 +309,14 @@ standards; `workflows.code.confirmBrief` (default off) shows the concept brief t
   yellow when it switched). The last lines total the task and the whole session (all tasks and
   code questions). Click **▶ Models** to list every role's configured main and backup models.
   Click the header to collapse the section. Child sessions show their manager's numbers.
+- **Calls:** under the Team header, a **▼ Calls** list shows the latest agent calls as a tree:
+  `●` running, `✓` done, `✗` failed, `○` cut off by a restart, the time taken, and one line on
+  what the call is for. An agent asked by another (the Intern for the Analyst) sits under it.
+  A `⚠` line marks what went differently, written by the plugin from what it saw: a tool the
+  permission rules refused (with the first command or path), a read refused outside the task
+  folder, a switch to the backup model. The same record answers "what did the team do, and
+  why?": the manager reads it with the `why` action instead of guessing, and the progress line
+  carries the `⚠` too.
 - **Token counts** are uncached input plus output. Cache reads (a few percent of the input
   price) are left out, so the numbers track what you pay.
 

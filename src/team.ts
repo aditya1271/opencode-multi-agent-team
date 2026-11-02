@@ -3,6 +3,7 @@ import path from "node:path"
 import type { Plugin } from "@opencode/plugin"
 type Context = Plugin.Context
 import { FRONT_AGENTS } from "./agents.ts"
+import { askOf, callRows, callsText, endCall, lineOf, purposeOf, startCall, type CallRecord } from "./calls.ts"
 import { expandHome, modelLabel, modelsFor, ROLES, type Config, type Role, type WorkerRole } from "./config.ts"
 import { detailsView, dialogData, dialogOpen, docName, draftFile, draftTitle, howOutput, join, render, reviseAs, scopeText, sectionIndex, styleView, walkable } from "./messages.ts"
 import { assumptionCheckPrompt, buildPrompt, operatorPrompt, requestCheckPrompt, REVIEW_VERDICT_FORMAT } from "./handoff.ts"
@@ -13,7 +14,7 @@ import { checkCoverage, claimIds, claimLines, decisionsText, dropModeOnly, joine
 import { recommendationOf } from "./report.ts"
 import { EditedFilesTrack, type ReviewProgress, type SidebarStats } from "./rpc.ts"
 import { runAgent, tokenCounts, type RunResult } from "./run.ts"
-import { counter, runs, type Report, type ToolKind } from "./runtime.ts"
+import { counter, notesOf, runs, type Report, type ToolKind } from "./runtime.ts"
 import {
   answersName,
   appendFile,
@@ -60,7 +61,7 @@ const queries = (r: Report) => join(r.content, (r.questions ?? []).map((q, i) =>
 
 import { add, appendUsage, lastUsage, report as usageReport, table, toolTotal, type AgentUsage, type UsageDelta } from "./usage.ts"
 
-export const TEAM_ACTIONS = ["start", "ask", "run", "send", "cancel", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status", "details"] as const
+export const TEAM_ACTIONS = ["start", "ask", "run", "send", "cancel", "continue", "answer", "approve", "change", "section", "review", "implement", "stop", "resume", "retry", "extend", "auto", "stats", "status", "details", "why"] as const
 export type TeamAction = (typeof TEAM_ACTIONS)[number]
 
 /** Actions whose text the user confirms on default mode. */
@@ -124,7 +125,8 @@ export const TEAM_DESCRIPTION = [
   "continue, answer (text = the user's polished answer), approve, change (text = the user's polished comments; finetune, revise, final, reopen = section ids, add = titles of new sections), section (going through the waiting brief, document or plan one section at a time: verdict = start, ok, skip, finetune or revise with text = the polished comment, or rest to show the remaining sections at once), review (Architect critically reviews the waiting plan or document; text = what to look at),",
   "implement (after an approved plan document: switches to build-manager and starts a code task that carries it out), stop, resume,",
   "retry, extend, auto (auto = off, polished, safe or full: switch the mode of the open task), stats (last = N tasks), status,",
-  "details (the stored full text of the waiting brief, document or plan; ids = sections, none = all; no agent runs).",
+  "details (the stored full text of the waiting brief, document or plan; ids = sections, none = all; no agent runs),",
+  "why (the team's record of who was asked what and what went differently, for questions about what happened; no agent runs).",
   "Always follow the NEXT ACTION line of the result.",
 ].join(" ")
 
@@ -204,6 +206,7 @@ export class Team {
   private sessionDirs?: Map<string, string[]>
   /** Code questions per manager session (they have no task folder). */
   private questions = new Map<string, { count: number; usage: Partial<Record<Role, AgentUsage>> }>()
+  private errands = new Map<string, CallRecord[]>()
   /** A polished text waiting for the user's [Send] [Edit] [Cancel] (default mode), with the question count when it was held. */
   private drafts = new Map<string, { input: TeamInput; asked: number }>()
   /** Times the current new request went back to the front agent for its polish checks. */
@@ -335,9 +338,15 @@ export class Team {
     }
     const models = ROLES.map((role) => ({ role, models: modelsFor(this.config, role).map(modelLabel) }))
     const w = this.openDialog(task)
+    const calls = callRows([...(task?.calls ?? []), ...this.errandsOf(sessionID)], (c) => {
+      if (c.end) return undefined
+      const run = [...runs.values()].find((r) => r.role === c.role && (!r.task || r.task.id === task?.id))
+      return run && notesOf(run)
+    })
     // The RPC output check rejects `task: undefined`; leave the keys out instead.
     return {
       ...(current && { task: current }),
+      ...(calls.length && { calls }),
       ...(w && { review: { title: draftTitle(task!), done: w.at, total: w.ids.length } }),
       models,
       session,
@@ -466,6 +475,11 @@ export class Team {
         return this.run(managerSession, input.text ?? "", signal)
       case "stats":
         return this.stats(managerSession, input.last)
+      case "why":
+        return join(
+          callsText([...(task?.calls ?? []), ...this.errandsOf(managerSession)], task),
+          "NEXT ACTION: answer the user's question from this record only, in plain words: who was asked what, what came back, what went differently (notes). Where the record doesn't say, say you don't know. Don't add reasons of your own.",
+        )
     }
     if (!task) return "No task in this session. NEXT ACTION: polish the user's request and call team with action \"start\"."
     switch (input.action) {
@@ -755,6 +769,7 @@ export class Team {
       quoteIn: { text, words: ["kept", "weakened"] },
       format: "`R1: kept «the words in the request that carry it»` (or weakened «…» — what is lost, or missing)",
     }
+    const record = this.begin(this.errandsOf(managerSession), "intern", "request_check", purposeOf("request_check"))
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -769,6 +784,7 @@ export class Team {
       },
       this.log,
     )
+    this.close(record, res)
     const usage: Partial<Record<string, AgentUsage>> = {}
     add(usage as never, "intern", res.usage)
     appendUsage(this.root, { task: "polish", session: managerSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
@@ -954,6 +970,7 @@ export class Team {
     const mode: Mode = `${role}_reply`
     const sessionID = task.sessions[role]
     this.log(`task ${task.id}: user question → ${role}`)
+    const record = this.begin((task.calls ??= []), role, mode, `question: ${lineOf(note)}`)
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -970,6 +987,7 @@ export class Team {
       this.log,
     )
     add(task.usage, role, res.usage)
+    this.close(record, res)
     if (res.sessionID) task.sessions[role] = res.sessionID
     const answer = res.report?.content ?? `${role} couldn't answer: ${res.failure ?? res.end}.`
     appendFile(task, answersName(task), `## User question\n\n${note}\n\n## ${role} answered\n\n${answer}\n`)
@@ -990,6 +1008,7 @@ export class Team {
   private async ask(managerSession: string, question: string, signal: AbortSignal): Promise<string> {
     if (!question.trim()) return 'ask needs text: the question. NEXT ACTION: call team with action "ask" and the question.'
     const role = "intern"
+    const record = this.begin(this.errandsOf(managerSession), role, "intern", `question: ${lineOf(question)}`)
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -1003,6 +1022,7 @@ export class Team {
       },
       this.log,
     )
+    this.close(record, res)
     const usage: Partial<Record<string, AgentUsage>> = {}
     add(usage as never, role, res.usage)
     const asked = this.questionsIn(managerSession)
@@ -1022,6 +1042,7 @@ export class Team {
   private async run(managerSession: string, request: string, signal: AbortSignal): Promise<string> {
     if (!request.trim()) return 'run needs text: what to run. NEXT ACTION: call team with action "run" and the polished request.'
     const role = "operator"
+    const record = this.begin(this.errandsOf(managerSession), role, "operator", lineOf(request))
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -1035,6 +1056,7 @@ export class Team {
       },
       this.log,
     )
+    this.close(record, res)
     const usage: Partial<Record<string, AgentUsage>> = {}
     add(usage as never, role, res.usage)
     appendUsage(this.root, { task: "run", session: managerSession, time: Date.now(), outcome: res.report?.status ?? res.end, usage: usage as never })
@@ -1383,6 +1405,7 @@ export class Team {
     save(task)
     this.onChange(task.managerSession)
     this.log(`task ${task.id}: call ${task.agentCalls} → ${role} (${pending.mode}), failed attempts ${task.attempts}/${task.attemptLimit}`)
+    const record = this.begin((task.calls ??= []), role, pending.mode, askOf(pending, task.calls), { n: task.agentCalls, asker: pending.asker })
     const res = await runAgent(
       this.ctx,
       this.config,
@@ -1400,6 +1423,7 @@ export class Team {
       this.log,
     )
     add(task.usage, role, res.usage)
+    this.close(record, res)
     if (keep && res.sessionID) task.sessions[keep] = res.sessionID
     if (pair && res.sessionID) pair.session = res.sessionID
     for (const file of res.run?.edited ?? []) {
@@ -1424,6 +1448,23 @@ export class Team {
     save(task)
     this.onChange(task.managerSession)
     return render(task)
+  }
+
+  /** Records an agent call as it starts: in the task's list, or in the session's own for calls with no task. */
+  private begin(list: CallRecord[], role: WorkerRole, mode: Mode, ask: string, extra: { n?: number; asker?: Mode } = {}): CallRecord {
+    const first = modelsFor(this.config, role)[0]
+    return startCall(list, { ...extra, role, mode, ask, model: first && modelLabel(first) })
+  }
+
+  private close(record: CallRecord, res: RunResult) {
+    endCall(record, { end: res.end, ms: res.usage.ms, model: res.usage.model, status: res.report?.status, outcome: res.report?.summary ?? res.failure, notes: notesOf(res.run) })
+  }
+
+  /** Calls made outside a task (a question, a command to run, the request check), per manager session. */
+  private errandsOf(managerSession: string): CallRecord[] {
+    let list = this.errands.get(managerSession)
+    if (!list) this.errands.set(managerSession, (list = []))
+    return list
   }
 
   private async finish(task: TaskState, outcome: string) {

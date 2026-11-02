@@ -91,6 +91,24 @@ export const TeamStats = Rpc.define({
             required: ["title", "done", "total"],
             additionalProperties: false,
           },
+          calls: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                role: { type: "string" },
+                depth: { type: "number" },
+                ask: { type: "string" },
+                state: { type: "string", enum: ["running", "done", "failed", "cut"] },
+                secs: { type: "number" },
+                model: { type: "string" },
+                result: { type: "string" },
+                notes: { type: "array", items: { type: "string" } },
+              },
+              required: ["role", "depth", "ask", "state", "secs", "notes"],
+              additionalProperties: false,
+            },
+          },
           models: {
             type: "array",
             items: {
@@ -253,6 +271,8 @@ export interface SidebarStats {
   task?: { id: string; workflow: string; phase: string; attempts: number; attemptLimit: number; rows: StatsRow[] }
   /** A review waits in the dialog: done of total sections gone through. */
   review?: { title: string; done: number; total: number }
+  /** The latest agent calls as a tree: who was asked what, how it went, what was off. */
+  calls?: { role: string; depth: number; ask: string; state: "running" | "done" | "failed" | "cut"; secs: number; model?: string; result?: string; notes: string[] }[]
   /** Each role's configured models, main first. */
   models: { role: string; models: string[] }[]
   session: { tasks: number; questions: number; total: { calls: number; prompts: number; tools: number; tokens: number } }

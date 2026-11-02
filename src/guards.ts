@@ -7,7 +7,7 @@ import { matchesAny } from "./match.ts"
 import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
 import { loose } from "./quotes.ts"
 import { allowedStatuses, reportSchema } from "./report.ts"
-import { counter, runs, touch, type ToolKind } from "./runtime.ts"
+import { counter, note, runs, touch, type ToolKind } from "./runtime.ts"
 import { nextLogPath, save, type TaskState } from "./state.ts"
 
 const EDIT_TOOLS = new Set(["edit", "write", "patch"])
@@ -91,6 +91,19 @@ export function trimLog(text: string, exit: number | undefined, logFile: string)
   ].join("\n")
 }
 
+/** The tool call was refused by a permission rule (the user's or the role's), not by a failure of its own. */
+export const denied = (error: unknown) => {
+  const e = error as { message?: string; error?: { type?: string; _tag?: string } } | undefined
+  return /^permission\./i.test(e?.error?.type ?? e?.error?._tag ?? "") || /^permission denied/i.test(e?.message ?? "")
+}
+
+/** What a tool call was aimed at: the command, or the path or pattern. */
+export const target = (input: unknown) => {
+  const i = (input ?? {}) as Record<string, unknown>
+  const value = i.command ?? i.filePath ?? i.path ?? i.pattern
+  return typeof value === "string" ? value.replace(/\s+/g, " ") : undefined
+}
+
 export async function registerGuards(ctx: Context, config: Config) {
   const rules = Object.fromEntries(ROLES.map((r) => [r, permissionsFor(config, r)])) as Record<Role, Rule[]>
 
@@ -162,6 +175,7 @@ export async function registerGuards(ctx: Context, config: Config) {
       if (problem) {
         // Refused reads don't use up the tool calls; from the third one on, Analyst is told to stop trying.
         run.refused = (run.refused ?? 0) + 1
+        note(run, "read refused (outside the task folder)", target(event.input))
         throw new Error(run.refused >= 3 ? `${problem} Stop reading now: report NEED_INFO with all your queries in one round.` : problem)
       }
     }
@@ -181,7 +195,10 @@ export async function registerGuards(ctx: Context, config: Config) {
     if (!run || event.tool === "report") return
     touch(event.sessionID)
     run.inFlight = Math.max(0, run.inFlight - 1)
-    if (event.status !== "completed") return
+    if (event.status !== "completed") {
+      if (denied(event.error)) note(run, `${event.tool} denied by permission rules`, target(event.input))
+      return
+    }
     const cwd = run.task?.workspace ?? ctx.location.directory
     if (EDIT_TOOLS.has(event.tool)) for (const file of editedPaths(event.input, cwd)) run.edited.add(file)
     if (run.role === "intern") {

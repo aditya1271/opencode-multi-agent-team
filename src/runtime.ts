@@ -71,6 +71,8 @@ export interface SessionRun {
   /** The verdict lines this report must hold (read-back, assumption check, review), and times it went back for them. */
   verdicts?: VerdictSpec
   verdictRejects?: number
+  /** What went differently than planned in this call (a denied tool, a model switch): text, how often, and the first example. */
+  notes: Map<string, { n: number; eg?: string }>
 }
 
 /** Prompt and tool counts for sessions outside a worker call (the manager). */
@@ -90,7 +92,7 @@ export function counter(sessionID: string): Counter {
   return c
 }
 
-export function beginRun(sessionID: string, run: Omit<SessionRun, "toolCalls" | "tools" | "prompts" | "lastActivity" | "inFlight" | "shells" | "edited" | "before">): SessionRun {
+export function beginRun(sessionID: string, run: Omit<SessionRun, "toolCalls" | "tools" | "prompts" | "lastActivity" | "inFlight" | "shells" | "edited" | "before" | "notes">): SessionRun {
   const r: SessionRun = {
     ...run,
     toolCalls: 0,
@@ -101,11 +103,21 @@ export function beginRun(sessionID: string, run: Omit<SessionRun, "toolCalls" | 
     shells: [],
     edited: new Set(),
     before: new Map(),
+    notes: new Map(),
     seen: runs.get(sessionID)?.seen,
   }
   runs.set(sessionID, r)
   return r
 }
+
+export function note(run: SessionRun, text: string, example?: string) {
+  const seen = run.notes.get(text)
+  if (seen) seen.n++
+  else run.notes.set(text, { n: 1, eg: example })
+}
+
+export const notesOf = (run: SessionRun | undefined): string[] =>
+  [...(run?.notes ?? [])].map(([text, { n, eg }]) => `${text}${n > 1 ? ` ×${n}` : ""}${eg ? ` (first: ${eg.length > 60 ? `${eg.slice(0, 59)}…` : eg})` : ""}`)
 
 export const touch = (sessionID: string) => {
   const r = runs.get(sessionID)

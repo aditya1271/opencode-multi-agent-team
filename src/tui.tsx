@@ -6,6 +6,7 @@ import { setupReview } from "./review.tsx"
 interface Prefs {
   expanded: boolean
   models?: boolean
+  calls?: boolean
 }
 
 /** Sidebar text width (the usage lines are 35 columns). */
@@ -21,6 +22,18 @@ const resolveColor = (theme: unknown, tokenPath: string, fallback: string) => {
 }
 
 const tokensOf = (r: StatsRow) => r.input + r.output
+
+type CallRow = NonNullable<SidebarStats["calls"]>[number]
+const MARK: Record<CallRow["state"], string> = { running: "●", done: "✓", failed: "✗", cut: "○" }
+const duration = (secs: number) => (secs < 60 ? `${secs}s` : `${Math.round(secs / 60)}m`)
+
+/** A long text as at most `max` sidebar lines of `width` characters, the last one cut with "…". */
+const wrap = (text: string, width: number, max = 2) => {
+  const lines: string[] = []
+  for (let rest = text; rest && lines.length < max; rest = rest.slice(width)) lines.push(rest.slice(0, width))
+  if (text.length > width * max) lines[max - 1] = `${lines[max - 1].slice(0, width - 1)}…`
+  return lines
+}
 
 /** RPC errors are plain objects ({ type, message }), not Error instances. */
 const errorText = (e: unknown): string => {
@@ -89,7 +102,7 @@ export default Plugin.define({
         }),
       )
       createEffect(() => {
-        if (!stats()?.task?.rows.some((r) => r.running)) return
+        if (!stats()?.task?.rows.some((r) => r.running) && !stats()?.calls?.some((c) => c.state === "running")) return
         const poll = setInterval(refresh, LIVE_POLL_MS)
         onCleanup(() => clearInterval(poll))
       })
@@ -149,6 +162,37 @@ export default Plugin.define({
             )}
           </Show>
           <Show when={prefs.expanded}>
+            <Show when={stats()?.calls?.length}>
+              <box
+                flexDirection="row"
+                onMouseDown={(event: { stopPropagation(): void }) => {
+                  event.stopPropagation()
+                  void setPrefs((d) => void (d.calls = d.calls === false)).catch(() => {})
+                }}
+              >
+                <text fg={color.muted()}>{`${prefs.calls === false ? "▶" : "▼"} Calls`}</text>
+              </box>
+              <Show when={prefs.calls !== false}>
+                <For each={stats()?.calls ?? []}>
+                  {(c) => {
+                    const pad = " ".repeat(Math.min(c.depth, 2) * 2)
+                    const hue = () => (c.state === "running" ? color.running() : c.state === "failed" ? color.warning() : color.header())
+                    return (
+                      <>
+                        <text fg={hue()}>{fit(`${pad}${c.depth ? "└" : " "}${MARK[c.state]} ${c.role} ${duration(c.secs)}`)}</text>
+                        <text fg={color.muted()}>{fit(`${pad}   ${c.ask}`)}</text>
+                        <Show when={c.state === "failed" && c.result}>
+                          <text fg={color.warning()}>{fit(`${pad}   ${c.result}`)}</text>
+                        </Show>
+                        <For each={c.notes.slice(0, 3)}>
+                          {(n) => <For each={wrap(n, WIDTH - pad.length - 5)}>{(l, i) => <text fg={color.warning()}>{`${pad}   ${i() === 0 ? "⚠" : " "} ${l}`}</text>}</For>}
+                        </For>
+                      </>
+                    )
+                  }}
+                </For>
+              </Show>
+            </Show>
             <Show when={rows().length > 0}>
               <text fg={color.muted()}>{line(" ", "agent", "call", "prmt", "tool", "tok", "%")}</text>
               <For each={rows()}>

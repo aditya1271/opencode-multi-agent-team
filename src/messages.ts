@@ -1,5 +1,6 @@
 // What the manager is told: the team tool results, the review screens and the shared text helpers.
 import path from "node:path"
+import { lastFlags } from "./calls.ts"
 import { annotate, ensureIndex, idRanges, missingSummaries, oneLine, sectionBody, shortView, shownTitle, split, userView, walkIds, type Section, type SectionIndex } from "./sections.ts"
 import { autoDecides, briefName, draftIsDoc, isDocWorkflow, MODE_ROLE, readTaskFile, type TaskState } from "./state.ts"
 import { report as usageReport } from "./usage.ts"
@@ -387,7 +388,7 @@ interface Progress {
 
 function renderPhase(task: TaskState): string {
   const last = task.history[task.history.length - 1]
-  const lastLine = last ? `${last.role} → ${last.status}: ${last.summary.split("\n")[0].replace(/[.\s]+$/, "")}` : "started"
+  const lastLine = `${last ? `${last.role} → ${last.status}: ${last.summary.split("\n")[0].replace(/[.\s]+$/, "")}` : "started"}${lastFlags(task)}`
   const files = task.editedFiles.length ? task.editedFiles.map((f) => `- ${f}`).join("\n") : "(none)"
   const attempts = `Failed attempts: ${task.attempts}/${task.attemptLimit}.`
   const usage = () => usageReport(task.usage, Math.max(1, task.planSteps))

@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import type { CallRecord } from "./calls.ts"
 import type { Role, WorkerRole } from "./config.ts"
 import type { Scope, SectionChange, SectionIndex } from "./sections.ts"
 import type { AgentUsage } from "./usage.ts"
@@ -294,6 +295,8 @@ export interface TaskState {
   editedFiles: string[]
   latestLog?: string
   history: HistoryEntry[]
+  /** Every agent call, newest last: who was asked what, how it ended, and what went differently (see calls.ts). Missing on tasks from before. */
+  calls?: CallRecord[]
   usage: Partial<Record<Role, AgentUsage>>
   managerBaseline?: { input: number; output: number; reasoning: number; cacheRead: number; prompts: number; tools: Record<string, number> }
   planSummary?: string

@@ -3,7 +3,7 @@ type Context = Plugin.Context
 import { agentId } from "./agents.ts"
 import { fallbackModels, modelLabel, modelsFor, tierOf, type Config, type WorkerRole } from "./config.ts"
 import type { VerdictSpec } from "./polish.ts"
-import { beginRun, runs, type Report, type SessionRun } from "./runtime.ts"
+import { beginRun, note, runs, type Report, type SessionRun } from "./runtime.ts"
 import type { Mode, TaskState } from "./state.ts"
 import type { UsageDelta } from "./usage.ts"
 import { detectVcs, vcsLine } from "./vcs.ts"
@@ -164,6 +164,7 @@ export async function runAgent(ctx: Context, config: Config, input: RunInput, lo
           modelIndex++
           const next = models[modelIndex]
           log(`${input.role}: ${modelLabel(models[modelIndex - 1])} ${problem}, switching to ${modelLabel(next)}`)
+          note(run, `${modelLabel(models[modelIndex - 1])} ${problem} → switched to ${modelLabel(next)}`)
           await ctx.session.switchModel({ sessionID: sid, model: next })
           await sleep(500)
           text = `The previous model ${problem === "failed" ? "request failed" : "returned nothing"}. Continue the task where it stopped, and finish by calling \`report\`.`

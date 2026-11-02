@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { agentId, evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissionsFor, roleOf, systemPrompt, toolVisible, workflowOf } from "../src/agents.ts"
 import { buildPatterns, DEFAULTS, fallbackModels, merge, modelLabel, modelsFor, parseModel, stripJsonc, tierOf, type Role } from "../src/config.ts"
-import { analystReadProblem, registerGuards, toolKind, trimLog } from "../src/guards.ts"
+import { analystReadProblem, denied, registerGuards, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
 import { checkOutput, checkQuotes, expandQuotes, loose, keepChecked, loadQuotes, numberQuotes, fixCites } from "../src/quotes.ts"
 import { findEvidence, renderEvidence, type Evidence } from "../src/evidence.ts"
 import { applyFixes, blockFixes, numbered, sectionFixes } from "../src/fixes.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
-import { beginRun, counter, runs } from "../src/runtime.ts"
+import { beginRun, counter, note, notesOf, runs } from "../src/runtime.ts"
 import { appendFile, loadTask, migrateNames, newTask, save, taskId, WORKFLOWS } from "../src/state.ts"
 import { MODE_COMMANDS, Team } from "../src/team.ts"
 import { compact, line, modelsText } from "../src/rpc.ts"
@@ -15,6 +15,7 @@ import { buildPrompt } from "../src/handoff.ts"
 import { join, render, stepTitles } from "../src/messages.ts"
 import { annotate, checkEdits, idRanges, indexOf, kindOf, lineProblems, missingSummaries, shortView, splice, split, titleOf, unrecommended, userView, walkIds } from "../src/sections.ts"
 import { add, hints, table } from "../src/usage.ts"
+import { askOf, callRows, callsText, callTree, endCall, lastFlags, startCall, type CallRecord } from "../src/calls.ts"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { detectVcs, vcsLine } from "../src/vcs.ts"
@@ -2005,5 +2006,50 @@ describe("polish checks", () => {
     expect(() => acceptReport(DEFAULTS, "ses_rev", { status: "PASS", fixes: [{ id: "F1", text: "R2: not met — no docs" }] } as never)).toThrow("not met")
     expect(acceptReport(DEFAULTS, "ses_rev", { status: "ISSUES", summary: "docs", content: "R1: met — a.ts:3\nR2: not met — no docs\n\n1. add docs" })).toContain("Report received")
     runs.delete("ses_rev")
+  })
+})
+
+describe("call record", () => {
+  const calls = () => {
+    const list: CallRecord[] = []
+    const a = startCall(list, { n: 1, role: "analyst", mode: "analyst", ask: "reads the task" })
+    endCall(a, { end: "report", ms: 90_000, status: "NEED_INFO", outcome: "needs two lookups", notes: [] })
+    const b = startCall(list, { n: 2, role: "intern", mode: "intern", ask: "find msg.rpt", asker: "analyst" })
+    return { list, a, b }
+  }
+  test("an agent that was asked by another is shown under it", () => {
+    const { list, b } = calls()
+    expect(b.parent).toBe(1)
+    expect(callTree(list).map((r) => [r.call.n, r.depth])).toEqual([[1, 0], [2, 1]])
+  })
+  test("a call is described by what it is for, not by the hand-off's first words", () => {
+    const { list } = calls()
+    expect(askOf({ mode: "intern", note: "I need this:\n1. a\n2. b\n3. c" })).toBe("looks up code (3 queries)")
+    expect(askOf({ mode: "analyst" }, list)).toBe("continues with the Intern's answer")
+    expect(askOf({ mode: "planner" }, list)).toBe("writes the plan")
+    expect(askOf({ mode: "analyst" }, [])).toBe("reads the task and writes findings")
+  })
+  test("rows say what runs, what finished and what was cut off by a restart", () => {
+    const { list, b } = calls()
+    expect(callRows(list, (c) => (c === b ? ["shell denied ×2"] : undefined)).map((r) => [r.role, r.state, r.notes])).toEqual([["analyst", "done", []], ["intern", "running", ["shell denied ×2"]]])
+    expect(callRows(list, () => undefined)[1]!.state).toBe("cut")
+    endCall(b, { end: "model", ms: 5000, notes: ["x"], outcome: "all models failed" })
+    expect(callRows(list, () => undefined)[1]).toMatchObject({ state: "failed", result: "all models failed", notes: ["x"] })
+  })
+  test("denied tools are counted with the first target, and reach the progress line", () => {
+    const run = beginRun("ses_note", { role: "intern", mode: "intern", toolLimit: 5 })
+    note(run, "shell denied", "find /bata/x -name msg.rpt")
+    note(run, "shell denied", "ls /bata/x")
+    expect(notesOf(run)).toEqual(["shell denied ×2 (first: find /bata/x -name msg.rpt)"])
+    runs.delete("ses_note")
+    expect(denied({ message: "Permission denied: shell" })).toBe(true)
+    expect(denied({ message: "x", error: { type: "permission.rejected" } })).toBe(true)
+    expect(denied({ message: "file not found" })).toBe(false)
+    const task = newTask(mkdtempSync(path.join(tmpdir(), "omat-calls-")), "ses_m", "/w", "t", 10)
+    const rec = startCall((task.calls ??= []), { n: 1, role: "intern", mode: "intern", ask: "find" })
+    endCall(rec, { end: "report", status: "FOUND", notes: notesOf(run) })
+    expect(lastFlags(task)).toBe(" ⚠ intern: shell denied ×2 (first: find /bata/x -name msg.rpt)")
+    expect(callsText(task.calls, task)).toContain("note: shell denied ×2")
+    rmSync(task.dir, { recursive: true, force: true })
   })
 })
