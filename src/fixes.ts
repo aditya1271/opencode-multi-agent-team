@@ -51,7 +51,9 @@ export function blockFixes(blocks: QuotedBlock[]): Omit<Fix, "id">[] {
     const where = b.cite ? `block ${i + 1} (\`${b.cite}\`)` : `block ${i + 1}`
     const why =
       b.verdict === "bad"
-        ? `\`${b.line}\` isn't in the file`
+        ? b.cite
+          ? `\`${b.line}\` isn't in the file`
+          : `\`${b.line}\` isn't in anything your tools showed you`
         : b.verdict === "shortened"
           ? `lines are left out with "..."`
           : b.verdict === "unchecked"
@@ -59,7 +61,8 @@ export function blockFixes(blocks: QuotedBlock[]): Omit<Fix, "id">[] {
               ? "there is no such file"
               : "it has no `path:line` just above it (command output goes in an `output` block instead)"
             : undefined
-    return why ? [{ kind: "block" as const, at: b.from, end: b.to, citeAt: b.citeAt, cite: b.cite, ask: `${where}: ${why}; ${again}.` }] : []
+    const resend = b.verdict === "bad" && !b.cite ? "send it again as the command printed it, or an empty text to drop it" : again
+    return why ? [{ kind: "block" as const, at: b.from, end: b.to, citeAt: b.citeAt, cite: b.cite, ask: `${where}: ${why}; ${resend}.` }] : []
   })
 }
 
@@ -79,10 +82,10 @@ export const numbered = (fixes: Omit<Fix, "id">[]): Fix[] => fixes.map((f, i) =>
 
 /** The refusal: the report is kept, and only these parts are asked for. */
 export function fixRequest(fixes: Fix[], intro: string): string {
-  const sends = [fixes.some((f) => f.kind !== "evidence") && "`fixes` (one { id, text } for each item without an evidence id)", fixes.some((f) => f.kind === "evidence") && "`evidence` (the items asked for, same ids)"].filter(Boolean)
+  const sends = [fixes.some((f) => f.kind !== "evidence") && "`fixes` (one { id, text } for each F item)", fixes.some((f) => f.kind === "evidence") && "`evidence` (a list of { id, file, first, last, line } for each evidence item below)"].filter(Boolean)
   return [
     `${intro} The plugin keeps your report, so don't send it again. Call \`report\` with the same status and only ${sends.join(" and ")}; the plugin puts each in its place.`,
-    ...fixes.map((f) => `- ${f.id}: ${f.ask}`),
+    ...fixes.map((f) => (f.kind === "evidence" ? `- evidence ${f.ask}` : `- ${f.id}: ${f.ask}`)),
   ].join("\n")
 }
 

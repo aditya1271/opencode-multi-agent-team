@@ -5,7 +5,7 @@ type Context = Plugin.Context
 import { agentId, evaluate, permissionsFor, roleOf, toolVisible, type Rule } from "./agents.ts"
 import { matchesAny } from "./match.ts"
 import { buildPatterns, ROLES, type Config, type Role } from "./config.ts"
-import { loose } from "./evidence.ts"
+import { loose } from "./quotes.ts"
 import { allowedStatuses, reportSchema } from "./report.ts"
 import { counter, runs, touch, type ToolKind } from "./runtime.ts"
 import { nextLogPath, save, type TaskState } from "./state.ts"

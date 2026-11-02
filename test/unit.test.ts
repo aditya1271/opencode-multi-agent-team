@@ -3,8 +3,8 @@ import { agentId, evaluate, FRONT_AGENTS, ignoredTools, managerPrompt, permissio
 import { buildPatterns, DEFAULTS, fallbackModels, merge, modelLabel, modelsFor, parseModel, stripJsonc, tierOf, type Role } from "../src/config.ts"
 import { analystReadProblem, registerGuards, toolKind, trimLog } from "../src/guards.ts"
 import { commandParts, matchesAny } from "../src/match.ts"
-import { checkQuotes, expandQuotes, keepChecked, loadQuotes, numberQuotes, fixCites } from "../src/quotes.ts"
-import { findEvidence, loose, renderEvidence, type Evidence } from "../src/evidence.ts"
+import { checkOutput, checkQuotes, expandQuotes, loose, keepChecked, loadQuotes, numberQuotes, fixCites } from "../src/quotes.ts"
+import { findEvidence, renderEvidence, type Evidence } from "../src/evidence.ts"
 import { applyFixes, blockFixes, numbered, sectionFixes } from "../src/fixes.ts"
 import { acceptReport, allowedStatuses, checkProblem } from "../src/report.ts"
 import { beginRun, counter, runs } from "../src/runtime.ts"
@@ -1801,13 +1801,16 @@ describe("evidence by selector", () => {
     expect([f.from, f.to, f.text.at(-1)]).toEqual([2, 8, "}"])
     // Line numbers in the anchors and whitespace don't matter; one line alone needs no last line.
     expect((find({ first: "12:   const total = a + b" }) as any).text).toEqual(["  const total = a + b;"])
+    // A closing line ends the range at the first one as far out as the first line, however deep the code in between.
+    expect((find({ first: "if (total > 9) {", last: "}" }) as any).to).toBe(6)
+    expect((find({ first: "export function run(a: number, b: number) {", last: "  }" }) as any).to).toBe(8)
     // A last line that occurs earlier ends the range there: the first match after the first line.
     expect((find({ first: "export function run(a: number, b: number) {", last: "return 9" }) as any).to).toBe(6)
   })
 
   test("what can't be placed is told by item: lines with nothing to find by, misses, repeats", () => {
     expect(find({ first: "}" })).toContain("too short or has no name")
-    expect(find({ first: "export function run(a: number, b: number) {", last: "  }" })).toContain("too short")
+    expect(find({ first: "export function run(a: number, b: number) {", last: "ab" })).toContain("too short")
     expect(find({ first: "const nothing = 0" })).toContain("isn't a line of x.ts")
     expect(find({ first: "export function run(a: number, b: number) {", last: "return nothing" })).toContain("doesn't occur in x.ts after the first")
     expect(find({ file: "gone.ts", first: "export function" })).toContain("there is no file")
@@ -1839,7 +1842,7 @@ describe("evidence by selector", () => {
     expect(first.content).toContain("`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```")
     expect(first.content).toContain("\n[E2]")
     const last = renderEvidence(text, [items[0]!], ws, undefined, true)
-    expect(last.content).toContain("The plugin removed evidence E2: there is no item E2")
+    expect(last.content).toContain("The plugin removed evidence E2: [E2] is in content, but the evidence list has no item E2")
     expect(renderEvidence("none", [items[0]!], ws, undefined, false).content).toBe("none\n\n## Further evidence\n\n`x.ts:10-12`\n```\nexport function other() {\n  return 1\n}\n```")
   })
 
@@ -1853,7 +1856,7 @@ describe("evidence by selector", () => {
         { id: "E1", file: "x.ts", first: "export function other() {", last: "return 1" },
         { id: "E2", file: "x.ts", first: "export function twin() {", last: "return 2" },
       ]
-      expect(() => acceptReport(DEFAULTS, "ses_ev", { status: "FOUND", summary: "s", content, evidence } as any)).toThrow("F1: evidence E2 (`x.ts`): the first line occurs 2 times")
+      expect(() => acceptReport(DEFAULTS, "ses_ev", { status: "FOUND", summary: "s", content, evidence } as any)).toThrow("- evidence E2 (`x.ts`): the first line occurs 2 times")
       expect(() => acceptReport(DEFAULTS, "ses_ev", { status: "FOUND", evidence: [{ id: "E2", file: "x.ts", first: "export function twin() {", last: "return 2", line: 14 }] } as any)).not.toThrow()
       const done = runs.get("ses_ev")!.report!
       expect(done.content).toContain("`x.ts:10-12`\n```\nexport function other() {")

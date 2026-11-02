@@ -3,7 +3,7 @@ import { commandParts } from "./match.ts"
 import { applyFixes, blockFixes, fixRequest, lineFixes, numbered, sectionFixes, type Fix } from "./fixes.ts"
 import { verdictProblems, verdicts } from "./polish.ts"
 import { renderEvidence } from "./evidence.ts"
-import { checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
+import { checkOutput, checkQuotes, expandQuotes, fixCites, keepChecked, loadQuotes } from "./quotes.ts"
 import { runs, type Report, type SessionRun, type ShellRun } from "./runtime.ts"
 import { checkEdits, splice, split, titleOf, unrecommended, unsummarized, type Section } from "./sections.ts"
 import { consultSide, consultsUsed, draftIsDoc, isDocWorkflow, isScopedWriter, readTaskFile, scopedFile, type Mode, type TaskState } from "./state.ts"
@@ -306,6 +306,7 @@ export function acceptReport(config: Config, sessionID: string, input: Report): 
       input = { ...input, content: fixCites(input.content, blocks) }
       blocks = checkQuotes(input.content, root)
     }
+    blocks = checkOutput(blocks, input.content, run.seen)
     const drawn = !!input.evidence?.length || EVIDENCE_MARK.test(input.content)
     const found = drawn ? renderEvidence(input.content, input.evidence ?? [], root, run.seen, false).problems : []
     const fixes = [...blockFixes(blocks), ...found.map((p) => ({ kind: "evidence" as const, at: p.at, ask: p.ask }))]

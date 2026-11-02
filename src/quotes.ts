@@ -37,6 +37,12 @@ export interface QuotedBlock {
 /** Without whitespace, semicolons and commas, so code re-wrapped onto fewer lines still matches. */
 export const squash = (s: string) => s.replace(/[\s;,]+/g, "")
 
+/** A line as it can be found in tool output, which may show quotes and backslashes escaped. */
+export const loose = (s: string) => s.replace(/[\s;,"'\\]+/g, "")
+
+/** Whether the line is in `seen` (the loose text of what the Intern's tools showed): its first 40 characters are enough. */
+export const shown = (line: string, seen: string) => seen.includes(loose(line).slice(0, 40))
+
 /** The kept parts of a line shortened with "...". */
 const parts = (line: string) => line.split(DOTS).map(squash).filter((p) => p.length >= 4)
 
@@ -102,6 +108,23 @@ export function checkQuotes(content: string, root: string): QuotedBlock[] {
   return blocks
 }
 
+/**
+ * Blocks that cite no file (command output, `output` blocks) are true when their lines are in what the Intern's
+ * tools showed; a block with a line that isn't is bad. With nothing recorded they stay as they were.
+ */
+export function checkOutput(blocks: QuotedBlock[], content: string, seen: string | undefined): QuotedBlock[] {
+  if (!seen) return blocks
+  const text = content.split("\n")
+  return blocks.map((b) => {
+    if (b.verdict !== "output" && !(b.verdict === "unchecked" && !b.cite)) return b
+    const lines = text.slice(b.from + 1, b.to).map((l) => l.replace(/^\s*\d+:\s/, "")).filter((l) => /[A-Za-z0-9]/.test(l))
+    const miss = lines.find((l) => !shown(l, seen) && !(DOTS.test(l) && parts(l).every((p) => seen.includes(loose(p)))))
+    if (miss === undefined) return { ...b, verdict: "output" as const }
+    const l = miss.trim()
+    return { ...b, verdict: "bad" as const, line: l.length > 80 ? `${l.slice(0, 80)}…` : l }
+  })
+}
+
 /** Citations that point away from their code, corrected to where the code is: no need to ask the writer. */
 export function fixCites(content: string, blocks: QuotedBlock[]): string {
   const text = content.split("\n")
@@ -117,7 +140,7 @@ export function keepChecked(content: string, blocks: QuotedBlock[]): string {
   const text = content.split("\n")
   for (const b of [...blocks].reverse()) {
     if (b.verdict === "bad" || b.verdict === "unchecked")
-      text.splice(b.from, b.to - b.from + 1, `_(The plugin removed a code block here: ${b.verdict === "bad" ? `it doesn't match ${b.cite}` : b.cite ? `${b.cite} doesn't exist` : "it cites no file"}.)_`)
+      text.splice(b.from, b.to - b.from + 1, `_(The plugin removed a code block here: ${b.verdict === "bad" ? (b.cite ? `it doesn't match ${b.cite}` : "its lines weren't shown by your tools") : b.cite ? `${b.cite} doesn't exist` : "it cites no file"}.)_`)
     else if (b.verdict === "moved") text.splice(b.from, 0, `_(The plugin found this code at line ${b.at}, not ${b.cite}.)_`)
   }
   return text.join("\n")
